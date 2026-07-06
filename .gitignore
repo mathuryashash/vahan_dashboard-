@@ -9,3 +9,4 @@ build/
 backend/data/*.db
 nul
 **/nul
+.worktrees/
