@@ -37,7 +37,7 @@ class RTODistrict(Base):
     __tablename__ = "rto_districts"
 
     rto_code = Column(String(10), primary_key=True)
-    district_code = Column(String(50), primary_key=True)
+    district_code = Column(String(120), primary_key=True)
 
 
 class Registration(Base):
