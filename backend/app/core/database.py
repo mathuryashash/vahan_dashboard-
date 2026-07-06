@@ -33,3 +33,5 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    from app.core.migrations import ensure_columns
+    await ensure_columns(engine, {"states": {"zone_code": "VARCHAR(10)"}})

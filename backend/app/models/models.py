@@ -18,6 +18,28 @@ class RTO(Base):
     state_code = Column(String(5), nullable=False)
 
 
+class Zone(Base):
+    __tablename__ = "zones"
+
+    zone_code = Column(String(10), primary_key=True)
+    zone_name = Column(String(100), nullable=False)
+
+
+class District(Base):
+    __tablename__ = "districts"
+
+    district_code = Column(String(50), primary_key=True)
+    district_name = Column(String(200), nullable=False)
+    state_code = Column(String(5), nullable=False, index=True)
+
+
+class RTODistrict(Base):
+    __tablename__ = "rto_districts"
+
+    rto_code = Column(String(10), primary_key=True)
+    district_code = Column(String(50), primary_key=True)
+
+
 class Registration(Base):
     __tablename__ = "registrations"
 
