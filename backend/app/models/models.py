@@ -8,6 +8,7 @@ class State(Base):
 
     state_code = Column(String(5), primary_key=True)
     state_name = Column(String(100), nullable=False)
+    zone_code = Column(String(10), nullable=True)
 
 
 class RTO(Base):

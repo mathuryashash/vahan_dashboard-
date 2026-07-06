@@ -2,13 +2,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import init_db, AsyncSessionLocal
 from app.api.v1.router import api_router
+from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    async with AsyncSessionLocal() as session:
+        await seed_geo_hierarchy(session)
     yield
 
 
