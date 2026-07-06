@@ -69,3 +69,14 @@ class RefreshResponse(BaseModel):
     status: str
     message: str
     records_scraped: int | None = None
+
+
+class ZoneSchema(BaseModel):
+    zone_code: str
+    zone_name: str
+
+
+class DistrictSchema(BaseModel):
+    district_code: str
+    district_name: str
+    state_code: str

@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     yoy,
     categories,
     refresh,
+    geo,
 )
 
 api_router = APIRouter()
@@ -20,3 +21,4 @@ api_router.include_router(comparison.router, prefix="/comparison", tags=["Compar
 api_router.include_router(yoy.router, prefix="/yoy", tags=["Year-over-Year"])
 api_router.include_router(categories.router, prefix="/categories", tags=["Categories"])
 api_router.include_router(refresh.router, prefix="/refresh", tags=["Refresh"])
+api_router.include_router(geo.router, prefix="/geo", tags=["Geo Hierarchy"])
