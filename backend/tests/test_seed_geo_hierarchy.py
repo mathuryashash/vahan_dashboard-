@@ -62,3 +62,18 @@ async def test_seed_is_idempotent(db_session):
 
     rtos = (await db_session.execute(select(RTO))).scalars().all()
     assert len([r for r in rtos if r.rto_code == "MH12"]) == 1
+
+
+async def test_seed_skips_malformed_compound_rto_codes(db_session):
+    db_session.add(State(state_code="AP", state_name="Andhra Pradesh"))
+    await db_session.commit()
+
+    rows = SAMPLE_ROWS + [
+        {"RegNo": "AP16 & AP17", "Place": "Bejawada / Gudivada", "State": "Andhra Pradesh"},
+    ]
+    await seed_from_rows(db_session, rows)
+
+    rtos = (await db_session.execute(select(RTO))).scalars().all()
+    assert "AP16 & AP17" not in {r.rto_code for r in rtos}
+    # the well-formed rows in the same batch still get seeded
+    assert "AP01" in {r.rto_code for r in rtos}
