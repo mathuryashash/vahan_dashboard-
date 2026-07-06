@@ -28,7 +28,7 @@ class Zone(Base):
 class District(Base):
     __tablename__ = "districts"
 
-    district_code = Column(String(50), primary_key=True)
+    district_code = Column(String(120), primary_key=True)
     district_name = Column(String(200), nullable=False)
     state_code = Column(String(5), nullable=False, index=True)
 
