@@ -45,6 +45,9 @@ async def seed_from_rows(db: AsyncSession, rto_rows: list[dict]) -> None:
         state.zone_code = ZONE_BY_STATE_CODE.get(state.state_code)
     await db.flush()
 
+    # If `states` is empty (a fresh DB that hasn't run the separate seed_data.py/setup
+    # seeding yet), every RTO row below gets skipped since no state code is known --
+    # only zones get seeded. States must be pre-populated before this runs.
     known_state_codes = {s.state_code for s in states}
 
     # Bulk-fetch existing keys once, up front, instead of one db.get() round-trip per
