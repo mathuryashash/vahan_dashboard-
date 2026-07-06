@@ -10,7 +10,7 @@ ZONE_BY_STATE_CODE = {
     # Northern Zonal Council
     "HR": "NORTH", "HP": "NORTH", "JK": "NORTH", "PB": "NORTH",
     "RJ": "NORTH", "DL": "NORTH", "CH": "NORTH",
-    "LD": "NORTH",  # Ladakh -- extension, carved from J&K, no council yet
+    "LA": "NORTH",  # Ladakh -- extension, carved from J&K, no council yet
     # Central Zonal Council
     "CG": "CENTRAL", "UK": "CENTRAL", "UP": "CENTRAL", "MP": "CENTRAL",
     # Eastern Zonal Council
@@ -25,7 +25,7 @@ ZONE_BY_STATE_CODE = {
     "MZ": "NORTHEAST", "ML": "NORTHEAST", "NL": "NORTHEAST", "SK": "NORTHEAST",
     # Island territories -- extension, not part of any council
     "AN": "SOUTH",  # Andaman & Nicobar -- grouped with South for proximity
-    "LA": "WEST",   # Lakshadweep -- grouped with West for proximity
+    "LD": "WEST",   # Lakshadweep -- grouped with West for proximity
 }
 
 ZONES = [
