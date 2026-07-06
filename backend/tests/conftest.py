@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.database import Base
+import app.models.models  # noqa: F401 - ensures models are registered on Base.metadata
 from app.main import app
 from app.core.database import get_db
 
