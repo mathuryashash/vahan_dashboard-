@@ -1,0 +1,77 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e6]:
+        - paragraph [ref=e7]: Ministry of Road Transport
+        - paragraph [ref=e8]: VAHAN SEWA
+      - navigation [ref=e9]:
+        - link "Overview" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+          - generic [ref=e16]: Overview
+        - link "State Comparison" [ref=e17] [cursor=pointer]:
+          - /url: /comparison
+          - img [ref=e18]
+          - generic [ref=e20]: State Comparison
+        - link "Year-over-Year" [ref=e21] [cursor=pointer]:
+          - /url: /yoy
+          - img [ref=e23]
+          - generic [ref=e26]: Year-over-Year
+        - link "Categories" [ref=e29] [cursor=pointer]:
+          - /url: /categories
+          - img [ref=e30]
+          - generic [ref=e32]: Categories
+      - button "COLLAPSE" [ref=e34] [cursor=pointer]:
+        - generic [ref=e35]:
+          - img [ref=e36]
+          - generic [ref=e38]: COLLAPSE
+    - generic [ref=e39]:
+      - banner [ref=e40]:
+        - generic [ref=e41]:
+          - img [ref=e43]
+          - generic [ref=e46]:
+            - heading "VAHAN SEWA" [level=1] [ref=e47]
+            - paragraph [ref=e48]: Vehicle Analytics Observatory
+        - button "REFRESH" [ref=e50] [cursor=pointer]:
+          - img [ref=e51]
+          - text: REFRESH
+      - main [ref=e53]:
+        - generic [ref=e54]:
+          - generic [ref=e55]:
+            - generic [ref=e56]:
+              - heading "Year-over-Year Analysis" [level=2] [ref=e57]
+              - paragraph [ref=e58]: Temporal comparison — 2025 vs 2026
+            - generic [ref=e59]:
+              - generic [ref=e60]: 2025 →0
+              - generic [ref=e61]: 2026 →0
+              - generic [ref=e62]: +0.0%
+          - generic [ref=e64]:
+            - heading "Monthly Volume Comparison" [level=3] [ref=e65]
+            - generic [ref=e66]:
+              - generic [ref=e67]: "2025"
+              - generic [ref=e69]: "2026"
+          - generic [ref=e72]:
+            - generic [ref=e73]:
+              - heading "Month-wise Growth Rate" [level=3] [ref=e74]
+              - img [ref=e77]:
+                - generic [ref=e81]:
+                  - generic [ref=e83]: "-50%"
+                  - generic [ref=e85]: "-25%"
+                  - generic [ref=e87]: 0%
+                  - generic [ref=e89]: 25%
+                  - generic [ref=e91]: 50%
+              - generic [ref=e92]:
+                - generic [ref=e93]: ▲ Positive growth
+                - generic [ref=e94]: ▼ Negative growth
+            - generic [ref=e95]:
+              - heading "Dual-Year Trend Line" [level=3] [ref=e96]
+              - img [ref=e99]
+          - generic [ref=e102]:
+            - heading "Month-by-Month Breakdown" [level=3] [ref=e103]
+            - generic [ref=e104]:
+              - generic [ref=e105]: Month
+              - generic [ref=e106]: "2025"
+              - generic [ref=e107]: "2026"
+              - generic [ref=e108]: Delta
+              - generic [ref=e109]: Growth
+  - generic [ref=e110]: "-50%"

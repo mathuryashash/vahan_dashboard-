@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-base: #070D1A;
+  --bg-surface: #0D1829;
+  --bg-card: #111D32;
+  --border: rgba(255,255,255,0.07);
+  --border-bright: rgba(59,130,246,0.25);
+  --primary: #3B82F6;
+  --primary-glow: rgba(59,130,246,0.4);
+  --accent: #06B6D4;
+  --accent-glow: rgba(6,182,212,0.3);
+  --success: #10B981;
+  --success-glow: rgba(16,185,129,0.3);
+  --danger: #EF4444;
+  --text: #E2E8F0;
+  --text-muted: #64748B;
+  --text-dim: #1E293B;
+  --glow-primary: 0 0 20px rgba(59,130,246,0.3);
+  --glow-success: 0 0 20px rgba(16,185,129,0.3);
+}
+
+body {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  background-color: var(--bg-base);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(59,130,246,0.3);
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(59,130,246,0.3);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(59,130,246,0.5); }
+
+.glow-text {
+  text-shadow: 0 0 30px var(--primary-glow);
+}
+
+.glow-text-success {
+  text-shadow: 0 0 20px var(--success-glow);
+}
+
+.glow-card {
+  box-shadow: 0 0 30px rgba(59,130,246,0.08), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+.glow-card-primary {
+  box-shadow: var(--glow-primary), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+.animate-entrance {
+  animation: entrance 0.5s ease-out forwards;
+  opacity: 0;
+}
+
+@keyframes entrance {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.animate-bar-fill {
+  animation: barFill 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: left;
+}
+
+@keyframes barFill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.bg-dots {
+  background-image: radial-gradient(circle, rgba(59,130,246,0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.gradient-border {
+  background: linear-gradient(135deg, rgba(59,130,246,0.2), rgba(6,182,212,0.1));
+}
+
+.number-display {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+@layer utilities {
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .font-display {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+  }
+}

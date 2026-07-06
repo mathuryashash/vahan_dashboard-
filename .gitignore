@@ -1,0 +1,11 @@
+node_modules/
+__pycache__/
+*.pyc
+.ruff_cache/
+dist/
+build/
+.env
+*.egg-info/
+backend/data/*.db
+nul
+**/nul

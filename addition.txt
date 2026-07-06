@@ -1,0 +1,10 @@
+i want to be able to drill down this is my following explanation on what i want you to build 
+so as an india head i want to be able to see all the data for all the companies all over india like as a map sort of where i can zoom in and i can drill down to like the level where i can see individual rtos across a district for all the companies
+and later suposed i am a state head so then i should be able to se eonly the data of my entire state down to individual rtos for each company
+later i want to be able to see each of the mdoels sold like activa 3g , 4g , unicorn , shine etc like all the vehicles in the lineup by that company and all the pther companies in the lineup 
+regional head can see the cluster of states all drilling down the rto level as explained above 
+all india -> state -> distrcit-> region -> rto 
+also include everything about evs as well their market share etc 
+D:\vahan_dashboard\image.png
+also include like the data format inlucede in the image link as mentioned here 
+
