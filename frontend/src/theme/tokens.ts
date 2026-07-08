@@ -56,5 +56,11 @@ export function capForDonut<T extends { name: string; value: number }>(data: T[]
   const kept = data.slice(0, maxSlices - 1);
   const rest = data.slice(maxSlices - 1);
   const otherValue = rest.reduce((sum, d) => sum + d.value, 0);
+  const existingOtherIdx = kept.findIndex((d) => d.name === 'Other');
+  if (existingOtherIdx !== -1) {
+    const merged = [...kept];
+    merged[existingOtherIdx] = { ...merged[existingOtherIdx], value: merged[existingOtherIdx].value + otherValue };
+    return merged;
+  }
   return [...kept, { name: 'Other', value: otherValue } as T];
 }
