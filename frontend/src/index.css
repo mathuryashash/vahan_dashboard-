@@ -5,35 +5,65 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg-base: #070D1A;
-  --bg-surface: #0D1829;
-  --bg-card: #111D32;
-  --border: rgba(255,255,255,0.07);
-  --border-bright: rgba(59,130,246,0.25);
-  --primary: #3B82F6;
-  --primary-glow: rgba(59,130,246,0.4);
-  --accent: #06B6D4;
-  --accent-glow: rgba(6,182,212,0.3);
-  --success: #10B981;
-  --success-glow: rgba(16,185,129,0.3);
-  --danger: #EF4444;
-  --text: #E2E8F0;
-  --text-muted: #64748B;
-  --text-dim: #1E293B;
-  --glow-primary: 0 0 20px rgba(59,130,246,0.3);
-  --glow-success: 0 0 20px rgba(16,185,129,0.3);
+  /* Dark theme (default) — Automotive Editorial */
+  --bg-app: #161618;
+  --bg-surface: #1C1C1E;
+  --bg-card: #242426;
+  --bg-card-hover: #2C2C2E;
+  --bg-sunken: #18181A;
+  --border: rgba(255,255,255,0.08);
+  --border-strong: rgba(255,255,255,0.16);
+  --text-primary: #F5F5F7;
+  --text-secondary: #A1A1A6;
+  --text-muted: #8E8E93;
+  --accent: #E0A458;
+  --accent-strong: #F0C48A;
+  --accent-contrast: #1C1C1E;
+  --success: #6FCF97;
+  --danger: #E5707A;
+  --chart-1: #E0A458;
+  --chart-2: #5FA8A3;
+  --chart-3: #C97B84;
+  --chart-4: #8FA37E;
+  --chart-5: #7C93B3;
+  --chart-6: #D9B44A;
+}
+
+:root[data-theme="light"] {
+  --bg-app: #F4F1EC;
+  --bg-surface: #FAF9F7;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F4F1EC;
+  --bg-sunken: #EFECE6;
+  --border: rgba(28,28,30,0.10);
+  --border-strong: rgba(28,28,30,0.18);
+  --text-primary: #1C1C1E;
+  --text-secondary: #4B4B4D;
+  --text-muted: #7A7A7C;
+  --accent: #B8681F;
+  --accent-strong: #96551A;
+  --accent-contrast: #FFFFFF;
+  --success: #1F8A4C;
+  --danger: #B83A46;
+  --chart-1: #B8681F;
+  --chart-2: #3E7A76;
+  --chart-3: #A0525C;
+  --chart-4: #5C7550;
+  --chart-5: #4C6690;
+  --chart-6: #A3811E;
 }
 
 body {
-  font-family: 'Space Grotesk', system-ui, sans-serif;
-  background-color: var(--bg-base);
-  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg-app);
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 ::selection {
-  background: rgba(59,130,246,0.3);
-  color: #fff;
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
 ::-webkit-scrollbar {
@@ -42,83 +72,38 @@ body {
 }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(59,130,246,0.3);
+  background: var(--border-strong);
   border-radius: 999px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(59,130,246,0.5); }
-
-.glow-text {
-  text-shadow: 0 0 30px var(--primary-glow);
-}
-
-.glow-text-success {
-  text-shadow: 0 0 20px var(--success-glow);
-}
-
-.glow-card {
-  box-shadow: 0 0 30px rgba(59,130,246,0.08), inset 0 1px 0 rgba(255,255,255,0.05);
-}
-
-.glow-card-primary {
-  box-shadow: var(--glow-primary), inset 0 1px 0 rgba(255,255,255,0.05);
-}
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 .animate-entrance {
-  animation: entrance 0.5s ease-out forwards;
+  animation: entrance 0.4s ease-out forwards;
   opacity: 0;
 }
 
 @keyframes entrance {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.animate-pulse-glow {
-  animation: pulseGlow 3s ease-in-out infinite;
+.animate-pulse-soft {
+  animation: pulseSoft 2.5s ease-in-out infinite;
 }
 
-@keyframes pulseGlow {
-  0%, 100% { opacity: 0.4; }
+@keyframes pulseSoft {
+  0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
-}
-
-.animate-bar-fill {
-  animation: barFill 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  transform-origin: left;
-}
-
-@keyframes barFill {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
-}
-
-.bg-grid {
-  background-image:
-    linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
-  background-size: 40px 40px;
-}
-
-.bg-dots {
-  background-image: radial-gradient(circle, rgba(59,130,246,0.08) 1px, transparent 1px);
-  background-size: 20px 20px;
-}
-
-.gradient-border {
-  background: linear-gradient(135deg, rgba(59,130,246,0.2), rgba(6,182,212,0.1));
 }
 
 .number-display {
   font-family: 'JetBrains Mono', monospace;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
 @layer utilities {
   .font-mono {
     font-family: 'JetBrains Mono', monospace;
-  }
-  .font-display {
-    font-family: 'Space Grotesk', system-ui, sans-serif;
   }
 }
