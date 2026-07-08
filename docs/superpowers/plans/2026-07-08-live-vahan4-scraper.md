@@ -803,8 +803,30 @@ With the backend running, open the Overview page and confirm the State/Maker/Mod
 
 ---
 
+## Architecture correction found during Task 4 verification
+
+The plan as originally written had `run_scraper()` execute in-process, awaited directly by
+`asyncio.create_task(run_scheduler_loop())` inside the FastAPI lifespan. Manual verification
+showed this crashes Playwright's Chromium reliably within seconds ("Page crashed") when
+sharing uvicorn's event loop — confirmed by the exact same code running flawlessly as a
+standalone `python -m scraper.vahan_scraper` process with no crashes across many RTOs.
+
+Fix: `scraper/run_full_scrape.py` (new) contains the actual scrape+persist loop and is
+invoked as a genuine child OS process via `asyncio.create_subprocess_exec` from
+`scraper_service.run_scraper()`, which awaits it and streams its stdout into the parent's
+logger. `persist_rto_batch`/`_state_code_lookup` stayed in `scraper_service.py` (imported by
+`run_full_scrape.py`) so Task 3's tests are unaffected — only `run_scraper()`'s internals
+changed. `vahan_scraper.py`'s `scrape_all_india` also gained crash-recovery (relaunch
+browser, re-select state, continue) since occasional crashes still happen even in-process —
+confirmed this recovery path triggers and resumes correctly rather than hanging.
+
+Also fixed: `settings.LOG_LEVEL` was defined but never wired to `logging.basicConfig`, so
+none of the scraper's `.info()` progress logs were visible — added the missing
+`logging.basicConfig(level=settings.LOG_LEVEL, ...)` call in `main.py`.
+
 ## Known follow-ups (not in this plan's scope)
 
 - The frontend still has zero UI for the Zone → State → District → RTO drill-down built in the prior session — that is a separate, larger frontend task.
 - Per-vehicle-class breakdown (Two Wheeler vs Four Wheeler etc.) at Maker×Month granularity would require ~10x the scrape volume (one pass per Vehicle Category Group) — flagged above, not implemented here.
 - A full India run (~1,076+ RTOs at ~4-6s each plus a 1.5s politeness delay) takes roughly 1.5-2 hours; the scheduler runs this once at startup and then every 24 hours, which is acceptable for a nightly batch but should be monitored for gov.in-side rate limiting on first real run.
+- Occasional Chromium "Page crashed" events occur even as a standalone subprocess (observed once in ~5 minutes of real runtime in this sandboxed dev environment) — likely memory pressure specific to this VM. The crash-recovery logic mitigates it, but this should be watched on first production deployment.

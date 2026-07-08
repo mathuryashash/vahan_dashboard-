@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -5,6 +7,9 @@ from app.core.config import settings
 from app.core.database import init_db, AsyncSessionLocal
 from app.api.v1.router import api_router
 from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
+from scraper.scheduler import run_scheduler_loop
+
+logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 @asynccontextmanager
@@ -12,7 +17,9 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with AsyncSessionLocal() as session:
         await seed_geo_hierarchy(session)
+    scheduler_task = asyncio.create_task(run_scheduler_loop())
     yield
+    scheduler_task.cancel()
 
 
 app = FastAPI(

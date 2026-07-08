@@ -184,23 +184,33 @@ async def scrape_maker_month_table(page: Page, year: int) -> list[dict]:
     return records
 
 
+_BROWSER_LAUNCH_ARGS = ["--disable-gpu", "--disable-dev-shm-usage", "--disable-extensions"]
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+async def _new_browser_and_page(playwright):
+    browser = await playwright.chromium.launch(headless=True, args=_BROWSER_LAUNCH_ARGS)
+    context = await browser.new_context(
+        user_agent=_USER_AGENT, viewport={"width": 1600, "height": 1000}
+    )
+    page = await context.new_page()
+    await page.goto(REPORT_URL, wait_until="networkidle", timeout=45000)
+    await page.wait_for_timeout(3000)
+    return browser, page
+
+
 async def scrape_all_india(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS):
     """Async generator yielding one dict per (state, rto) combination:
     {'state_name': str, 'rto_code': str, 'rto_name': str, 'records': [ {maker, month, year, count}, ... ]}
-    Launches a single browser/page and reuses it for the whole run.
+    Reuses a single browser/page for the whole run, but transparently relaunches the
+    browser and resumes from the current state if the page crashes (observed to happen
+    occasionally under memory pressure) rather than hanging or aborting the whole run.
     """
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1600, "height": 1000},
-        )
-        page = await context.new_page()
-        await page.goto(REPORT_URL, wait_until="networkidle", timeout=45000)
-        await page.wait_for_timeout(3000)
+        browser, page = await _new_browser_and_page(playwright)
 
         states = await get_states(page)
         logger.info("Discovered %d states", len(states))
@@ -216,6 +226,10 @@ async def scrape_all_india(year: int, delay_seconds: float = REQUEST_DELAY_SECON
                 rtos = await get_rtos_for_selected_state(page)
             except Exception as exc:
                 logger.warning("Failed listing RTOs for %s: %s", state_name, exc)
+                if "crash" in str(exc).lower():
+                    logger.warning("Page crashed while listing RTOs; relaunching browser")
+                    await browser.close()
+                    browser, page = await _new_browser_and_page(playwright)
                 continue
 
             for rto in rtos:
@@ -235,6 +249,14 @@ async def scrape_all_india(year: int, delay_seconds: float = REQUEST_DELAY_SECON
                     logger.warning(
                         "Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc
                     )
+                    if "crash" in str(exc).lower():
+                        logger.warning("Page crashed mid-state; relaunching browser and re-selecting state")
+                        await browser.close()
+                        browser, page = await _new_browser_and_page(playwright)
+                        if not await select_state(page, state_name):
+                            logger.warning("Could not re-select state %s after relaunch, moving on", state_name)
+                            break
+                        await page.wait_for_timeout(1000)
                 finally:
                     await asyncio.sleep(delay_seconds)
 

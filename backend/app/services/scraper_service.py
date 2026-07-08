@@ -1,13 +1,13 @@
+import asyncio
 import logging
+import sys
 from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import AsyncSessionLocal
 from app.core.config import settings
 from app.models.models import Registration, State
-from scraper.vahan_scraper import scrape_all_india
 
 logger = logging.getLogger("scraper_service")
 
@@ -44,26 +44,29 @@ async def _state_code_lookup(db: AsyncSession) -> dict[str, str]:
 
 
 async def run_scraper() -> None:
-    """Full-India live scrape: iterate every state/RTO on vahan4dashboard and persist results.
-    Designed to run as a long-lived background task (can take over an hour for all of India).
+    """Launch the full-India live scrape as a separate OS process and await completion.
+
+    Playwright's Chromium subprocess was observed (during manual verification) to crash
+    reliably within seconds when driven from an asyncio task sharing uvicorn's event
+    loop, but runs cleanly as a fully independent process. See scraper/run_full_scrape.py
+    for the actual scrape + persist logic; persist_rto_batch/_state_code_lookup above are
+    reused by that script (and covered directly by tests here, without needing a subprocess).
     """
-    logger.info("Starting live VAHAN4 scrape at %s", datetime.utcnow())
-    year = datetime.now().year
+    logger.info("Starting live VAHAN4 scrape (subprocess) at %s", datetime.utcnow())
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "scraper.run_full_scrape",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    if process.stdout is not None:
+        async for line in process.stdout:
+            logger.info("[scraper] %s", line.decode(errors="replace").rstrip())
+    returncode = await process.wait()
 
-    async with AsyncSessionLocal() as db:
-        state_codes = await _state_code_lookup(db)
-
-        rto_count = 0
-        async for batch in scrape_all_india(year=year):
-            code = state_codes.get(batch["state_name"])
-            if code is None:
-                logger.warning("No state_code found for '%s', skipping batch", batch["state_name"])
-                continue
-            await persist_rto_batch(db, batch, state_code=code)
-            await db.commit()
-            rto_count += 1
-            if rto_count % 25 == 0:
-                logger.info("Scraped %d RTOs so far...", rto_count)
-
-    settings.LAST_UPDATED = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    logger.info("Live VAHAN4 scrape complete. %d RTOs processed.", rto_count)
+    if returncode == 0:
+        settings.LAST_UPDATED = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        logger.info("Live VAHAN4 scrape complete.")
+    else:
+        logger.error("Scraper subprocess exited with code %s", returncode)

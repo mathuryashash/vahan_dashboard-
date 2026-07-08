@@ -1,52 +1,24 @@
 import asyncio
-import subprocess
-import sys
-from datetime import datetime, time
-import time as time_module
+import logging
+from datetime import datetime, timedelta
 
-SCRAPE_INTERVAL_HOURS = 24
-SCRAPE_HOUR = 1  # 1:30 AM IST
-SCRAPE_MINUTE = 30
+from app.services.scraper_service import run_scraper
 
+logger = logging.getLogger("scheduler")
 
-def run_scraper():
-    print(f"[{datetime.now()}] Running VAHAN scraper...")
-    try:
-        result = subprocess.run(
-            [sys.executable, "vahan_scraper.py"],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        print(result.stdout)
-        if result.returncode != 0:
-            print(f"Scraper failed: {result.stderr}")
-    except Exception as e:
-        print(f"Scraper error: {e}")
+REFRESH_INTERVAL_HOURS = 24
 
 
-def next_run():
-    now = datetime.now()
-    next_time = datetime.combine(now.date(), time(SCRAPE_HOUR, SCRAPE_MINUTE))
-    if next_time <= now:
-        next_time = next_time.replace(day=now.day + 1)
-    return next_time
-
-
-async def main():
-    print(
-        f"[Scheduler] VAHAN scraper scheduler started. Running daily at {SCRAPE_HOUR}:{SCRAPE_MINUTE:02d} IST"
-    )
+async def run_scheduler_loop() -> None:
+    """Runs run_scraper() once immediately, then every REFRESH_INTERVAL_HOURS forever.
+    Intended to be launched as a background asyncio task from the FastAPI lifespan.
+    """
     while True:
-        next_scrape = next_run()
-        seconds = (next_scrape - datetime.now()).total_seconds()
-        if seconds > 0:
-            print(
-                f"[Scheduler] Next scrape scheduled at {next_scrape.strftime('%Y-%m-%d %H:%M IST')} (in {seconds / 3600:.1f}h)"
-            )
-        await asyncio.sleep(max(seconds, 60))
-        run_scraper()
+        try:
+            await run_scraper()
+        except Exception as exc:
+            logger.error("Scheduled scrape failed: %s", exc)
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        next_run = datetime.utcnow() + timedelta(hours=REFRESH_INTERVAL_HOURS)
+        logger.info("Next scheduled scrape at %s UTC", next_run.isoformat())
+        await asyncio.sleep(REFRESH_INTERVAL_HOURS * 3600)
