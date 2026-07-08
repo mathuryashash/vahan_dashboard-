@@ -14,8 +14,8 @@ const queryClient = new QueryClient({
   },
 })
 
-class ErrorBoundary extends React.Component<{}, { hasError: boolean }> {
-  constructor(props: {}) {
+class ErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { hasError: boolean }> {
+  constructor(props: React.PropsWithChildren<{}>) {
     super(props)
     this.state = { hasError: false }
   }

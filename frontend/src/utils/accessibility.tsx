@@ -1,10 +1,12 @@
 /**
  * Accessibility Utilities
  * Vahan Dashboard — WCAG 2.1 AA Compliance Helpers
- * 
+ *
  * Usage:
  *   import { useFocusManager, getAriaLabel, useKeyboardShortcuts } from '@/utils/accessibility'
  */
+
+import React from 'react';
 
 /**
  * Keyboard navigation constants
