@@ -6,6 +6,7 @@ import { ComparisonPage } from './pages/Comparison';
 import { YoYPage } from './pages/YoY';
 import { CategoriesPage } from './pages/Categories';
 import { CategoryDetailPage } from './pages/CategoryDetail';
+import { MakersModelsPage } from './pages/MakersModels';
 import { useQuery } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
 
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="/yoy" element={<YoYPage />} />
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
+            <Route path="/makers" element={<MakersModelsPage />} />
           </Routes>
         </main>
       </div>
