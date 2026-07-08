@@ -1,44 +1,34 @@
+// frontend/src/components/Sidebar.tsx
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, TrendingUp, BarChart3, ChevronLeft, ChevronRight } from './Icons';
+import { LayoutDashboard, Map, TrendingUp, BarChart3, Car, ChevronLeft, ChevronRight } from './Icons';
 import clsx from 'clsx';
 import { useAppStore } from '../hooks/useAppStore';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Overview' },
   { to: '/comparison', icon: Map, label: 'State Comparison' },
-  { to: '/yoy', icon: TrendingUp, label: 'Year-over-Year' },
-  { to: '/categories', icon: BarChart3, label: 'Categories' },
+  { to: '/yoy', icon: TrendingUp, label: 'Year over Year' },
+  { to: '/categories', icon: BarChart3, label: 'Categories & Fuel' },
+  { to: '/makers', icon: Car, label: 'Makers & Models' },
 ];
 
 function NavItem({ to, icon: Icon, label, collapsed }: { to: string; icon: React.FC<{ className?: string }>; label: string; collapsed: boolean }) {
   return (
     <NavLink
       to={to}
+      end={to === '/'}
       className={({ isActive }: { isActive: boolean }) =>
         clsx(
-          'flex items-center gap-3 text-sm font-medium transition-all duration-200 relative group',
-          isActive ? 'text-white' : 'text-slate-500 hover:text-slate-300',
-          collapsed ? 'justify-center px-3 py-2.5' : 'px-4 py-2.5'
+          'flex items-center gap-3 text-sm font-medium transition-all duration-150 relative rounded-lg mx-2',
+          isActive
+            ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]',
+          collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5'
         )
       }
     >
-      {({ isActive }: { isActive: boolean }) => (
-        <>
-          {isActive && (
-            <div
-              className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-r-full"
-              style={{ background: 'linear-gradient(180deg, #3B82F6, #06B6D4)' }}
-            />
-          )}
-          <Icon className="w-4 h-4 shrink-0" />
-          {!collapsed && <span className="text-xs tracking-wide">{label}</span>}
-          {isActive && !collapsed && (
-            <div className="ml-auto flex items-center gap-1">
-              <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse-glow" />
-            </div>
-          )}
-        </>
-      )}
+      <Icon className="w-4 h-4 shrink-0" />
+      {!collapsed && <span className="text-xs tracking-wide">{label}</span>}
     </NavLink>
   );
 }
@@ -49,38 +39,37 @@ export function Sidebar() {
   return (
     <aside
       className={clsx(
-        'flex flex-col transition-all duration-300 shrink-0',
-        sidebarCollapsed ? 'w-14' : 'w-52'
+        'flex flex-col transition-all duration-300 shrink-0 bg-[var(--bg-app)] border-r border-[var(--border)]',
+        sidebarCollapsed ? 'w-14' : 'w-56'
       )}
-      style={{ background: '#070D1A', borderRight: '1px solid rgba(255,255,255,0.05)' }}
     >
-      <div className="px-4 py-5 border-b border-[rgba(255,255,255,0.05)]">
+      <div className="px-4 py-5 border-b border-[var(--border)]">
         {!sidebarCollapsed && (
           <div className="animate-entrance">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-mono mb-0.5">Ministry of Road Transport</p>
-            <p className="text-sm font-bold text-white tracking-tight">VAHAN SEWA</p>
+            <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)] font-mono mb-0.5">Ministry of Road Transport</p>
+            <p className="text-sm font-bold text-[var(--text-primary)] tracking-tight">VAHAN SEWA</p>
           </div>
         )}
         {sidebarCollapsed && (
-          <div className="w-6 h-6 rounded-md bg-gradient-to-br from-blue-500 to-cyan-400 mx-auto" />
+          <div className="w-6 h-6 rounded-md bg-[var(--accent)] mx-auto" />
         )}
       </div>
 
-      <nav className="flex-1 py-3">
+      <nav className="flex-1 py-3 space-y-1">
         {navItems.map(({ to, icon: Icon, label }) => (
           <NavItem key={to} to={to} icon={Icon} label={label} collapsed={sidebarCollapsed} />
         ))}
       </nav>
 
-      <div className="px-3 py-3 border-t border-[rgba(255,255,255,0.05)]">
+      <div className="px-3 py-3 border-t border-[var(--border)]">
         <button
           onClick={toggleSidebar}
-          className="w-full flex items-center justify-center py-1.5 text-slate-500 hover:text-slate-300 transition-colors rounded-lg hover:bg-[rgba(255,255,255,0.04)]"
+          className="w-full flex items-center justify-center py-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors rounded-lg hover:bg-[var(--bg-card-hover)]"
         >
           {sidebarCollapsed ? (
             <ChevronRight className="w-4 h-4" />
           ) : (
-            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-600">
+            <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--text-muted)]">
               <ChevronLeft className="w-4 h-4" />
               <span>COLLAPSE</span>
             </div>
