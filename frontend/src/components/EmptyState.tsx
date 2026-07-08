@@ -58,33 +58,33 @@ export function EmptyState({
     switch (variant) {
       case 'error':
         return {
-          iconColor: 'text-rose-600',
-          titleColor: 'text-slate-900',
-          descColor: 'text-slate-600',
+          iconColor: 'text-[var(--danger)]',
+          titleColor: 'text-[var(--text-primary)]',
+          descColor: 'text-[var(--text-secondary)]',
         };
       case 'no-data':
         return {
-          iconColor: 'text-amber-600',
-          titleColor: 'text-slate-900',
-          descColor: 'text-slate-600',
+          iconColor: 'text-[var(--accent)]',
+          titleColor: 'text-[var(--text-primary)]',
+          descColor: 'text-[var(--text-secondary)]',
         };
       case 'search':
         return {
-          iconColor: 'text-blue-400',
-          titleColor: 'text-slate-900',
-          descColor: 'text-slate-600',
+          iconColor: 'text-[var(--accent)]',
+          titleColor: 'text-[var(--text-primary)]',
+          descColor: 'text-[var(--text-secondary)]',
         };
       case 'no-selection':
         return {
-          iconColor: 'text-gray-400',
-          titleColor: 'text-slate-900',
-          descColor: 'text-slate-600',
+          iconColor: 'text-[var(--text-muted)]',
+          titleColor: 'text-[var(--text-primary)]',
+          descColor: 'text-[var(--text-secondary)]',
         };
       default:
         return {
-          iconColor: 'text-slate-400',
-          titleColor: 'text-slate-900',
-          descColor: 'text-slate-600',
+          iconColor: 'text-[var(--text-muted)]',
+          titleColor: 'text-[var(--text-primary)]',
+          descColor: 'text-[var(--text-secondary)]',
         };
     }
   };
@@ -129,7 +129,7 @@ export function EmptyState({
           {action && (
             <button
               onClick={action.onClick}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--accent)] text-[var(--accent-contrast)] rounded-lg font-medium text-sm hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
               aria-label={action.label}
             >
               {action.icon && <span>{action.icon}</span>}
@@ -140,7 +140,7 @@ export function EmptyState({
           {secondaryAction && (
             <button
               onClick={secondaryAction.onClick}
-              className="inline-flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-700 rounded-lg font-medium text-sm hover:bg-slate-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+              className="inline-flex items-center gap-2 px-4 py-2 border border-[var(--border-strong)] text-[var(--text-secondary)] rounded-lg font-medium text-sm hover:bg-[var(--bg-card-hover)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-strong)]"
               aria-label={secondaryAction.label}
             >
               {secondaryAction.label}

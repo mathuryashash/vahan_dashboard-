@@ -81,53 +81,58 @@ export function ErrorBanner({
     switch (severity) {
       case 'error':
         return {
-          bg: 'bg-rose-50',
-          border: 'border-rose-200',
-          borderLeft: 'border-l-4 border-l-rose-600',
-          icon: 'text-rose-600',
-          title: 'text-rose-900',
-          desc: 'text-rose-700',
-          button: 'hover:bg-rose-100 focus-visible:ring-rose-500',
+          bg: 'bg-[var(--bg-card)]',
+          border: 'border-[var(--border)]',
+          borderLeft: 'border-l-4',
+          borderLeftColor: { borderLeftColor: 'var(--danger)' },
+          icon: 'text-[var(--danger)]',
+          title: 'text-[var(--text-primary)]',
+          desc: 'text-[var(--text-secondary)]',
+          button: 'hover:bg-[var(--bg-card-hover)] focus-visible:ring-[var(--danger)]',
         };
       case 'warning':
         return {
-          bg: 'bg-amber-50',
-          border: 'border-amber-200',
-          borderLeft: 'border-l-4 border-l-amber-600',
-          icon: 'text-amber-600',
-          title: 'text-amber-900',
-          desc: 'text-amber-700',
-          button: 'hover:bg-amber-100 focus-visible:ring-amber-500',
+          bg: 'bg-[var(--bg-card)]',
+          border: 'border-[var(--border)]',
+          borderLeft: 'border-l-4',
+          borderLeftColor: { borderLeftColor: 'var(--accent)' },
+          icon: 'text-[var(--accent)]',
+          title: 'text-[var(--text-primary)]',
+          desc: 'text-[var(--text-secondary)]',
+          button: 'hover:bg-[var(--bg-card-hover)] focus-visible:ring-[var(--accent)]',
         };
       case 'info':
         return {
-          bg: 'bg-blue-50',
-          border: 'border-blue-200',
-          borderLeft: 'border-l-4 border-l-blue-600',
-          icon: 'text-blue-600',
-          title: 'text-blue-900',
-          desc: 'text-blue-700',
-          button: 'hover:bg-blue-100 focus-visible:ring-blue-500',
+          bg: 'bg-[var(--bg-card)]',
+          border: 'border-[var(--border)]',
+          borderLeft: 'border-l-4',
+          borderLeftColor: { borderLeftColor: 'var(--chart-5)' },
+          icon: 'text-[var(--text-secondary)]',
+          title: 'text-[var(--text-primary)]',
+          desc: 'text-[var(--text-secondary)]',
+          button: 'hover:bg-[var(--bg-card-hover)] focus-visible:ring-[var(--border-strong)]',
         };
       case 'success':
         return {
-          bg: 'bg-emerald-50',
-          border: 'border-emerald-200',
-          borderLeft: 'border-l-4 border-l-emerald-600',
-          icon: 'text-emerald-600',
-          title: 'text-emerald-900',
-          desc: 'text-emerald-700',
-          button: 'hover:bg-emerald-100 focus-visible:ring-emerald-500',
+          bg: 'bg-[var(--bg-card)]',
+          border: 'border-[var(--border)]',
+          borderLeft: 'border-l-4',
+          borderLeftColor: { borderLeftColor: 'var(--success)' },
+          icon: 'text-[var(--success)]',
+          title: 'text-[var(--text-primary)]',
+          desc: 'text-[var(--text-secondary)]',
+          button: 'hover:bg-[var(--bg-card-hover)] focus-visible:ring-[var(--success)]',
         };
       default:
         return {
-          bg: 'bg-slate-50',
-          border: 'border-slate-200',
-          borderLeft: 'border-l-4 border-l-slate-600',
-          icon: 'text-slate-600',
-          title: 'text-slate-900',
-          desc: 'text-slate-700',
-          button: 'hover:bg-slate-100 focus-visible:ring-slate-500',
+          bg: 'bg-[var(--bg-card)]',
+          border: 'border-[var(--border)]',
+          borderLeft: 'border-l-4',
+          borderLeftColor: { borderLeftColor: 'var(--text-muted)' },
+          icon: 'text-[var(--text-muted)]',
+          title: 'text-[var(--text-primary)]',
+          desc: 'text-[var(--text-secondary)]',
+          button: 'hover:bg-[var(--bg-card-hover)] focus-visible:ring-[var(--border-strong)]',
         };
     }
   };
@@ -137,12 +142,14 @@ export function ErrorBanner({
   return (
     <div
       className={clsx(
-        'animate-slideUp',
+        'animate-entrance',
         styles.bg,
         styles.border,
+        styles.borderLeft,
         'border rounded-lg p-4 mb-4',
         className
       )}
+      style={styles.borderLeftColor}
       role="alert"
       aria-live="assertive"
       aria-label={`${severity}: ${title}`}
