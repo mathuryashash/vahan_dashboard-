@@ -17,9 +17,9 @@ export default function App() {
   });
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#070D1A]">
+    <div className="flex h-screen overflow-hidden bg-[var(--bg-app)]">
       <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden bg-grid">
+      <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-surface)]">
         <Header lastUpdated={data?.last_updated || null} />
         <main className="flex-1 overflow-y-auto">
           <Routes>
