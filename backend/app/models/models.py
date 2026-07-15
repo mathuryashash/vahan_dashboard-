@@ -111,7 +111,7 @@ class OEMMonthlySales(Base):
     # Literal text as FADA labels it ("Two-Wheeler", "PV", etc.) -- not an
     # enum, since FADA has added/renamed categories across the archive.
     category = Column(String(100), nullable=False, index=True)
-    maker = Column(String(200), nullable=False, index=True)
+    maker = Column(String(200), nullable=True, index=True)
     count = Column(Integer, nullable=False)
     share_percent = Column(Float, nullable=True)
     # The press release title, for tracing a row back to its source PDF.
