@@ -17,9 +17,13 @@ parse_release_pdf), not the release title, since some releases combine an
 FY-total and a single month in one document.
 """
 import httpx
+import io
 import logging
 import re
+import pdfplumber
 from urllib.parse import urljoin
+
+from scraper.parsing import MONTH_ABBR, parse_count
 
 logger = logging.getLogger("fada_scraper")
 
@@ -75,3 +79,81 @@ async def discover_releases(client: httpx.AsyncClient, max_pages: int = 10) -> l
     else:
         logger.warning("FADA archive: hit max_pages=%d without finding an empty page -- archive may have grown, raise max_pages", max_pages)
     return all_releases
+
+
+_PERIOD_RE = re.compile(r"^([A-Za-z]{3})'(\d{2})$")
+
+
+def _parse_period(text: str) -> tuple[int, int] | None:
+    """"Jun'26" -> (2026, 6). Returns None for anything that doesn't match
+    that exact shape (e.g. a future release with a non-monthly column label)
+    -- callers skip just that column, not the whole page, when this returns
+    None."""
+    match = _PERIOD_RE.match(text.strip())
+    if not match:
+        return None
+    month_abbr, year_suffix = match.groups()
+    month = MONTH_ABBR.get(month_abbr.upper())
+    if month is None:
+        return None
+    return (2000 + int(year_suffix), month)
+
+
+def _parse_share_percent(text: str) -> float | None:
+    cleaned = text.strip().rstrip("%").strip()
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
+    """[{category, maker, year, month, count, share_percent}, ...] for every
+    real OEM row across every category table in one FADA PDF. Not every page
+    is an OEM table (some are charts/disclaimer text) -- those are silently
+    skipped, not treated as an error. See module docstring + this file's
+    tests for the exact table shape this depends on."""
+    rows: list[dict] = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables()
+            if not tables or not tables[0] or not tables[0][0]:
+                continue
+            table = tables[0]
+            header = table[0]
+            first_cell = (header[0] or "").strip()
+            if not first_cell.upper().endswith("OEM"):
+                continue
+            category = first_cell[: -len("OEM")].strip()
+            current_period = _parse_period(header[1]) if len(header) > 1 else None
+            prior_period = _parse_period(header[3]) if len(header) > 3 else None
+            if current_period is None and prior_period is None:
+                logger.warning("FADA PDF page for category %r has no parseable period columns, skipping", category)
+                continue
+
+            for data_row in table[1:]:
+                name = (data_row[0] or "").replace("\n", " ").strip()
+                if not name or name.lower() == "total" or name.lower().startswith("others"):
+                    continue
+
+                if current_period is not None:
+                    rows.append({
+                        "category": category,
+                        "maker": name,
+                        "year": current_period[0],
+                        "month": current_period[1],
+                        "count": parse_count(data_row[1]),
+                        "share_percent": _parse_share_percent(data_row[2]),
+                    })
+                if prior_period is not None and len(data_row) > 4:
+                    rows.append({
+                        "category": category,
+                        "maker": name,
+                        "year": prior_period[0],
+                        "month": prior_period[1],
+                        "count": parse_count(data_row[3]),
+                        "share_percent": _parse_share_percent(data_row[4]),
+                    })
+    return rows
