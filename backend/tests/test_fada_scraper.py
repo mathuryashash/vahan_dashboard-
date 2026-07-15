@@ -76,23 +76,22 @@ def test_parse_release_pdf_extracts_clean_oem_rows():
     }
 
 
-def test_parse_release_pdf_returns_empty_list_for_non_oem_pdf():
+def test_parse_release_pdf_skips_non_oem_pages():
     from scraper.fada_scraper import parse_release_pdf
 
-    # A minimal valid PDF with no OEM tables at all must not raise -- it
-    # should just produce no rows (matches the real PDFs' own disclaimer/
-    # chart pages, which are non-OEM pages within an otherwise-valid release).
-    import pdfplumber
-    import io
-
-    # Build a tiny in-memory PDF with plain text via pdfplumber's own test
-    # helper is not available; instead assert directly against a page of the
-    # real fixture that is known to have no OEM table (page 1, the cover
-    # page). Note: the cover page's prose does mention the word "OEM" several
-    # times ("OEM supplies", "OEM price hikes") -- so we check the page's
-    # actual *tables* (what parse_release_pdf inspects), not its raw text.
+    # The real fixture mixes several non-OEM-table pages in among the 6
+    # genuine OEM tables: a YTD summary table (header "CATEGORY"), a
+    # month-over-month CV table, an urban/rural chart table, and a
+    # president's-quote table. Their first header cell doesn't end with
+    # "OEM", so parse_release_pdf must skip them -- this must not raise, and
+    # none of their header/row text may leak through as a bogus category.
+    # (The cover page has zero tables at all, so it can't exercise this skip
+    # logic; these other non-OEM pages, which do have tables, are what
+    # actually prove the "...OEM" check works rather than trivially passing.)
     pdf_bytes = (FIXTURES / "fada_june2026.pdf").read_bytes()
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        cover_tables = pdf.pages[0].extract_tables()
-    cover_headers = [(t[0][0] or "").strip().upper() for t in cover_tables if t and t[0]]
-    assert not any(h.endswith("OEM") for h in cover_headers)
+    rows = parse_release_pdf(pdf_bytes)
+
+    assert len(rows) > 0  # the 6 real OEM tables still produced rows
+    categories = {r["category"] for r in rows}
+    assert "CATEGORY" not in categories
+    assert not any("\n" in c for c in categories)

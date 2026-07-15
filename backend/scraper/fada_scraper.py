@@ -138,14 +138,14 @@ def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
                 if not name or name.lower() == "total" or name.lower().startswith("others"):
                     continue
 
-                if current_period is not None:
+                if current_period is not None and len(data_row) > 2:
                     rows.append({
                         "category": category,
                         "maker": name,
                         "year": current_period[0],
                         "month": current_period[1],
-                        "count": parse_count(data_row[1]),
-                        "share_percent": _parse_share_percent(data_row[2]),
+                        "count": parse_count(data_row[1] or ""),
+                        "share_percent": _parse_share_percent(data_row[2] or ""),
                     })
                 if prior_period is not None and len(data_row) > 4:
                     rows.append({
@@ -153,7 +153,7 @@ def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
                         "maker": name,
                         "year": prior_period[0],
                         "month": prior_period[1],
-                        "count": parse_count(data_row[3]),
-                        "share_percent": _parse_share_percent(data_row[4]),
+                        "count": parse_count(data_row[3] or ""),
+                        "share_percent": _parse_share_percent(data_row[4] or ""),
                     })
     return rows
