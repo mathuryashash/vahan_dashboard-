@@ -26,23 +26,28 @@ logger = logging.getLogger("fada_scraper")
 ARCHIVE_URL = "https://www.fada.in/press-release-list.php"
 BASE_URL = "https://www.fada.in/"
 
+# Marks the start of each press-release card. Shared by _ENTRY_RE (to find
+# titles) and discover_releases (to detect an empty/end-of-archive page) so
+# the two checks can't silently drift apart if FADA's markup changes.
+_ENTRY_MARKER = '<h3 class="font-weight-semibold mb-3">'
+
 # Title and PDF-download link sit a few lines apart within the same card,
 # not adjacent -- DOTALL + a non-greedy middle bridges them. Confirmed
 # against the real archive: matches all 15 press-release entries per page,
 # title text captured verbatim for the "vehicle retail data" substring filter
 # below.
 _ENTRY_RE = re.compile(
-    r'<h3 class="font-weight-semibold mb-3">(?:<img[^>]*>\s*)?([^<]+)</h3>.*?href="([^"]+\.pdf)"',
+    re.escape(_ENTRY_MARKER) + r'(?:<img[^>]*>\s*)?([^<]+)</h3>.*?href="([^"]+\.pdf)"',
     re.IGNORECASE | re.DOTALL,
 )
 
 
-def _parse_release_list_page(html: str) -> list[dict]:
+def _parse_release_list_page(page_html: str) -> list[dict]:
     """[{title, pdf_url}, ...] for every "Vehicle Retail Data" entry on one
     archive listing page. Pure function, no network -- see
     test_parse_release_list_page_* for the exact archive shape this handles."""
     releases = []
-    for title, href in _ENTRY_RE.findall(html):
+    for title, href in _ENTRY_RE.findall(page_html):
         title = title.strip()
         if "vehicle retail data" not in title.lower():
             continue
@@ -62,7 +67,7 @@ async def discover_releases(client: httpx.AsyncClient, max_pages: int = 10) -> l
     for page in range(1, max_pages + 1):
         resp = await client.get(ARCHIVE_URL, params={"page": page})
         resp.raise_for_status()
-        has_any_entries = '<h3 class="font-weight-semibold mb-3">' in resp.text
+        has_any_entries = _ENTRY_MARKER in resp.text
         if not has_any_entries:
             logger.info("FADA archive: page %d empty, stopping (found %d releases)", page, len(all_releases))
             break
