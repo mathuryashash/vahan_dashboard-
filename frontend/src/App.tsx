@@ -7,21 +7,27 @@ import { YoYPage } from './pages/YoY';
 import { CategoriesPage } from './pages/Categories';
 import { CategoryDetailPage } from './pages/CategoryDetail';
 import { MakersModelsPage } from './pages/MakersModels';
+import { IndustrySalesPage } from './pages/IndustrySales';
 import { useQuery } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
+import { useScrapeProgress } from './hooks/useIsLiveData';
 
 export default function App() {
-  const { data } = useQuery({
+  const { data, dataUpdatedAt } = useQuery({
     queryKey: ['refreshStatus'],
     queryFn: getRefreshStatus,
-    refetchInterval: 120000,
+    // Poll quickly while a scrape is running so the header reflects real
+    // progress; fall back to a slow poll otherwise.
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 5000 : 120000),
   });
+
+  const { data: scrapeProgress } = useScrapeProgress();
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--bg-app)]">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-surface)]">
-        <Header lastUpdated={data?.last_updated || null} />
+        <Header refreshStatus={data ?? null} statusUpdatedAt={dataUpdatedAt} scrapeProgress={scrapeProgress ?? null} />
         <main className="flex-1 overflow-y-auto">
           <Routes>
             <Route path="/" element={<OverviewPage />} />
@@ -30,6 +36,7 @@ export default function App() {
             <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
             <Route path="/makers" element={<MakersModelsPage />} />
+            <Route path="/industry-sales" element={<IndustrySalesPage />} />
           </Routes>
         </main>
       </div>
