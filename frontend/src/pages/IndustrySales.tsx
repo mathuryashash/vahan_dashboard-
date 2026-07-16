@@ -11,7 +11,12 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 export function IndustrySalesPage() {
   const chart = useChartTheme();
-  const { selectedYear, selectedMonth } = useAppStore();
+  const { selectedYear } = useAppStore();
+  // FADA data has no reason to share Overview's month filter -- a month
+  // picked there would silently make this page's leaderboard query a
+  // single (likely empty) month instead of the intended year-to-date view.
+  // Always a year-to-date leaderboard here, independent of that filter.
+  const selectedMonth = null;
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedMaker, setSelectedMaker] = useState<string | null>(null);
 
