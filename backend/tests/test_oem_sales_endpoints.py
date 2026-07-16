@@ -29,6 +29,16 @@ async def test_get_oem_monthly(client, db_session):
     assert hero["share_percent"] == 25.82
 
 
+async def test_get_oem_monthly_aggregates_across_year_when_month_omitted(client, db_session):
+    await _seed(db_session)
+    response = await client.get("/api/v1/oem-sales/monthly", params={"category": "Two-Wheeler", "year": 2026})
+    assert response.status_code == 200
+    rows = response.json()
+    hero = next(r for r in rows if r["maker"] == "HERO MOTOCORP LTD")
+    assert hero["count"] == 472144 + 450000  # June + May summed, not just one month
+    assert hero["share_percent"] is None  # not meaningful summed across months
+
+
 async def test_get_oem_trend(client, db_session):
     await _seed(db_session)
     response = await client.get("/api/v1/oem-sales/trend", params={"maker": "HERO MOTOCORP LTD", "category": "Two-Wheeler"})
