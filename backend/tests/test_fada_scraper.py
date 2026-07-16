@@ -95,3 +95,47 @@ def test_parse_release_pdf_skips_non_oem_pages():
     categories = {r["category"] for r in rows}
     assert "CATEGORY" not in categories
     assert not any("\n" in c for c in categories)
+
+
+async def test_persist_oem_sales_is_idempotent(db_session):
+    from scraper.fada_scraper import persist_oem_sales
+    from app.models.models import OEMMonthlySales
+    from sqlalchemy import select
+
+    rows = [
+        {"category": "Two-Wheeler", "maker": "HERO MOTOCORP LTD", "year": 2026, "month": 6, "count": 472144, "share_percent": 25.82},
+        {"category": "Two-Wheeler", "maker": "TVS MOTOR COMPANY LTD", "year": 2026, "month": 6, "count": 359243, "share_percent": 19.65},
+    ]
+
+    await persist_oem_sales(db_session, rows, source="FADA", source_document="FADA Releases June 2026 Vehicle Retail Data")
+    await db_session.commit()
+    await persist_oem_sales(db_session, rows, source="FADA", source_document="FADA Releases June 2026 Vehicle Retail Data")
+    await db_session.commit()
+
+    result = await db_session.execute(select(OEMMonthlySales))
+    all_rows = result.scalars().all()
+    assert len(all_rows) == 2  # not 4 -- re-running must not duplicate
+
+    hero = next(r for r in all_rows if r.maker == "HERO MOTOCORP LTD")
+    assert hero.count == 472144
+    assert hero.source == "FADA"
+    assert hero.source_document == "FADA Releases June 2026 Vehicle Retail Data"
+
+
+async def test_persist_oem_sales_does_not_delete_other_periods(db_session):
+    from scraper.fada_scraper import persist_oem_sales
+    from app.models.models import OEMMonthlySales
+    from sqlalchemy import select
+
+    may_rows = [{"category": "Two-Wheeler", "maker": "HERO MOTOCORP LTD", "year": 2026, "month": 5, "count": 100, "share_percent": 20.0}]
+    june_rows = [{"category": "Two-Wheeler", "maker": "HERO MOTOCORP LTD", "year": 2026, "month": 6, "count": 200, "share_percent": 25.0}]
+
+    await persist_oem_sales(db_session, may_rows, source="FADA", source_document="May release")
+    await db_session.commit()
+    await persist_oem_sales(db_session, june_rows, source="FADA", source_document="June release")
+    await db_session.commit()
+
+    result = await db_session.execute(select(OEMMonthlySales))
+    all_rows = result.scalars().all()
+    assert len(all_rows) == 2
+    assert {r.month for r in all_rows} == {5, 6}

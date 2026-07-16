@@ -23,6 +23,10 @@ import re
 import pdfplumber
 from urllib.parse import urljoin
 
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.models import OEMMonthlySales
 from scraper.parsing import MONTH_ABBR, parse_count
 
 logger = logging.getLogger("fada_scraper")
@@ -157,3 +161,32 @@ def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
                         "share_percent": _parse_share_percent(data_row[4] or ""),
                     })
     return rows
+
+
+async def persist_oem_sales(db: AsyncSession, rows: list[dict], *, source: str, source_document: str) -> None:
+    """Replace any existing rows for each (source, year, month, category) in
+    `rows` with the freshly parsed ones, so re-ingesting the same release is
+    idempotent instead of duplicating rows -- mirrors
+    scraper_service.persist_rto_batch's delete-then-insert pattern."""
+    periods = {(row["year"], row["month"], row["category"]) for row in rows}
+    for year, month, category in periods:
+        await db.execute(
+            delete(OEMMonthlySales).where(
+                OEMMonthlySales.source == source,
+                OEMMonthlySales.year == year,
+                OEMMonthlySales.month == month,
+                OEMMonthlySales.category == category,
+            )
+        )
+
+    for row in rows:
+        db.add(OEMMonthlySales(
+            source=source,
+            year=row["year"],
+            month=row["month"],
+            category=row["category"],
+            maker=row["maker"],
+            count=row["count"],
+            share_percent=row["share_percent"],
+            source_document=source_document,
+        ))
