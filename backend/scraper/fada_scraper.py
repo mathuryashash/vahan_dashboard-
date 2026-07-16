@@ -131,8 +131,8 @@ def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
             if not first_cell.upper().endswith("OEM"):
                 continue
             category = first_cell[: -len("OEM")].strip()
-            current_period = _parse_period(header[1]) if len(header) > 1 else None
-            prior_period = _parse_period(header[3]) if len(header) > 3 else None
+            current_period = _parse_period(header[1] or "") if len(header) > 1 else None
+            prior_period = _parse_period(header[3] or "") if len(header) > 3 else None
             if current_period is None and prior_period is None:
                 logger.warning("FADA PDF page for category %r has no parseable period columns, skipping", category)
                 continue
