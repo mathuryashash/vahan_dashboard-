@@ -50,3 +50,38 @@ export interface FuelItem {
 }
 
 export type ViewMode = 'overview' | 'comparison' | 'yoy' | 'category';
+
+export interface RefreshStatus {
+  last_updated: string | null;
+  status: 'idle' | 'running' | 'success' | 'error';
+  error: string | null;
+}
+
+export interface MonthDetail {
+  year: number;
+  month: number;
+  month_count: number;
+  month_yoy_growth_percent: number | null;
+  ytd_count: number;
+  ytd_yoy_growth_percent: number | null;
+}
+
+export interface ScrapeProgress {
+  states_done: number;
+  states_total: number;
+  rtos_done: number;
+  percent: number;
+}
+
+export interface OEMSalesRow {
+  maker: string;
+  count: number;
+  share_percent: number | null;
+}
+
+export interface OEMTrendPoint {
+  year: number;
+  month: number | null;
+  count: number;
+  share_percent: number | null;
+}

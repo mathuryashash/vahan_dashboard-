@@ -15,7 +15,7 @@ export interface FilterParams {
 }
 
 export const getKPIs = (params?: FilterParams) => api.get('/summary/kpis', { params }).then(r => r.data);
-export const getTrend = (params?: FilterParams) =>
+export const getTrend = (params?: Omit<FilterParams, 'month'>) =>
   api.get('/summary/trend', { params }).then(r => r.data);
 export const getStateRanking = (params?: FilterParams & { limit?: number }) =>
   api.get('/summary/state-ranking', { params }).then(r => r.data);
@@ -38,3 +38,14 @@ export const getModelBreakdown = (params?: FilterParams & { limit?: number }) =>
   api.get('/categories/model-breakdown', { params }).then(r => r.data);
 export const triggerRefresh = () => api.post('/refresh/').then(r => r.data);
 export const getRefreshStatus = () => api.get('/refresh/status').then(r => r.data);
+export const getMonthDetail = (params: { year: number; month: number } & Omit<FilterParams, 'year' | 'month'>) =>
+  api.get('/summary/month-detail', { params }).then(r => r.data);
+export const getAvailableYears = (): Promise<number[]> => api.get('/summary/available-years').then(r => r.data);
+export const getScrapeProgress = () => api.get('/refresh/scrape-progress').then(r => r.data);
+
+export const getOemCategories = (): Promise<string[]> =>
+  api.get('/oem-sales/categories').then(r => r.data);
+export const getOemMonthly = (params: { category: string; year: number; month?: number | null }) =>
+  api.get('/oem-sales/monthly', { params }).then(r => r.data);
+export const getOemTrend = (params: { maker: string; category: string }) =>
+  api.get('/oem-sales/trend', { params }).then(r => r.data);
