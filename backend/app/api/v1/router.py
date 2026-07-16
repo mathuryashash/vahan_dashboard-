@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     categories,
     refresh,
     geo,
+    oem_sales,
 )
 
 api_router = APIRouter()
@@ -22,3 +23,4 @@ api_router.include_router(yoy.router, prefix="/yoy", tags=["Year-over-Year"])
 api_router.include_router(categories.router, prefix="/categories", tags=["Categories"])
 api_router.include_router(refresh.router, prefix="/refresh", tags=["Refresh"])
 api_router.include_router(geo.router, prefix="/geo", tags=["Geo Hierarchy"])
+api_router.include_router(oem_sales.router, prefix="/oem-sales", tags=["OEM Sales"])
