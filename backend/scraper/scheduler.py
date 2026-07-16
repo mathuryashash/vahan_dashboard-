@@ -58,14 +58,20 @@ async def run_fada_scheduler_loop() -> None:
                     known_titles = {row[0] for row in existing.all()}
 
                     new_releases = [r for r in releases if r["title"] not in known_titles]
+                    # One release failing to fetch/parse must not block every
+                    # other new release behind it for the next 24h -- mirrors
+                    # backfill_fada.py's per-release try/except.
                     for release in new_releases:
-                        resp = await client.get(release["pdf_url"])
-                        resp.raise_for_status()
-                        rows = parse_release_pdf(resp.content)
-                        if rows:
-                            await persist_oem_sales(db, rows, source="FADA", source_document=release["title"])
-                            await db.commit()
-                            logger.info("FADA scheduler: ingested new release %r", release["title"])
+                        try:
+                            resp = await client.get(release["pdf_url"])
+                            resp.raise_for_status()
+                            rows = parse_release_pdf(resp.content)
+                            if rows:
+                                await persist_oem_sales(db, rows, source="FADA", source_document=release["title"])
+                                await db.commit()
+                                logger.info("FADA scheduler: ingested new release %r", release["title"])
+                        except Exception as exc:
+                            logger.error("FADA scheduler: failed processing %r: %s", release["title"], exc)
         except Exception as exc:
             logger.error("FADA scheduled check failed: %s", exc)
 
