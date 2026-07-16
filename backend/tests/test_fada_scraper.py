@@ -139,3 +139,35 @@ async def test_persist_oem_sales_does_not_delete_other_periods(db_session):
     all_rows = result.scalars().all()
     assert len(all_rows) == 2
     assert {r.month for r in all_rows} == {5, 6}
+
+
+async def test_persist_oem_sales_handles_multiple_periods_in_one_call(db_session):
+    """A real ingest passes rows spanning many (year, month, category) periods
+    at once -- one PDF has ~6 categories, each with a current + prior period
+    column, plus FY-total rows where month=None. Each period's delete scope
+    must be independent within a single call, not just across separate calls."""
+    from scraper.fada_scraper import persist_oem_sales
+    from app.models.models import OEMMonthlySales
+    from sqlalchemy import select
+
+    rows = [
+        {"category": "Two-Wheeler", "maker": "HERO MOTOCORP LTD", "year": 2026, "month": 6, "count": 100, "share_percent": 20.0},
+        {"category": "Two-Wheeler", "maker": "HERO MOTOCORP LTD", "year": 2025, "month": 6, "count": 90, "share_percent": 19.0},
+        {"category": "PV", "maker": "MARUTI SUZUKI", "year": 2026, "month": 6, "count": 50, "share_percent": 40.0},
+        {"category": "Tractor", "maker": "MAHINDRA", "year": 2026, "month": None, "count": 1000, "share_percent": 30.0},
+    ]
+
+    await persist_oem_sales(db_session, rows, source="FADA", source_document="June release")
+    await db_session.commit()
+    # Re-run with the same multi-period rows: each period's own delete scope
+    # must fire, not just the first/last one seen in the loop.
+    await persist_oem_sales(db_session, rows, source="FADA", source_document="June release")
+    await db_session.commit()
+
+    result = await db_session.execute(select(OEMMonthlySales))
+    all_rows = result.scalars().all()
+    assert len(all_rows) == 4  # not 8 -- every period deduped, not just one
+
+    fy_total = next(r for r in all_rows if r.category == "Tractor")
+    assert fy_total.month is None
+    assert fy_total.count == 1000
