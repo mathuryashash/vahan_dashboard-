@@ -7,6 +7,17 @@ build/
 .env
 *.egg-info/
 backend/data/*.db
+backend/data/*.db-shm
+backend/data/*.db-wal
 nul
 **/nul
 .worktrees/
+.superpowers/
+.serena/
+*.log
+test_screenshots/
+/rto_analysis.json
+/rtos.json
+/rtos_dl.json
+/test_api.py
+/_test_api.py

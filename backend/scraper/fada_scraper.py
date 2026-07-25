@@ -34,6 +34,12 @@ logger = logging.getLogger("fada_scraper")
 ARCHIVE_URL = "https://www.fada.in/press-release-list.php"
 BASE_URL = "https://www.fada.in/"
 
+# A standard multi-category release has ~6 categories x 10-20 makers each.
+# Below this, pdfplumber is probably still "succeeding" (returning some
+# tables) while actually missing most of the real data -- a silent PDF
+# layout change looks identical to a normal run unless this is checked.
+MIN_EXPECTED_ROWS = 60
+
 # Marks the start of each press-release card. Shared by _ENTRY_RE (to find
 # titles) and discover_releases (to detect an empty/end-of-archive page) so
 # the two checks can't silently drift apart if FADA's markup changes.
@@ -160,6 +166,14 @@ def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
                         "count": parse_count(data_row[3] or ""),
                         "share_percent": _parse_share_percent(data_row[4] or ""),
                     })
+
+    if len(rows) < MIN_EXPECTED_ROWS:
+        logger.warning(
+            "FADA PDF extraction returned only %d rows (expected >= %d for a standard "
+            "multi-category release) -- FADA's PDF table layout may have changed, "
+            "silently degrading extraction instead of failing outright.",
+            len(rows), MIN_EXPECTED_ROWS,
+        )
     return rows
 
 

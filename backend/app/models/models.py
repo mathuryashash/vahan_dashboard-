@@ -72,13 +72,17 @@ class Registration(Base):
     # synthetic rows, which were never split this way and are safe to sum.
     is_supplementary = Column(Boolean, nullable=True, default=False, index=True)
 
-    # Nearly every summary/KPI query filters on year (+ month) and excludes
-    # is_supplementary rows. With ~9M rows and only single-column indexes,
-    # SQLite could pick just one of them and still scan millions of matching
-    # rowids -- this composite index lets it satisfy the whole filter from
-    # the index itself.
+    # Nearly every summary/KPI query is a SUM(count) filtered on year (+
+    # month, + is_supplementary or state_name). A plain (year, month,
+    # is_supplementary) index still means a rowid lookup into the main table
+    # per matching row just to read `count` -- with ~13M rows that's the
+    # difference between an index-only scan and hundreds of thousands of
+    # table lookups (measured ~13x on this data: 1.16s -> 0.088s). Including
+    # `count` makes these genuinely covering indexes, so SQLite can answer
+    # the whole aggregate from the index alone.
     __table_args__ = (
-        Index("idx_reg_year_month_supp", "year", "month", "is_supplementary"),
+        Index("idx_reg_year_month_supp_count", "year", "month", "is_supplementary", "count"),
+        Index("idx_reg_state_year_month_count", "state_name", "year", "month", "count"),
     )
 
 

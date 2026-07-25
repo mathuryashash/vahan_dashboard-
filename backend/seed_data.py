@@ -3,11 +3,29 @@
 import sqlite3
 import os
 import random
+import csv
 from datetime import datetime
 
 os.makedirs("data", exist_ok=True)
 conn = sqlite3.connect("data/vahan.db")
 c = conn.cursor()
+
+# Load RTO reference data
+rto_by_state = {}
+rto_csv_path = "data/reference/RTO.csv"
+if os.path.exists(rto_csv_path):
+    state_code_map = {"OR": "OD", "UA": "UK", "DD": "DN"}
+    with open(rto_csv_path, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rto_code = row["RegNo"].strip()
+            rto_name = row["Place"].strip()
+            raw_prefix = rto_code[:2].upper()
+            state_code = state_code_map.get(raw_prefix, raw_prefix)
+            if state_code not in rto_by_state:
+                rto_by_state[state_code] = []
+            rto_by_state[state_code].append((rto_code, rto_name))
+
 
 c.execute("DROP TABLE IF EXISTS registrations")
 c.execute("""CREATE TABLE IF NOT EXISTS states (
@@ -284,12 +302,18 @@ for state_code, state_name in states:
                             fuel = random.choice(fuel_types)
                             norm = random.choice(norms)
 
+                            state_rtos = rto_by_state.get(state_code, [])
+                            if state_rtos:
+                                rto_code, rto_name = random.choice(state_rtos)
+                            else:
+                                rto_code, rto_name = "", ""
+
                             records.append(
                                 (
                                     state_code,
                                     state_name,
-                                    "",
-                                    "",
+                                    rto_code,
+                                    rto_name,
                                     month,
                                     year,
                                     day,

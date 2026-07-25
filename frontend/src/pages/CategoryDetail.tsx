@@ -7,6 +7,16 @@ import { useAppStore } from '../hooks/useAppStore';
 import { ArrowLeft } from '../components/Icons';
 import { Link } from 'react-router-dom';
 import { useChartTheme } from '../hooks/useChartTheme';
+import { EmptyState } from '../components/EmptyState';
+
+// The live VAHAN4 site can only pivot on one Y-axis dimension per visit, so
+// the scraper's maker-pass and fuel-pass rows are never tagged with a real
+// vehicle_class (they store 'All' -- see Registration.is_supplementary and
+// scraper_service.persist_rto_batch). There is no cross-tab of maker/fuel by
+// vehicle class in the source data for live-scraped years, so this is a real
+// data-source gap, not a bug to route around with estimated numbers.
+const NO_CROSS_TAB_MESSAGE =
+  "VAHAN's live reports can't cross-tabulate this against a vehicle category in one export -- this breakdown isn't available for this category yet.";
 
 export function CategoryDetailPage() {
   const { vehicleClass } = useParams<{ vehicleClass: string }>();
@@ -67,6 +77,8 @@ export function CategoryDetailPage() {
         </div>
         {makersLoading ? (
           <div className="h-[280px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+        ) : (makers || []).length === 0 ? (
+          <EmptyState title="No Maker Breakdown" description={NO_CROSS_TAB_MESSAGE} variant="no-data" className="py-8" />
         ) : (
           <>
             <ResponsiveContainer width="100%" height={280}>
@@ -76,7 +88,7 @@ export function CategoryDetailPage() {
                 <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={140} />
                 <Tooltip
                   formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
-                  contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8, fontSize: 12 }}
+                  contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
                 />
                 <Bar dataKey="count" radius={[0, 4, 4, 0]}>
                   {(makers || []).map((m: { maker: string }, i: number) => (
@@ -107,6 +119,8 @@ export function CategoryDetailPage() {
         </div>
         {fuelLoading ? (
           <div className="h-[280px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+        ) : (fuel || []).length === 0 ? (
+          <EmptyState title="No Fuel Breakdown" description={NO_CROSS_TAB_MESSAGE} variant="no-data" className="py-8" />
         ) : (
           <>
             <ResponsiveContainer width="100%" height={220}>
@@ -126,7 +140,7 @@ export function CategoryDetailPage() {
                 </Pie>
                 <Tooltip
                   formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
-                  contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8, fontSize: 12 }}
+                  contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
                 />
               </PieChart>
             </ResponsiveContainer>

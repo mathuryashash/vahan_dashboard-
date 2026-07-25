@@ -38,14 +38,40 @@ export function getChartPalette(theme: Theme): ChartPalette {
   return theme === 'light' ? LIGHT : DARK;
 }
 
-/** Deterministic string hash -> stable palette index, so "Honda" is always
- * the same color on every chart it appears on, regardless of sort order. */
-export function seriesColor(palette: ChartPalette, name: string): string {
+function hashIndex(name: string, buckets: number): number {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
   }
-  return palette.seriesColors[hash % palette.seriesColors.length];
+  return hash % buckets;
+}
+
+/** Deterministic string hash -> stable palette index, so "Honda" is always
+ * the same color on every chart it appears on, regardless of sort order. */
+export function seriesColor(palette: ChartPalette, name: string): string {
+  return palette.seriesColors[hashIndex(name, palette.seriesColors.length)];
+}
+
+/** Same idea as `seriesColor`, but for a specific small set of names shown
+ * together (a pie/donut's slices, a legend) -- a bare hash can put two of
+ * them on the same bucket (only `seriesColors.length` buckets total), which
+ * on a pie chart reads as "these are the same category" when they aren't.
+ * Keeps the hash color for each name where possible and only reassigns the
+ * ones that collide, so most charts stay identical to plain `seriesColor`. */
+export function distinctSeriesColors(palette: ChartPalette, names: string[]): Map<string, string> {
+  const n = palette.seriesColors.length;
+  const used = new Set<number>();
+  const result = new Map<string, string>();
+  for (const name of names) {
+    let idx = hashIndex(name, n);
+    if (used.has(idx)) {
+      const free = Array.from({ length: n }, (_, i) => i).find((i) => !used.has(i));
+      if (free !== undefined) idx = free;
+    }
+    used.add(idx);
+    result.set(name, palette.seriesColors[idx]);
+  }
+  return result;
 }
 
 /** Caps a donut/pie dataset at maxSlices, folding the remainder into an "Other"

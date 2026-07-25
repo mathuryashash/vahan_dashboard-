@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+from datetime import datetime
 import os
 
 
@@ -19,6 +20,13 @@ class Settings(BaseSettings):
     LAST_UPDATED: str | None = None
     REFRESH_STATUS: str = "idle"  # idle | running | success | error
     REFRESH_ERROR: str | None = None
+    # Minimum time between manually-triggered scrapes. POST /refresh/ has no
+    # auth (it's a public dashboard button), so without a cooldown anyone
+    # could keep re-triggering a fresh ~1-1.5h scrape back-to-back forever --
+    # hammering both this app's own DB (write contention) and the government
+    # site the scraper hits.
+    REFRESH_COOLDOWN_MINUTES: int = 30
+    LAST_REFRESH_STARTED_AT: datetime | None = None
 
     class Config:
         env_file = ".env"

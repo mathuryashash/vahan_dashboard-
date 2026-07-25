@@ -6,6 +6,7 @@ import { getOemCategories, getOemMonthly, getOemTrend } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
+import { EmptyState } from '../components/EmptyState';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -65,6 +66,8 @@ export function IndustrySalesPage() {
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">Maker Leaderboard</h3>
         {monthlyLoading ? (
           <div className="h-[400px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+        ) : barData.length === 0 ? (
+          <EmptyState variant="no-data" title="No FADA data for this category/year" description="Try a different category or year." />
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(280, barData.length * 26)}>
             <BarChart data={barData} layout="vertical">
@@ -73,7 +76,7 @@ export function IndustrySalesPage() {
               <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={210} />
               <Tooltip
                 formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
-                contentStyle={chart.tooltipContentStyle({ fontSize: 12 })}
+                contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
               />
               <Bar
                 dataKey="count"
@@ -95,7 +98,7 @@ export function IndustrySalesPage() {
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
-              <Tooltip formatter={(val: number) => val.toLocaleString('en-IN')} contentStyle={chart.tooltipContentStyle()} />
+              <Tooltip formatter={(val: number) => val.toLocaleString('en-IN')} contentStyle={chart.tooltipContentStyle()} {...chart.tooltipTextStyle} />
               <Line type="monotone" dataKey="count" stroke={chart.seriesColors[0]} strokeWidth={2.5} dot={{ r: 3, fill: chart.seriesColors[0] }} />
             </LineChart>
           </ResponsiveContainer>

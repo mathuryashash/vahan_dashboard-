@@ -1,12 +1,33 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, and_
 from app.core.database import get_db
+from app.core.query_filters import apply_total_filters, exclude_supplementary
 from app.models.models import Registration
 from app.schemas.schemas import DashboardKPIs
 from app.core.config import settings
 
 router = APIRouter()
+
+# Evaluated once at import time rather than hardcoded, so these endpoints
+# don't need a source change every January.
+_DEFAULT_YEAR = datetime.now().year
+
+
+@router.get("/available-years")
+async def get_available_years(db: AsyncSession = Depends(get_db)):
+    """Years that actually have real (non-supplementary) scraped data, newest
+    first. The Overview year filter used to hardcode [2024, 2025, 2026]; as
+    more years get backfilled (see scraper/backfill_all_years.py) that list
+    would silently go stale and hide newly-added years unless a source change
+    shipped alongside every scrape. Driving the filter from this instead
+    means a new year becomes selectable the moment it's scraped, with no
+    frontend deploy needed."""
+    result = await db.execute(
+        exclude_supplementary(select(Registration.year).distinct()).order_by(Registration.year.desc())
+    )
+    return [row[0] for row in result.all()]
 
 
 @router.get("/kpis", response_model=DashboardKPIs)
@@ -19,35 +40,37 @@ async def get_dashboard_kpis(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    current_year = year or 2026
+    current_year = year or _DEFAULT_YEAR
     prev_year = current_year - 1
 
-    # Base queries for current vs previous periods
-    q_current = select(func.sum(Registration.count)).where(Registration.year == current_year)
-    q_prev = select(func.sum(Registration.count)).where(Registration.year == prev_year)
+    # When no specific month is requested, compare year-to-date rather than
+    # full calendar year vs full calendar year: if current_year only has data
+    # through June (e.g. it's the in-progress year), comparing 6 months of
+    # current_year against 12 months of prev_year produces a nonsensical,
+    # deeply negative "growth" number. Cap both periods at the latest month
+    # that actually has data for current_year -- computed as a scalar
+    # subquery (evaluated server-side) rather than a separate awaited round
+    # trip, since this endpoint's latency is dominated by round-trip count,
+    # not query cost (each of these is a fast indexed lookup on its own).
+    max_month_subq = (
+        select(func.max(Registration.month)).where(Registration.year == current_year).scalar_subquery()
+    )
+    month_filter = (Registration.month == month) if month else (Registration.month <= max_month_subq)
 
-    # Apply filters to current and previous queries
-    if state:
-        q_current = q_current.where(Registration.state_name == state)
-        q_prev = q_prev.where(Registration.state_name == state)
-    if month:
-        q_current = q_current.where(Registration.month == month)
-        q_prev = q_prev.where(Registration.month == month)
-    if vehicle_class:
-        q_current = q_current.where(Registration.vehicle_class == vehicle_class)
-        q_prev = q_prev.where(Registration.vehicle_class == vehicle_class)
-    if maker:
-        q_current = q_current.where(Registration.maker == maker)
-        q_prev = q_prev.where(Registration.maker == maker)
-    if vehicle_model:
-        q_current = q_current.where(Registration.vehicle_model == vehicle_model)
-        q_prev = q_prev.where(Registration.vehicle_model == vehicle_model)
+    # Current + previous period totals in one grouped query instead of two --
+    # both use the same cutoff month, so there's nothing year-specific about
+    # the filter that needs two separate round trips.
+    q_totals = select(Registration.year, func.sum(Registration.count).label("total")).where(
+        Registration.year.in_([current_year, prev_year]), month_filter
+    )
+    q_totals = apply_total_filters(
+        q_totals, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    ).group_by(Registration.year)
 
-    result_current = await db.execute(q_current)
-    total_this_period = result_current.scalar() or 0
-
-    result_prev = await db.execute(q_prev)
-    total_prev_period = result_prev.scalar() or 0
+    result_totals = await db.execute(q_totals)
+    totals_by_year = dict(result_totals.all())
+    total_this_period = totals_by_year.get(current_year) or 0
+    total_prev_period = totals_by_year.get(prev_year) or 0
 
     # Calculate YoY Growth
     yoy_growth = 0.0
@@ -59,18 +82,11 @@ async def get_dashboard_kpis(
     # Top State Query
     q_top_state = (
         select(Registration.state_name, func.sum(Registration.count).label("total"))
-        .where(Registration.year == current_year)
+        .where(Registration.year == current_year, month_filter)
     )
-    if month:
-        q_top_state = q_top_state.where(Registration.month == month)
-    if state:
-        q_top_state = q_top_state.where(Registration.state_name == state)
-    if vehicle_class:
-        q_top_state = q_top_state.where(Registration.vehicle_class == vehicle_class)
-    if maker:
-        q_top_state = q_top_state.where(Registration.maker == maker)
-    if vehicle_model:
-        q_top_state = q_top_state.where(Registration.vehicle_model == vehicle_model)
+    q_top_state = apply_total_filters(
+        q_top_state, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    )
 
     q_top_state = q_top_state.group_by(Registration.state_name).order_by(desc("total")).limit(1)
     result_top = await db.execute(q_top_state)
@@ -78,39 +94,42 @@ async def get_dashboard_kpis(
     top_state = top_row[0] if top_row else "N/A"
     top_state_count = top_row[1] if top_row else 0
 
-    # Today's Registrations (or latest day count)
-    # Find max day in database for selected month/year
-    q_max_day = select(func.max(Registration.day)).where(
-        Registration.year == current_year,
-        Registration.day.isnot(None)
+    # Today's Registrations (or latest day count). Finds the true latest
+    # calendar date (month, day) with daily-granularity data and sums that
+    # exact date in one round trip via a CTE, instead of a separate query to
+    # find the date followed by a second one to sum it. Max day-of-month
+    # alone isn't enough: different months can share a day number (e.g. both
+    # May and June have a "day 30"), so this needs a specific (month, day)
+    # pair, found by ordering, not two independent maxes.
+    latest_day_cte = (
+        select(Registration.month.label("month"), Registration.day.label("day"))
+        .where(Registration.year == current_year, Registration.day.isnot(None))
+        .order_by(desc(Registration.month), desc(Registration.day))
+        .limit(1)
+    ).cte("latest_day")
+
+    q_today = (
+        select(func.sum(Registration.count))
+        .select_from(Registration)
+        .join(
+            latest_day_cte,
+            and_(Registration.month == latest_day_cte.c.month, Registration.day == latest_day_cte.c.day),
+        )
+        .where(Registration.year == current_year)
     )
     if month:
-        q_max_day = q_max_day.where(Registration.month == month)
-    
-    result_max_day = await db.execute(q_max_day)
-    max_day = result_max_day.scalar()
-
-    if max_day:
-        q_today = select(func.sum(Registration.count)).where(
-            Registration.year == current_year,
-            Registration.day == max_day
-        )
-        if month:
-            q_today = q_today.where(Registration.month == month)
-        if state:
-            q_today = q_today.where(Registration.state_name == state)
-        if vehicle_class:
-            q_today = q_today.where(Registration.vehicle_class == vehicle_class)
-        if maker:
-            q_today = q_today.where(Registration.maker == maker)
-        if vehicle_model:
-            q_today = q_today.where(Registration.vehicle_model == vehicle_model)
-            
-        result_today = await db.execute(q_today)
-        total_today = result_today.scalar() or 0
-    else:
-        # Fallback to daily average of the period
+        q_today = q_today.where(Registration.month == month)
+    q_today = apply_total_filters(
+        q_today, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    )
+    result_today = await db.execute(q_today)
+    today_scalar = result_today.scalar()
+    if today_scalar is None:
+        # No day-granularity data at all for this year (the CTE was empty) --
+        # fall back to a daily average of the period, same as before.
         total_today = int(total_this_period / 30) if total_this_period > 0 else 0
+    else:
+        total_today = today_scalar
 
     last_updated = settings.LAST_UPDATED
 
@@ -126,61 +145,33 @@ async def get_dashboard_kpis(
 
 @router.get("/trend")
 async def get_trend(
-    year: int = 2026,
-    month: int | None = None,
+    year: int = _DEFAULT_YEAR,
     state: str | None = None,
     vehicle_class: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    # If a specific month is selected and contains day-wise data (May/June 2026 have daily records)
-    # We group by day. Otherwise, group by month.
-    is_daily_view = (month is not None)
+    """Month-wise registration trend for the year. There is no day-level
+    breakdown to fall back to when a specific month is selected elsewhere on
+    the page (see get_month_detail's docstring) -- the trend chart always
+    shows the full year's month-by-month shape."""
+    query = select(
+        Registration.month, func.sum(Registration.count).label("count")
+    ).where(Registration.year == year)
+    query = apply_total_filters(
+        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    )
 
-    if is_daily_view:
-        query = select(
-            Registration.day, func.sum(Registration.count).label("count")
-        ).where(
-            Registration.year == year,
-            Registration.month == month,
-            Registration.day.isnot(None)
-        )
-        if state:
-            query = query.where(Registration.state_name == state)
-        if vehicle_class:
-            query = query.where(Registration.vehicle_class == vehicle_class)
-        if maker:
-            query = query.where(Registration.maker == maker)
-        if vehicle_model:
-            query = query.where(Registration.vehicle_model == vehicle_model)
-
-        query = query.group_by(Registration.day).order_by(Registration.day)
-        result = await db.execute(query)
-        rows = result.all()
-        return [{"day": r[0], "count": r[1]} for r in rows]
-    else:
-        query = select(
-            Registration.month, func.sum(Registration.count).label("count")
-        ).where(Registration.year == year)
-        if state:
-            query = query.where(Registration.state_name == state)
-        if vehicle_class:
-            query = query.where(Registration.vehicle_class == vehicle_class)
-        if maker:
-            query = query.where(Registration.maker == maker)
-        if vehicle_model:
-            query = query.where(Registration.vehicle_model == vehicle_model)
-
-        query = query.group_by(Registration.month).order_by(Registration.month)
-        result = await db.execute(query)
-        rows = result.all()
-        return [{"month": r[0], "count": r[1]} for r in rows]
+    query = query.group_by(Registration.month).order_by(Registration.month)
+    result = await db.execute(query)
+    rows = result.all()
+    return [{"month": r[0], "count": r[1]} for r in rows]
 
 
 @router.get("/state-ranking")
 async def get_state_ranking(
-    year: int = 2026,
+    year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
     vehicle_class: str | None = None,
@@ -195,14 +186,9 @@ async def get_state_ranking(
 
     if month:
         query = query.where(Registration.month == month)
-    if state:
-        query = query.where(Registration.state_name == state)
-    if vehicle_class:
-        query = query.where(Registration.vehicle_class == vehicle_class)
-    if maker:
-        query = query.where(Registration.maker == maker)
-    if vehicle_model:
-        query = query.where(Registration.vehicle_model == vehicle_model)
+    query = apply_total_filters(
+        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    )
 
     query = query.group_by(Registration.state_name).order_by(desc("total")).limit(limit)
     result = await db.execute(query)
@@ -217,3 +203,75 @@ async def get_state_ranking(
         }
         for r in rows
     ]
+
+
+async def _period_sum(
+    db: AsyncSession,
+    year: int,
+    *,
+    month: int | None = None,
+    month_lt: int | None = None,
+    state: str | None = None,
+    vehicle_class: str | None = None,
+    maker: str | None = None,
+    vehicle_model: str | None = None,
+) -> int:
+    query = select(func.sum(Registration.count)).where(Registration.year == year)
+    if month is not None:
+        query = query.where(Registration.month == month)
+    if month_lt is not None:
+        query = query.where(Registration.month < month_lt)
+    query = apply_total_filters(
+        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    )
+    result = await db.execute(query)
+    return result.scalar() or 0
+
+
+def _growth_percent(current: float, previous: float | None) -> float | None:
+    if previous is None or previous <= 0:
+        return None
+    return round((current - previous) / previous * 100, 2)
+
+
+@router.get("/month-detail")
+async def get_month_detail(
+    year: int,
+    month: int,
+    state: str | None = None,
+    vehicle_class: str | None = None,
+    maker: str | None = None,
+    vehicle_model: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Registrations for a specific month, plus year-to-date through that
+    month, each compared against the same point last year.
+
+    The live VAHAN4 site has no day-level granularity at all -- its finest
+    X-axis option is "Month Wise" (confirmed against the live site's own
+    axis-selector options; there is no "Day Wise"). An earlier version of
+    this endpoint was built around a day picker and a day/month-to-date
+    breakdown, using a `Registration.day` column that real scraped data can
+    never populate -- it 404'd unconditionally once synthetic data was
+    replaced. This version only reports what the source can actually supply:
+    a whole month's total and year-to-date, both real, no estimation needed.
+    """
+    prev_year = year - 1
+    filters = dict(state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model)
+
+    month_count = await _period_sum(db, year, month=month, **filters)
+    prior_months_count = await _period_sum(db, year, month_lt=month, **filters)
+    ytd_count = prior_months_count + month_count
+
+    month_prev = await _period_sum(db, prev_year, month=month, **filters)
+    prior_months_prev = await _period_sum(db, prev_year, month_lt=month, **filters)
+    ytd_prev = prior_months_prev + month_prev
+
+    return {
+        "year": year,
+        "month": month,
+        "month_count": month_count,
+        "month_yoy_growth_percent": _growth_percent(month_count, month_prev),
+        "ytd_count": ytd_count,
+        "ytd_yoy_growth_percent": _growth_percent(ytd_count, ytd_prev),
+    }

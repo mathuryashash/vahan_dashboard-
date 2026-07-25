@@ -1,22 +1,28 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
+from app.core.query_filters import exclude_supplementary
 from app.models.models import Registration
 
 router = APIRouter()
+
+_DEFAULT_YEAR = datetime.now().year
 
 
 @router.get("/states")
 async def compare_states(
     state_a: str,
     state_b: str | None = None,
-    year: int = 2026,
+    year: int = _DEFAULT_YEAR,
     db: AsyncSession = Depends(get_db),
 ):
     result_a = await db.execute(
-        select(Registration.month, func.sum(Registration.count).label("count"))
-        .where(Registration.year == year, Registration.state_name == state_a)
+        exclude_supplementary(
+            select(Registration.month, func.sum(Registration.count).label("count"))
+            .where(Registration.year == year, Registration.state_name == state_a)
+        )
         .group_by(Registration.month)
         .order_by(Registration.month)
     )
@@ -24,8 +30,10 @@ async def compare_states(
 
     result_b = (
         await db.execute(
-            select(Registration.month, func.sum(Registration.count).label("count"))
-            .where(Registration.year == year, Registration.state_name == state_b)
+            exclude_supplementary(
+                select(Registration.month, func.sum(Registration.count).label("count"))
+                .where(Registration.year == year, Registration.state_name == state_b)
+            )
             .group_by(Registration.month)
             .order_by(Registration.month)
         )
@@ -47,11 +55,13 @@ async def compare_states(
 
 @router.get("/all-states")
 async def get_all_states_comparison(
-    year: int = 2026, limit: int = 36, db: AsyncSession = Depends(get_db)
+    year: int = _DEFAULT_YEAR, limit: int = 36, db: AsyncSession = Depends(get_db)
 ):
     result = await db.execute(
-        select(Registration.state_name, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year)
+        exclude_supplementary(
+            select(Registration.state_name, func.sum(Registration.count).label("total"))
+            .where(Registration.year == year)
+        )
         .group_by(Registration.state_name)
         .order_by(func.sum(Registration.count).desc())
         .limit(limit)

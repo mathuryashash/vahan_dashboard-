@@ -1,273 +1,481 @@
-import asyncio
-import logging
-from datetime import datetime
-from playwright.async_api import async_playwright, Page
+"""Live VAHAN4 scraper — drives the dashboard's JSF/PrimeFaces AJAX protocol
+directly over HTTP, with no browser involved.
 
-from scraper.parsing import parse_state_option, parse_rto_option, parse_count, MONTH_ABBR
+Why not Playwright: headless Chromium gets an immediate 403 "Access Forbidden"
+from this site's bot detection, before any interaction even happens — plain
+HTTP requests to the exact same URL get a normal 200. This was confirmed by
+directly comparing the two, repeatedly, from the same network path.
+
+The site's UI is a stateful JSF form (PrimeFaces widgets over a server-side
+ViewState). Two things about it are easy to get wrong when replaying it by
+hand instead of through a real browser:
+
+1. PrimeFaces.ab() (the client-side call every widget interaction makes) is a
+   thin wrapper around a full jQuery form serialization — a real browser
+   submits *every* current field value on *every* AJAX request, not just the
+   one that changed. This app's server-side beans throw a bare
+   `javax.faces.el.EvaluationException` (no detail message) if you omit
+   fields the client would normally still be sending. So this module tracks a
+   full form-state dict and resubmits it whole every time, mirroring that.
+2. Some components have a real DOM `id` that differs from the identifier used
+   elsewhere (e.g. the actual "generate report" button's id is `irclay`, not
+   any of the several buttons whose visible label is literally "Refresh";
+   the results table's widget var is `reportTable` but its real id —
+   the one needed for javax.faces.source/execute/render — is `groupingTable`).
+   These were found by capturing real browser network traffic and diffing it
+   against what this module was sending, not by guessing.
+
+Also worth knowing: the State dropdown's JSF component id is auto-generated
+from tree position (`j_idtNN`) and drifts far more often than a one-time
+fluke -- observed changing THREE times in two days of scraping (`j_idt34`
+-> `j_idt39` -> `j_idt38`), seemingly per-session rather than per-deploy.
+Hardcoding it and re-deriving by hand each time it broke was the wrong fix at
+the wrong altitude (recurring maintenance burden with detection only after a
+scrape silently no-ops). Instead, `discover_state_select_id()` finds it fresh
+on every page load by content, not position: the State select's first option
+is always literally "All Vahan4 Running States (N/36)" -- unlike the id,
+that text is stable, so we scan every `<select>` block for the one whose
+first option matches it, rather than trusting a remembered id.
+"""
+
+import asyncio
+import html
+import logging
+import re
+from datetime import datetime, timezone
+
+import httpx
+
+from scraper.parsing import MONTH_ABBR, parse_count, parse_rto_option, parse_state_option
 
 logger = logging.getLogger("vahan_scraper")
 
 REPORT_URL = "https://vahan.parivahan.gov.in/vahan4dashboard/vahan/view/reportview.xhtml"
 REQUEST_DELAY_SECONDS = 1.5
 
-
-async def _open_dropdown_panel(page: Page, trigger_id: str, timeout_ms: int = 5000):
-    """Open a PrimeFaces ui-selectonemenu panel via its JS widget API (PrimeFaces.widgets['widget_<id>'].show()).
-
-    A plain Playwright pointer click on the trigger div is unreliable on this page: some
-    widgets (confirmed for #selectedYearType) never open the panel via a simulated click,
-    even with force=True and scroll-into-view, apparently due to how PrimeFaces binds its
-    show/hide handlers. The JS widget API call is what PrimeFaces' own client code invokes
-    internally and works reliably for every widget tested.
-    """
-    trigger = await page.query_selector(f"#{trigger_id}")
-    if trigger is None:
-        raise RuntimeError(f"Dropdown trigger #{trigger_id} not found on page")
-    await trigger.scroll_into_view_if_needed()
-    result = await page.evaluate(
-        "(id) => { const w = PrimeFaces.widgets['widget_' + id]; if (!w) return 'no_widget'; w.show(); return 'shown'; }",
-        trigger_id,
-    )
-    if result != "shown":
-        raise RuntimeError(f"PrimeFaces widget 'widget_{trigger_id}' not found")
-    await page.wait_for_selector(f"#{trigger_id}_panel", state="visible", timeout=timeout_ms)
-    return await page.query_selector(f"#{trigger_id}_panel")
-
-
-async def select_dropdown_option(page: Page, trigger_id: str, predicate) -> str | None:
-    """Open a PrimeFaces ui-selectonemenu identified by trigger_id and click the first
-    <li> option whose text satisfies predicate(text). Returns the matched text, or None
-    if no option matched (the dropdown is closed via Escape in that case)."""
-    panel = await _open_dropdown_panel(page, trigger_id)
-    items = await panel.query_selector_all("li")
-    for item in items:
-        text = (await item.inner_text()).strip()
-        if predicate(text):
-            await item.wait_for_element_state("visible", timeout=3000)
-            await item.click(force=True, timeout=5000)
-            await page.wait_for_timeout(1200)
-            return text
-    await page.keyboard.press("Escape")
-    return None
-
-
-async def list_dropdown_options(page: Page, trigger_id: str) -> list[str]:
-    """Open a dropdown, read all option texts, close it without selecting anything."""
-    panel = await _open_dropdown_panel(page, trigger_id)
-    items = await panel.query_selector_all("li")
-    texts = [(await item.inner_text()).strip() for item in items]
-    await page.keyboard.press("Escape")
-    await page.wait_for_timeout(300)
-    return texts
-
-
-async def get_states(page: Page) -> list[dict]:
-    """Return [{'state_name': ..., 'rto_count': ...}, ...] for all real states (no aggregate row)."""
-    texts = await list_dropdown_options(page, "j_idt33")
-    parsed = [parse_state_option(t) for t in texts]
-    return [p for p in parsed if p is not None]
-
-
-async def select_state(page: Page, state_name: str) -> bool:
-    result = await select_dropdown_option(
-        page, "j_idt33", lambda t: t.strip().startswith(f"{state_name}(")
-    )
-    return result is not None
-
-
-async def get_rtos_for_selected_state(page: Page) -> list[dict]:
-    """Assumes a state was already selected (repopulates #selectedRto via AJAX)."""
-    texts = await list_dropdown_options(page, "selectedRto")
-    parsed = [parse_rto_option(t) for t in texts]
-    return [p for p in parsed if p is not None]
-
-
-async def select_rto(page: Page, rto_code: str) -> bool:
-    result = await select_dropdown_option(
-        page, "selectedRto", lambda t: (parse_rto_option(t) or {}).get("rto_code") == rto_code
-    )
-    return result is not None
-
-
-async def configure_maker_month_pivot(page: Page, year: int) -> None:
-    """Set Y-Axis=Maker, X-Axis=Month Wise, Year Type=Calendar Year, Year=<year>."""
-    await select_dropdown_option(page, "yaxisVar", lambda t: t.strip() == "Maker")
-    await select_dropdown_option(page, "xaxisVar", lambda t: t.strip() == "Month Wise")
-    await select_dropdown_option(page, "selectedYearType", lambda t: t.strip() == "Calendar Year")
-    await select_dropdown_option(page, "selectedYear", lambda t: t.strip() == str(year))
-
-
-async def _click_refresh(page: Page) -> None:
-    buttons = await page.query_selector_all("button, .ui-button")
-    for button in buttons:
-        text = (await button.inner_text()).strip().lower()
-        button_id = (await button.get_attribute("id")) or ""
-        if "refresh" in text or "refresh" in button_id.lower():
-            await button.click(force=True)
-            await page.wait_for_timeout(2500)
-            return
-    raise RuntimeError("Refresh button not found")
-
-
-async def _read_current_page_rows(page: Page) -> tuple[list[str], list[list[str]]]:
-    """Read headers + body rows from the Maker x Month result table (scrollable ui-datatable).
-
-    PrimeFaces scrollable tables render as a pair: a header-clone table (same <th> text,
-    zero <tbody> rows) plus the real body table (same headers, actual rows). Both match on
-    headers alone, so we must keep scanning until we find one that actually has rows.
-    """
-    tables = await page.query_selector_all("table[role='grid']")
-    best_headers: list[str] = []
-    for table in tables:
-        headers = [
-            (await th.inner_text()).strip()
-            for th in await table.query_selector_all("th")
-        ]
-        if "Maker" in headers and any(m in headers for m in MONTH_ABBR):
-            best_headers = headers
-            rows = []
-            for tr in await table.query_selector_all("tbody tr"):
-                cells = [(await td.inner_text()).strip() for td in await tr.query_selector_all("td")]
-                if cells:
-                    rows.append(cells)
-            if rows:
-                return headers, rows
-    return best_headers, []
-
-
-async def _go_to_next_page(page: Page) -> bool:
-    next_button = await page.query_selector(".ui-paginator-next")
-    if next_button is None:
-        return False
-    classes = (await next_button.get_attribute("class")) or ""
-    if "ui-state-disabled" in classes:
-        return False
-    await next_button.click(force=True)
-    await page.wait_for_timeout(1500)
-    return True
-
-
-async def scrape_maker_month_table(page: Page, year: int) -> list[dict]:
-    """Assumes state + RTO are already selected. Configures the Maker x Month pivot,
-    reads all pages of results, returns [{'maker': str, 'month': int, 'year': year, 'count': int}, ...].
-    """
-    await configure_maker_month_pivot(page, year)
-    await _click_refresh(page)
-
-    records: list[dict] = []
-    seen_pages = 0
-    max_pages = 50  # safety cap; a single RTO's maker list should never exceed this
-    while seen_pages < max_pages:
-        headers, rows = await _read_current_page_rows(page)
-        # The <th> row includes extra structural cells (leading blanks, a "Month Wise"
-        # group header, a trailing "TOTAL") that don't line up 1:1 with <td> cells in the
-        # body rows. Body rows are reliably [S No, Maker, <month value>..., TOTAL], so we
-        # derive column meaning from the *order* month labels appear in the header, not
-        # their header index, and apply that order starting at a fixed body-cell offset.
-        month_labels_in_order = [h for h in headers if h in MONTH_ABBR]
-
-        for cells in rows:
-            if len(cells) < 2 + len(month_labels_in_order):
-                continue
-            maker = cells[1]
-            for offset, month_label in enumerate(month_labels_in_order):
-                col_idx = 2 + offset
-                month = MONTH_ABBR[month_label]
-                count = parse_count(cells[col_idx])
-                records.append({"maker": maker, "month": month, "year": year, "count": count})
-
-        seen_pages += 1
-        has_next = await _go_to_next_page(page)
-        if not has_next:
-            break
-
-    return records
-
-
-_BROWSER_LAUNCH_ARGS = ["--disable-gpu", "--disable-dev-shm-usage", "--disable-extensions"]
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+RTO_SELECT_ID = "selectedRto"
+YAXIS_SELECT_ID = "yaxisVar"
+XAXIS_SELECT_ID = "xaxisVar"
+YEAR_SELECT_ID = "selectedYear"
+REFRESH_BUTTON_ID = "irclay"
+TABLE_ID = "groupingTable"
+PAGE_SIZE = 25
+# Safety net, not a real limit: a single RTO's pivot table has at most a few
+# hundred rows in practice. This guards against a parsing bug (row_count
+# misread from a malformed response) turning the pagination loop below into
+# an unbounded hammer against the live site.
+MAX_PAGES = 200
 
-async def _new_browser_and_page(playwright):
-    browser = await playwright.chromium.launch(headless=True, args=_BROWSER_LAUNCH_ARGS)
-    context = await browser.new_context(
-        user_agent=_USER_AGENT, viewport={"width": 1600, "height": 1000}
+
+def _extract_viewstate(text: str) -> str | None:
+    m = re.search(
+        r'(?:name="javax\.faces\.ViewState"[^>]*value="([^"]*)"'
+        r'|<update id="[^"]*javax\.faces\.ViewState[^"]*"><!\[CDATA\[([^\]]*)\]\]></update>)',
+        text,
     )
-    page = await context.new_page()
-    await page.goto(REPORT_URL, wait_until="networkidle", timeout=45000)
-    await page.wait_for_timeout(3000)
-    return browser, page
+    return (m.group(1) or m.group(2)) if m else None
 
 
-async def scrape_all_india(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS):
+def _parse_select_defaults(text: str) -> dict[str, str]:
+    """Every <select id="X_input" name="X_input"> present in `text`, mapped to
+    its currently-selected option value (or its first option, if none is
+    marked selected). Used both for the initial full-page load and to
+    re-sync after a partial response changes a field's default (e.g.
+    xaxisVar=Month Wise auto-locks selectedYearType to Calendar Year)."""
+    values: dict[str, str] = {}
+    for m in re.finditer(r'<select id="([^"]+)_input" name="\1_input"[^>]*>(.*?)</select>', text, re.S):
+        select_id, inner = m.group(1), m.group(2)
+        opt = re.search(r'<option value="([^"]*)"[^>]*selected="selected"', inner)
+        if opt is None:
+            opt = re.search(r'<option value="([^"]*)"', inner)
+        values[f"{select_id}_input"] = opt.group(1) if opt else ""
+        values[f"{select_id}_focus"] = ""
+    return values
+
+
+def _parse_options(text: str, select_id: str) -> list[tuple[str, str]]:
+    """[(value, display_text), ...] for every <option> under the given select."""
+    m = re.search(rf'<select id="{re.escape(select_id)}_input"[^>]*>(.*?)</select>', text, re.S)
+    if not m:
+        return []
+    return [
+        (value, html.unescape(text_))
+        for value, text_ in re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', m.group(1))
+    ]
+
+
+def _parse_month_columns(text: str) -> list[str]:
+    """Month abbreviations in column order, e.g. ['JAN', 'FEB', ...] — the
+    report only has columns for months with data so far in the target year,
+    so this is read from the response rather than assumed to be all 12.
+    Header labels are padded with non-breaking spaces (e.g.
+    'aria-label="\\xa0\\xa0 JAN \\xa0\\xa0"'), not plain whitespace."""
+    return [m for m in re.findall(r'aria-label="[\s\xa0]*([A-Z]{3})[\s\xa0]*"', text) if m in MONTH_ABBR]
+
+
+def _parse_table_rows(text: str, num_month_cols: int) -> list[list[str]]:
+    """Row cell text values in order: [S No, Maker, <month>..., Total]."""
+    cells = re.findall(rf'<label id="{TABLE_ID}:\d+:[^"]*"[^>]*>([^<]*)</label>', text)
+    row_len = 2 + num_month_cols + 1
+    if row_len <= 0:
+        return []
+    return [cells[i : i + row_len] for i in range(0, len(cells) - row_len + 1, row_len)]
+
+
+def _parse_row_count(text: str) -> int:
+    m = re.search(r"rowCount:(\d+)", text)
+    return int(m.group(1)) if m else 0
+
+
+class _VahanSession:
+    """One authenticated (session-cookie) conversation with the VAHAN4
+    dashboard's stateful JSF form. Not thread-safe / not for concurrent use —
+    the server-side ViewState is a single conversation thread."""
+
+    def __init__(self, client: httpx.AsyncClient):
+        self._client = client
+        self._viewstate: str | None = None
+        self._form: dict[str, str] = {}
+
+    async def load(self, retries: int = 3) -> str:
+        """Fetches the report page and extracts its ViewState. A missing
+        ViewState is retried like a transient failure rather than let through
+        silently -- every subsequent AJAX POST needs a real value there, and
+        without this check a missing one would make the whole scrape run to
+        completion while quietly persisting nothing."""
+        last_exc: Exception | None = None
+        for attempt in range(retries):
+            try:
+                resp = await self._client.get(REPORT_URL)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                if exc.response.status_code < 500 or attempt == retries - 1:
+                    raise
+                logger.warning(
+                    "Transient %s loading VAHAN4 (attempt %d/%d), retrying...",
+                    exc.response.status_code, attempt + 1, retries,
+                )
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+
+            viewstate = _extract_viewstate(resp.text)
+            if viewstate is None:
+                last_exc = RuntimeError(
+                    "javax.faces.ViewState not found on the loaded VAHAN4 page -- "
+                    "the site changed its field name/encoding, or served an "
+                    "unexpected page (maintenance/error page, bot-check, etc). "
+                    "Refusing to continue with no ViewState."
+                )
+                if attempt == retries - 1:
+                    raise last_exc
+                logger.warning("ViewState missing (attempt %d/%d), retrying...", attempt + 1, retries)
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+
+            self._viewstate = viewstate
+            self._form = _parse_select_defaults(resp.text)
+            self._form["masterLayout_formlogin"] = "masterLayout_formlogin"
+            return resp.text
+        raise last_exc  # pragma: no cover - loop always returns or raises above
+
+    async def _post(self, source: str, execute: str, render: str, *, is_click: bool = False) -> str:
+        data = dict(self._form)
+        data["javax.faces.partial.ajax"] = "true"
+        data["javax.faces.source"] = source
+        data["javax.faces.partial.execute"] = execute
+        data["javax.faces.partial.render"] = render
+        data["javax.faces.ViewState"] = self._viewstate
+        if is_click:
+            data[source] = source
+        else:
+            data["javax.faces.partial.event"] = "change"
+            data["javax.faces.behavior.event"] = "change"
+        resp = await self._client.post(
+            REPORT_URL,
+            data=data,
+            headers={
+                "Faces-Request": "partial/ajax",
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Referer": REPORT_URL,
+                "Origin": "https://vahan.parivahan.gov.in",
+                "Accept": "application/xml, text/xml, */*; q=0.01",
+            },
+        )
+        resp.raise_for_status()
+        text = resp.text
+        if "<error>" in text:
+            raise RuntimeError(f"VAHAN AJAX error (source={source}): {text[:300]}")
+        vs = _extract_viewstate(text)
+        if vs:
+            self._viewstate = vs
+        return text
+
+    async def select(self, select_id: str, value: str, execute: str, render: str) -> str:
+        self._form[f"{select_id}_input"] = value
+        return await self._post(select_id, execute, render)
+
+    def sync_defaults_from(self, response_text: str) -> None:
+        """Re-read any <select> defaults present in a partial response — some
+        selections (e.g. xaxisVar=Month Wise) server-side auto-change other
+        fields (selectedYearType gets locked to Calendar Year)."""
+        self._form.update(_parse_select_defaults(response_text))
+
+    async def click_refresh(self) -> str:
+        return await self._post(REFRESH_BUTTON_ID, "@all", "tablePnl", is_click=True)
+
+    async def fetch_table_page(self, first: int) -> str:
+        data = dict(self._form)
+        data.update(
+            {
+                "javax.faces.partial.ajax": "true",
+                "javax.faces.source": TABLE_ID,
+                "javax.faces.partial.execute": TABLE_ID,
+                "javax.faces.partial.render": TABLE_ID,
+                "javax.faces.ViewState": self._viewstate,
+                f"{TABLE_ID}_pagination": "true",
+                f"{TABLE_ID}_first": str(first),
+                f"{TABLE_ID}_rows": str(PAGE_SIZE),
+                f"{TABLE_ID}_skipChildren": "true",
+                f"{TABLE_ID}_encodeFeature": "true",
+            }
+        )
+        resp = await self._client.post(
+            REPORT_URL,
+            data=data,
+            headers={
+                "Faces-Request": "partial/ajax",
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Referer": REPORT_URL,
+                "Origin": "https://vahan.parivahan.gov.in",
+                "Accept": "application/xml, text/xml, */*; q=0.01",
+            },
+        )
+        resp.raise_for_status()
+        text = resp.text
+        vs = _extract_viewstate(text)
+        if vs:
+            self._viewstate = vs
+        return text
+
+
+_STATE_SELECT_MARKER = "All Vahan4 Running States"
+
+
+def discover_state_select_id(page_html: str) -> str | None:
+    """Find the State dropdown's current JSF id by content, not position --
+    see module docstring for why the id itself can't be trusted to stay put.
+    Returns the bare id (matching what _parse_options/select() expect), or
+    None if no select's first option matches the marker text (the page's
+    structure changed in some other way and this needs a fresh look)."""
+    for select_id, body in re.findall(r'<select id="([^"]+)_input"[^>]*>(.*?)</select>', page_html, re.S):
+        first_option = re.search(r'<option value="[^"]*"[^>]*>([^<]*)</option>', body)
+        if first_option and _STATE_SELECT_MARKER in html.unescape(first_option.group(1)):
+            return select_id
+    return None
+
+
+async def get_states(session: _VahanSession, page_html: str, state_select_id: str) -> list[dict]:
+    states = []
+    for value, text in _parse_options(page_html, state_select_id):
+        if value == "-1":
+            continue
+        parsed = parse_state_option(text)
+        if parsed:
+            states.append({"state_code": value, "state_name": parsed["state_name"]})
+    return states
+
+
+# The site can only pivot on one Y-axis dimension per visit, so getting a
+# full picture of a single RTO/month's registrations means visiting it
+# multiple times with different yaxisVar values. Each dimension's rows
+# independently sum to that RTO/month's true total (see Registration.is_supplementary
+# in app/models/models.py for how callers avoid triple-counting because of this).
+DIMENSIONS = {
+    "maker": "Maker",
+    "vehicle_class": "Vehicle Class",
+    "fuel": "Fuel",
+}
+
+
+async def _configure_pivot(session: _VahanSession, year: int, yaxis_value: str) -> None:
+    await session.select(YAXIS_SELECT_ID, yaxis_value, YAXIS_SELECT_ID, XAXIS_SELECT_ID)
+    xaxis_resp = await session.select(XAXIS_SELECT_ID, "Month Wise", XAXIS_SELECT_ID, "multipleYear")
+    # Month Wise locks selectedYearType to Calendar Year and re-defaults
+    # selectedYear to the current year server-side; pick that up before
+    # possibly overriding the year below.
+    session.sync_defaults_from(xaxis_resp)
+    if session._form.get(f"{YEAR_SELECT_ID}_input") != str(year):
+        await session.select(YEAR_SELECT_ID, str(year), YEAR_SELECT_ID, YEAR_SELECT_ID)
+
+
+async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) -> list[dict]:
+    """Assumes state + RTO are already selected. Configures the
+    <dimension> x Month pivot (dimension is one of DIMENSIONS' keys), reads
+    all pages of results, returns
+    [{'label': str, 'month': int, 'year': year, 'count': int}, ...] — 'label'
+    is the row's maker/vehicle-class/fuel-type name depending on dimension;
+    the caller (persist_rto_batch) maps it to the right column."""
+    yaxis_value = DIMENSIONS[dimension]
+    await _configure_pivot(session, year, yaxis_value)
+    table_html = await session.click_refresh()
+
+    month_cols = _parse_month_columns(table_html)
+    row_count = _parse_row_count(table_html)
+    if not month_cols or row_count == 0:
+        return []
+
+    records: list[dict] = []
+
+    def _rows_to_records(rows: list[list[str]]) -> None:
+        for row in rows:
+            if len(row) < 2 + len(month_cols) + 1:
+                continue
+            label = html.unescape(row[1]).strip()
+            for offset, month_abbr in enumerate(month_cols):
+                count = parse_count(row[2 + offset])
+                records.append({"label": label, "month": MONTH_ABBR[month_abbr], "year": year, "count": count})
+
+    _rows_to_records(_parse_table_rows(table_html, len(month_cols)))
+
+    first = PAGE_SIZE
+    pages_fetched = 0
+    while first < row_count and pages_fetched < MAX_PAGES:
+        page_html = await session.fetch_table_page(first)
+        _rows_to_records(_parse_table_rows(page_html, len(month_cols)))
+        first += PAGE_SIZE
+        pages_fetched += 1
+
+    return records
+
+
+async def scrape_all_india(
+    year: int,
+    dimension: str = "maker",
+    delay_seconds: float = REQUEST_DELAY_SECONDS,
+    skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006 - never mutated
+):
     """Async generator yielding one dict per (state, rto) combination:
-    {'state_name': str, 'rto_code': str, 'rto_name': str, 'records': [ {maker, month, year, count}, ... ]}
-    Reuses a single browser/page for the whole run, but transparently relaunches the
-    browser and resumes from the current state if the page crashes (observed to happen
-    occasionally under memory pressure) rather than hanging or aborting the whole run.
-    """
-    async with async_playwright() as playwright:
-        browser, page = await _new_browser_and_page(playwright)
+    {'state_name': str, 'rto_code': str, 'rto_name': str, 'records': [ {label, month, year, count}, ... ]}
+    `dimension` is one of DIMENSIONS' keys ('maker', 'vehicle_class', 'fuel')
+    and controls which Y-axis pivot is scraped -- see scrape_pivot_table.
 
-        states = await get_states(page)
+    After each state's RTOs are all attempted, also yields a completion
+    summary: {'state_complete': True, 'state_name': str, 'rto_total': int,
+    'rto_skipped': int, 'rto_succeeded': int}. Callers that want to know
+    whether a state's real data fully replaced its fallback (e.g. synthetic
+    seed) data need this — a state is fully done once
+    rto_skipped + rto_succeeded == rto_total, accounting for RTOs completed
+    in *previous* interrupted runs, not just this one.
+
+    `skip_rtos` maps state_name -> a set of rto_codes already scraped in a
+    previous (interrupted) run, so resuming makes forward progress within a
+    partially-done state instead of restarting it from its first RTO every
+    time — this matters a lot for large states when the process keeps getting
+    cut off before finishing even one of them.
+    """
+    async with httpx.AsyncClient(
+        headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
+    ) as client:
+        session = _VahanSession(client)
+        page_html = await session.load()
+        state_select_id = discover_state_select_id(page_html)
+        if state_select_id is None:
+            raise RuntimeError(
+                "Could not find the State dropdown on the live page -- its marker text "
+                f"({_STATE_SELECT_MARKER!r}) wasn't found in any <select>. The page's "
+                "structure changed in some way beyond an id shift; inspect a fresh fetch."
+            )
+        states = await get_states(session, page_html, state_select_id)
         logger.info("Discovered %d states", len(states))
 
         for state in states:
             state_name = state["state_name"]
+            already_done = skip_rtos.get(state_name, frozenset())
             try:
-                selected = await select_state(page, state_name)
-                if not selected:
-                    logger.warning("Could not select state %s, skipping", state_name)
-                    continue
-                await page.wait_for_timeout(1000)
-                rtos = await get_rtos_for_selected_state(page)
+                rto_resp = await session.select(
+                    state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
+                )
             except Exception as exc:
-                logger.warning("Failed listing RTOs for %s: %s", state_name, exc)
-                if "crash" in str(exc).lower():
-                    logger.warning("Page crashed while listing RTOs; relaunching browser")
-                    await browser.close()
-                    browser, page = await _new_browser_and_page(playwright)
+                logger.warning("Failed selecting state %s: %s", state_name, exc)
+                yield {
+                    "state_complete": True, "state_name": state_name,
+                    "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
+                }
                 continue
 
+            all_rtos = [
+                {**parsed, "rto_value": value}
+                for value, text in _parse_options(rto_resp, RTO_SELECT_ID)
+                if value != "-1"
+                for parsed in [parse_rto_option(text)]
+                if parsed
+            ]
+            rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
+            skipped_count = len(all_rtos) - len(rtos)
+            if skipped_count:
+                logger.info("%s: skipping %d already-scraped RTOs, %d remaining", state_name, skipped_count, len(rtos))
+
+            succeeded = 0
+            empty = 0
             for rto in rtos:
                 try:
-                    selected_rto = await select_rto(page, rto["rto_code"])
-                    if not selected_rto:
-                        logger.warning("Could not select RTO %s, skipping", rto["rto_code"])
-                        continue
-                    records = await scrape_maker_month_table(page, year)
+                    await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
+                    records = await scrape_pivot_table(session, year, dimension)
+                    if not records:
+                        # Can't tell here whether this RTO genuinely has zero
+                        # registrations for this year/dimension or the scrape
+                        # silently no-op'd (stale ViewState, unexpected page,
+                        # a selector that didn't take) -- either way it's
+                        # worth surfacing rather than passing through quietly,
+                        # since a real parsing regression looks identical to
+                        # this from inside a single RTO.
+                        empty += 1
+                        logger.warning(
+                            "%s / %s: zero records (dimension=%s, year=%d)",
+                            state_name, rto["rto_code"], dimension, year,
+                        )
                     yield {
                         "state_name": state_name,
                         "rto_code": rto["rto_code"],
                         "rto_name": rto["rto_name"],
                         "records": records,
                     }
+                    succeeded += 1
                 except Exception as exc:
-                    logger.warning(
-                        "Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc
-                    )
-                    if "crash" in str(exc).lower():
-                        logger.warning("Page crashed mid-state; relaunching browser and re-selecting state")
-                        await browser.close()
-                        browser, page = await _new_browser_and_page(playwright)
-                        if not await select_state(page, state_name):
-                            logger.warning("Could not re-select state %s after relaunch, moving on", state_name)
-                            break
-                        await page.wait_for_timeout(1000)
+                    logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
                 finally:
                     await asyncio.sleep(delay_seconds)
 
-        await browser.close()
+            if empty:
+                logger.warning(
+                    "%s: %d/%d scraped RTOs returned zero records (dimension=%s, year=%d)",
+                    state_name, empty, succeeded, dimension, year,
+                )
+
+            yield {
+                "state_complete": True,
+                "state_name": state_name,
+                "rto_total": len(all_rtos),
+                "rto_skipped": skipped_count,
+                "rto_succeeded": succeeded,
+                "rto_empty": empty,
+            }
 
 
 if __name__ == "__main__":
+
     async def _debug_run():
         logging.basicConfig(level=logging.INFO)
         count = 0
-        async for batch in scrape_all_india(year=datetime.now().year):
+        async for batch in scrape_all_india(year=datetime.now(timezone.utc).year):
             count += 1
             print(batch["state_name"], batch["rto_code"], len(batch["records"]), "records")
             if count >= 3:

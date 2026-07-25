@@ -1,41 +1,73 @@
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import checkpoint_wal
 from app.models.models import Registration, State
+from scraper.vahan_scraper import DIMENSIONS
 
 logger = logging.getLogger("scraper_service")
 
 
-async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str) -> None:
-    """Replace any existing rows for this (rto_code, year) with the freshly scraped ones."""
+async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dimension: str = "maker") -> None:
+    """Replace any existing rows for this (rto_code, year, dimension) with the
+    freshly scraped ones. `dimension` is one of 'maker' | 'vehicle_class' | 'fuel'
+    (see scraper.vahan_scraper.DIMENSIONS) and controls which column a row's
+    `label` maps to:
+
+      - 'maker': the canonical pass. vehicle_class='All' (unknown at this
+        granularity), maker=<real>, is_supplementary=False. This is the one
+        "total registrations" queries should sum -- see Registration.is_supplementary.
+      - 'vehicle_class' / 'fuel': supplementary breakdown passes over the SAME
+        underlying registrations already counted by the maker pass. maker=None,
+        is_supplementary=True, and the label goes into vehicle_class or
+        fuel_type respectively (vehicle_class defaults to 'All' for the fuel
+        pass, since it doesn't carry class info either).
+
+    The delete-before-insert is scoped by dimension too (not just rto_code/year):
+    re-scraping the vehicle_class pass must not delete fuel-pass rows for the
+    same RTO/year, and vice versa -- they coexist as separate rows.
+    """
     rto_code = batch["rto_code"]
+    is_supplementary = dimension != "maker"
     years = {r["year"] for r in batch["records"]}
     for year in years:
-        await db.execute(
-            delete(Registration).where(
-                Registration.rto_code == rto_code, Registration.year == year
-            )
+        delete_query = delete(Registration).where(
+            Registration.rto_code == rto_code,
+            Registration.year == year,
+            Registration.is_supplementary == is_supplementary,
         )
+        if dimension == "vehicle_class":
+            delete_query = delete_query.where(Registration.fuel_type.is_(None))
+        elif dimension == "fuel":
+            delete_query = delete_query.where(Registration.fuel_type.isnot(None))
+        await db.execute(delete_query)
+
     for record in batch["records"]:
-        db.add(
-            Registration(
-                state_code=state_code,
-                state_name=batch["state_name"],
-                rto_code=rto_code,
-                rto_name=batch["rto_name"],
-                month=record["month"],
-                year=record["year"],
-                vehicle_class="All",
-                maker=record["maker"],
-                count=record["count"],
-            )
+        fields = dict(
+            state_code=state_code,
+            state_name=batch["state_name"],
+            rto_code=rto_code,
+            rto_name=batch["rto_name"],
+            month=record["month"],
+            year=record["year"],
+            count=record["count"],
+            is_supplementary=is_supplementary,
         )
+        if dimension == "maker":
+            fields.update(vehicle_class="All", maker=record["label"], fuel_type=None)
+        elif dimension == "vehicle_class":
+            fields.update(vehicle_class=record["label"], maker=None, fuel_type=None)
+        elif dimension == "fuel":
+            fields.update(vehicle_class="All", maker=None, fuel_type=record["label"])
+        else:
+            raise ValueError(f"Unknown dimension: {dimension!r}")
+        db.add(Registration(**fields))
 
 
 async def _state_code_lookup(db: AsyncSession) -> dict[str, str]:
@@ -43,30 +75,81 @@ async def _state_code_lookup(db: AsyncSession) -> dict[str, str]:
     return {name: code for name, code in result.all()}
 
 
+def _run_dimension_sync(dimension: str) -> int:
+    import subprocess
+    cmd = [sys.executable, "-m", "scraper.run_full_scrape", "--dimension", dimension]
+    logger.info("Starting scraper subprocess for dimension: %s", dimension)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    while True:
+        line = proc.stdout.readline()
+        if not line and proc.poll() is not None:
+            break
+        if line:
+            logger.info("[scraper:%s] %s", dimension, line.rstrip())
+    return proc.wait()
+
+
 async def run_scraper() -> None:
-    """Launch the full-India live scrape as a separate OS process and await completion.
+    """Launch the full-India live scrape as separate OS processes and await completion.
 
     Playwright's Chromium subprocess was observed (during manual verification) to crash
     reliably within seconds when driven from an asyncio task sharing uvicorn's event
-    loop, but runs cleanly as a fully independent process. See scraper/run_full_scrape.py
-    for the actual scrape + persist logic; persist_rto_batch/_state_code_lookup above are
-    reused by that script (and covered directly by tests here, without needing a subprocess).
-    """
-    logger.info("Starting live VAHAN4 scrape (subprocess) at %s", datetime.utcnow())
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "scraper.run_full_scrape",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    if process.stdout is not None:
-        async for line in process.stdout:
-            logger.info("[scraper] %s", line.decode(errors="replace").rstrip())
-    returncode = await process.wait()
+    loop, but runs cleanly as a fully independent process. We offload execution to a
+    background thread using asyncio.to_thread with subprocess.Popen to prevent Uvicorn's
+    Windows event loop policy from causing NotImplementedError.
 
-    if returncode == 0:
-        settings.LAST_UPDATED = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-        logger.info("Live VAHAN4 scrape complete.")
-    else:
-        logger.error("Scraper subprocess exited with code %s", returncode)
+    The three dimensions are independent full-India passes with no shared
+    in-memory state (each is its own OS process, its own httpx session, its
+    own ViewState) -- there's no correctness reason to run them one after
+    another, only a historical one. Running them concurrently cuts wall time
+    roughly 3x, bounded by whichever dimension is slowest, without adding any
+    load on the target site beyond what already happens serially today (same
+    three sessions, same per-RTO throttle each -- just overlapped in time
+    instead of laid end to end). The only new risk this introduces is three
+    processes writing the same SQLite file at once, which is why
+    app.core.database now sets WAL + a busy_timeout on every connection.
+    """
+    settings.REFRESH_STATUS = "running"
+    settings.REFRESH_ERROR = None
+    settings.LAST_REFRESH_STARTED_AT = datetime.now(timezone.utc)
+    logger.info("Starting live VAHAN4 scrape at %s", settings.LAST_REFRESH_STARTED_AT)
+
+    try:
+        results = await asyncio.gather(
+            *(asyncio.to_thread(_run_dimension_sync, dimension) for dimension in DIMENSIONS),
+            return_exceptions=True,
+        )
+    except BaseException as exc:
+        # BaseException, not Exception: asyncio.CancelledError (e.g. from app
+        # shutdown while a scrape is in flight) doesn't subclass Exception, and
+        # without this REFRESH_STATUS would stay "running" forever, permanently
+        # blocking future refresh triggers.
+        settings.REFRESH_STATUS = "error"
+        settings.REFRESH_ERROR = str(exc) or exc.__class__.__name__
+        logger.error("Scraper failed: %s", exc)
+        raise
+
+    for dimension, result in zip(DIMENSIONS, results):
+        if isinstance(result, Exception):
+            settings.REFRESH_STATUS = "error"
+            settings.REFRESH_ERROR = f"Scraper subprocess for {dimension} raised: {result}"
+            logger.error("Scraper subprocess for %s raised: %s", dimension, result)
+            return
+        if result != 0:
+            settings.REFRESH_STATUS = "error"
+            settings.REFRESH_ERROR = f"Scraper subprocess for {dimension} exited with code {result}"
+            logger.error("Scraper subprocess for %s exited with code %s", dimension, result)
+            return
+
+    settings.LAST_UPDATED = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    settings.REFRESH_STATUS = "success"
+    logger.info("Live VAHAN4 scrape complete.")
+    await checkpoint_wal()
+

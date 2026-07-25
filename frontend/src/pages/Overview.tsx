@@ -6,26 +6,39 @@ import {
 } from 'recharts';
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown } from '../api/vahan';
+import { EmptyState } from '../components/EmptyState';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown, getMonthDetail, getAvailableYears } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
+import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
-import { capForDonut } from '../theme/tokens';
+import { capForDonut, distinctSeriesColors } from '../theme/tokens';
+import { useIsLiveData } from '../hooks/useIsLiveData';
+import type { MonthDetail } from '../types';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const VEHICLE_CLASSES = [
-  "Two-Wheeler",
-  "Motor Car/Jeep/Taxi",
-  "Mini Bus",
-  "Bus",
-  "Three-Wheeler",
-  "Light Motor Vehicle",
-  "Medium Bus",
-  "Medium Truck",
-  "Heavy Truck",
-  "Tractor",
-  "Construction Equipment",
-  "Other"
-];
+
+function PeriodStat({ label, count, growth }: { label: string; count: number; growth: number | null }) {
+  return (
+    <div className="bg-[var(--bg-sunken)] rounded-xl p-4">
+      <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">{label}</p>
+      <p className="number-display text-xl font-bold text-[var(--text-primary)] mb-2">{count.toLocaleString('en-IN')}</p>
+      {growth == null ? (
+        <span className="text-[11px] text-[var(--text-muted)] font-mono">YoY N/A — no prior-year data</span>
+      ) : (
+        <div
+          className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-lg font-mono"
+          style={{
+            background: growth >= 0 ? 'color-mix(in srgb, var(--success) 15%, transparent)' : 'color-mix(in srgb, var(--danger) 15%, transparent)',
+            color: growth >= 0 ? 'var(--success)' : 'var(--danger)',
+          }}
+        >
+          <span className="text-[10px]">{growth >= 0 ? '▲' : '▼'}</span>
+          {Math.abs(growth).toFixed(1)}% YoY
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CustomTooltip({ active, payload, label, chart }: TooltipProps<number, string> & { chart: ReturnType<typeof useChartTheme> }) {
   if (!active || !payload?.length) return null;
@@ -40,6 +53,7 @@ function CustomTooltip({ active, payload, label, chart }: TooltipProps<number, s
 
 export function OverviewPage() {
   const chart = useChartTheme();
+  const isLiveData = useIsLiveData();
   const {
     selectedYear,
     selectedMonth,
@@ -56,6 +70,7 @@ export function OverviewPage() {
   } = useAppStore();
 
   const { data: statesList } = useQuery({ queryKey: ['states'], queryFn: getStates });
+  const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, selectedMaker, selectedModel],
@@ -70,10 +85,9 @@ export function OverviewPage() {
   });
 
   const { data: trend, isLoading: trendLoading } = useQuery({
-    queryKey: ['trend', selectedYear, selectedMonth, selectedState, selectedCategory, selectedMaker, selectedModel],
+    queryKey: ['trend', selectedYear, selectedState, selectedCategory, selectedMaker, selectedModel],
     queryFn: () => getTrend({
       year: selectedYear,
-      month: selectedMonth,
       state: selectedState,
       vehicle_class: selectedCategory,
       maker: selectedMaker,
@@ -105,10 +119,15 @@ export function OverviewPage() {
     }),
   });
 
+  // Deliberately NOT filtered by selectedCategory: the live scraper can only
+  // pivot one dimension (maker OR vehicle_class) per RTO visit, so the
+  // canonical maker-pass rows always store vehicle_class='All' and the
+  // vehicle_class-pass rows always store maker=NULL -- maker + a specific
+  // category never coexist on the same row for any live-scraped year.
+  // Filtering this dropdown by category would always return zero brands.
   const { data: makers } = useQuery({
-    queryKey: ['makers', selectedCategory, selectedYear, selectedMonth, selectedState],
+    queryKey: ['makers', selectedYear, selectedMonth, selectedState],
     queryFn: () => getTopMakers({
-      vehicle_class: selectedCategory,
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
@@ -128,17 +147,44 @@ export function OverviewPage() {
     }),
   });
 
-  const chartData = (trend || []).map((d: { month?: number; day?: number; count: number }) => {
-    if (selectedMonth) {
-      return { name: `Day ${d.day}`, count: d.count };
-    }
-    return { name: d.month ? MONTH_NAMES[d.month - 1] : '', count: d.count };
+  // The live VAHAN4 site has no day-level granularity at all -- its finest
+  // X-axis option is "Month Wise" (confirmed against the live site's own
+  // axis-selector options). A specific-date picker was built against that
+  // assumption before this was known; it's replaced with a month + YTD
+  // detail driven by the Year/Month filters above, since a real month total
+  // (and year-to-date through it) is the finest granularity this data source
+  // can ever supply.
+  const { data: monthDetail, isLoading: monthDetailLoading, isError: monthDetailError } = useQuery<MonthDetail>({
+    queryKey: ['monthDetail', selectedYear, selectedMonth, selectedState, selectedCategory, selectedMaker, selectedModel],
+    queryFn: () => getMonthDetail({
+      year: selectedYear,
+      month: selectedMonth!,
+      state: selectedState,
+      vehicle_class: selectedCategory,
+      maker: selectedMaker,
+      vehicle_model: selectedModel,
+    }),
+    enabled: selectedMonth != null,
   });
+
+  const chartData = (trend || []).map((d: { month?: number; count: number }) => ({
+    name: d.month ? MONTH_NAMES[d.month - 1] : '',
+    count: d.count,
+  }));
 
   const pieData = capForDonut((categories || []).map((c: { vehicle_class: string; total_count: number }) => ({
     name: c.vehicle_class,
     value: c.total_count,
   })));
+  const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
+  const vehicleMixReady = useSettledLayout(categoriesLoading);
+
+  // The live scraper can only pivot one dimension (maker OR vehicle_class)
+  // per RTO visit, so a category filter and a brand filter can never both
+  // match the same row for any live-scraped year -- combining them always
+  // zeroes out every KPI. Surfaced explicitly so it reads as a known
+  // data-source limitation instead of looking like broken data.
+  const impossibleCrossFilter = !!(selectedCategory && selectedMaker);
 
   const activeFiltersCount = [
     selectedState,
@@ -178,10 +224,17 @@ export function OverviewPage() {
               Reset Filters ({activeFiltersCount})
             </button>
           )}
-          <div className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
-            <span>LIVE DATA</span>
-          </div>
+          {isLiveData ? (
+            <div className="flex items-center gap-1.5" title="Sourced from Parivahan/VAHAN4">
+              <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
+              <span>LIVE DATA</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5" title="Sample data for demonstration — not sourced from Parivahan yet">
+              <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+              <span>DEMO DATA</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -199,9 +252,7 @@ export function OverviewPage() {
         <div className="flex flex-col gap-1.5">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Year</label>
           <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={selectClass}>
-            <option value={2024}>2024</option>
-            <option value={2025}>2025</option>
-            <option value={2026}>2026</option>
+            {(availableYears || [selectedYear]).map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
         </div>
 
@@ -219,8 +270,8 @@ export function OverviewPage() {
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
           <select value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
             <option value="">All Categories</option>
-            {VEHICLE_CLASSES.map((vc) => (
-              <option key={vc} value={vc}>{vc}</option>
+            {(categories || []).map((c: { vehicle_class: string }) => (
+              <option key={c.vehicle_class} value={c.vehicle_class}>{c.vehicle_class}</option>
             ))}
           </select>
         </div>
@@ -233,6 +284,11 @@ export function OverviewPage() {
               <option key={m.maker} value={m.maker}>{m.maker}</option>
             ))}
           </select>
+          {selectedCategory && (
+            <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight">
+              not scoped to {selectedCategory} — VAHAN can't cross maker × category
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -246,6 +302,13 @@ export function OverviewPage() {
         </div>
       </div>
 
+      {impossibleCrossFilter && (
+        <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          <span className="font-semibold text-[var(--accent)]">Category + Brand together always shows 0 —</span>{' '}
+          VAHAN's scraper can only capture one of these dimensions per RTO visit, so no row ever has both a specific category and a specific brand for live-scraped years. This isn't missing data, it's a source limitation. Clear one filter to see real numbers.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <KPICard label="Total Registrations" value={kpis?.total_this_month ?? 0} change={kpis?.yoy_growth_percent} icon={<Car className="w-4 h-4" />} loading={kpisLoading} index={0} />
         <KPICard label="YoY Growth" value={kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—'} change={kpis?.yoy_growth_percent} icon={<TrendingUp className="w-4 h-4" />} loading={kpisLoading} index={1} />
@@ -257,15 +320,11 @@ export function OverviewPage() {
         <div className="xl:col-span-2 bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '200ms' }}>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
-                {selectedMonth ? `${MONTH_NAMES[selectedMonth - 1]} Registration Trend` : 'Registration Trend'}
-              </h3>
-              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-                {selectedMonth ? `Daily View — ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}` : `Monthly View — FY ${selectedYear}`}
-              </p>
+              <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Registration Trend</h3>
+              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">Monthly View — FY {selectedYear}</p>
             </div>
             <span className="text-[10px] font-mono px-2 py-1 rounded-md" style={{ color: chart.seriesColors[0], background: 'var(--bg-sunken)' }}>
-              {selectedMonth ? 'DAILY' : 'MONTHLY'}
+              MONTHLY
             </span>
           </div>
           {trendLoading ? (
@@ -283,7 +342,7 @@ export function OverviewPage() {
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v.toLocaleString('en-IN')} width={45} />
                 <Tooltip content={<CustomTooltip chart={chart} />} />
-                <Area type="monotone" dataKey="count" stroke={chart.seriesColors[0]} strokeWidth={2.5} fill="url(#gradAccent)" dot={selectedMonth ? false : { r: 3, fill: chart.seriesColors[0], strokeWidth: 0 }} activeDot={{ r: 5, fill: chart.seriesColors[0] }} />
+                <Area type="monotone" dataKey="count" stroke={chart.seriesColors[0]} strokeWidth={2.5} fill="url(#gradAccent)" dot={{ r: 3, fill: chart.seriesColors[0], strokeWidth: 0 }} activeDot={{ r: 5, fill: chart.seriesColors[0] }} />
               </AreaChart>
             </ResponsiveContainer>
           )}
@@ -294,23 +353,30 @@ export function OverviewPage() {
             <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Vehicle Mix</h3>
             <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">by category — {selectedYear}</p>
           </div>
-          {categoriesLoading ? (
+          {categoriesLoading || !vehicleMixReady ? (
             <div className="h-52 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          ) : pieData.length === 0 ? (
+            <EmptyState
+              title="No Category Data"
+              description="Run a sync for 'vehicle_class' to load category breakdowns."
+              variant="no-data"
+              className="py-8"
+            />
           ) : (
             <>
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={2} dataKey="value">
-                    {pieData.map((p: { name: string }, i: number) => <Cell key={i} fill={chart.seriesColor(p.name)} />)}
+                    {pieData.map((p: { name: string }, i: number) => <Cell key={i} fill={pieColors.get(p.name)} />)}
                   </Pie>
-                  <Tooltip formatter={(val: number) => [val.toLocaleString('en-IN'), '']} contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8 }} />
+                  <Tooltip formatter={(val: number) => [val.toLocaleString('en-IN'), '']} contentStyle={chart.tooltipContentStyle()} {...chart.tooltipTextStyle} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="mt-2 space-y-1.5 max-h-28 overflow-y-auto pr-1">
                 {pieData.map((p: { name: string; value: number }, i: number) => (
                   <div key={i} className="flex items-center justify-between text-[11px]">
                     <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: chart.seriesColor(p.name) }} />
+                      <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: pieColors.get(p.name) }} />
                       <span className="text-[var(--text-secondary)] truncate max-w-[100px]">{p.name}</span>
                     </div>
                     <span className="font-mono text-[var(--text-secondary)] font-semibold">{p.value?.toLocaleString('en-IN')}</span>
@@ -320,6 +386,39 @@ export function OverviewPage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* Always rendered (not just once a month happens to be selected) so this
+          feature is discoverable rather than silently absent. Driven by the
+          Year/Month filters above rather than its own date picker: VAHAN4 has
+          no day-level granularity at all (confirmed against the live site's
+          own axis-selector options — its finest is "Month Wise"), so a
+          real month total and year-to-date through it are the finest detail
+          this data source can ever supply. */}
+      <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '280ms' }}>
+        <div className="mb-4">
+          <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Month &amp; Year-to-Date Detail</h3>
+          <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+            Select a month above to see its total and year-to-date, each vs. the same point last year
+          </p>
+        </div>
+
+        {!selectedMonth ? (
+          <div className="h-24 flex flex-col items-center justify-center gap-1 text-[var(--text-muted)] text-xs border border-dashed border-[var(--border)] rounded-xl text-center px-4">
+            <span>Select a specific month above (not "All Months") for its detail</span>
+          </div>
+        ) : monthDetailLoading ? (
+          <div className="h-24 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+        ) : monthDetailError || !monthDetail ? (
+          <div className="h-24 flex items-center justify-center text-[var(--danger)] text-xs border border-dashed border-[var(--border)] rounded-xl">
+            Couldn't load detail for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <PeriodStat label={`${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`} count={monthDetail.month_count} growth={monthDetail.month_yoy_growth_percent} />
+            <PeriodStat label={`Year to Date (through ${MONTH_NAMES[selectedMonth - 1]})`} count={monthDetail.ytd_count} growth={monthDetail.ytd_yoy_growth_percent} />
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

@@ -7,12 +7,16 @@ import { useNavigate } from 'react-router-dom';
 import { getCategories, getTopMakers, getFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
-import { capForDonut } from '../theme/tokens';
+import { capForDonut, distinctSeriesColors } from '../theme/tokens';
+import { TruncatedYAxisTick } from '../components/ChartAxisTick';
+import { useIsLiveData } from '../hooks/useIsLiveData';
+import { useSettledLayout } from '../hooks/useSettledLayout';
 
 export function CategoriesPage() {
   const navigate = useNavigate();
   const chart = useChartTheme();
   const { selectedYear } = useAppStore();
+  const isLiveData = useIsLiveData();
 
   const { data: categories, isLoading } = useQuery({
     queryKey: ['categories', selectedYear],
@@ -23,6 +27,8 @@ export function CategoriesPage() {
     name: c.vehicle_class,
     value: c.total_count,
   })));
+  const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
+  const shareReady = useSettledLayout(isLoading);
 
   return (
     <div className="p-6 space-y-6">
@@ -33,16 +39,23 @@ export function CategoriesPage() {
             Vehicle category and powertrain breakdown — FY {selectedYear}
           </p>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-mono">
-          <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
-          LIVE DATA
-        </div>
+        {isLiveData ? (
+          <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-mono" title="Sourced from Parivahan/VAHAN4">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
+            LIVE DATA
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-mono" title="Sample data for demonstration — not sourced from Parivahan yet">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+            DEMO DATA
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-1 bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '100ms' }}>
           <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">Category Share</h3>
-          {isLoading ? (
+          {isLoading || !shareReady ? (
             <div className="h-[300px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
           ) : (
             <>
@@ -58,12 +71,12 @@ export function CategoriesPage() {
                     dataKey="value"
                   >
                     {pieData.map((p: { name: string }, i: number) => (
-                      <Cell key={i} fill={chart.seriesColor(p.name)} />
+                      <Cell key={i} fill={pieColors.get(p.name)} />
                     ))}
                   </Pie>
                   <Tooltip
                     formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
-                    contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
                   />
                 </PieChart>
               </ResponsiveContainer>
@@ -71,7 +84,7 @@ export function CategoriesPage() {
                 {pieData.map((p: { name: string; value: number }, i: number) => (
                   <div key={i} className="flex items-center justify-between text-[11px]">
                     <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: chart.seriesColor(p.name) }} />
+                      <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: pieColors.get(p.name) }} />
                       <span className="text-[var(--text-secondary)] truncate max-w-[110px]">{p.name}</span>
                     </div>
                     <span className="font-mono text-[var(--text-secondary)] font-semibold">{p.value?.toLocaleString('en-IN')}</span>
@@ -142,10 +155,10 @@ function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: str
           <BarChart data={chartData} layout="vertical">
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-            <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={110} />
+            <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={150} />
             <Tooltip
               formatter={(val: number) => [val.toLocaleString('en-IN'), 'Count']}
-              contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8, fontSize: 12 }}
+              contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
             />
             <Bar dataKey="count" radius={[0, 4, 4, 0]}>
               {chartData.map((d: { name: string }, i: number) => (

@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { getTopMakers, getModelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
+import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 
 export function MakersModelsPage() {
   const chart = useChartTheme();
@@ -53,10 +54,10 @@ export function MakersModelsPage() {
             <BarChart data={makerChartData} layout="vertical">
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-              <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={190} />
+              <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={210} />
               <Tooltip
                 formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
-                contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8, fontSize: 12 }}
+                contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
               />
               <Bar
                 dataKey="count"
@@ -98,10 +99,10 @@ export function MakersModelsPage() {
             <BarChart data={modelChartData} layout="vertical">
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-              <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={150} />
+              <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={170} />
               <Tooltip
                 formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
-                contentStyle={{ background: chart.tooltipBg, border: `1px solid ${chart.tooltipBorder}`, borderRadius: 8, fontSize: 12 }}
+                contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
               />
               <Bar dataKey="count" fill={chart.seriesColor(selectedMaker)} radius={[0, 4, 4, 0]} />
             </BarChart>

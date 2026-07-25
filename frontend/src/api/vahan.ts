@@ -49,3 +49,8 @@ export const getOemMonthly = (params: { category: string; year: number; month?: 
   api.get('/oem-sales/monthly', { params }).then(r => r.data);
 export const getOemTrend = (params: { maker: string; category: string }) =>
   api.get('/oem-sales/trend', { params }).then(r => r.data);
+
+export const getRtosForState = (stateCode: string, year: number) =>
+  api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
+export const getRtoAnalysis = (rtoCode: string, year: number) =>
+  api.get(`/rto/${rtoCode}/analysis`, { params: { year } }).then(r => r.data);

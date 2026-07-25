@@ -8,6 +8,7 @@ import { CategoriesPage } from './pages/Categories';
 import { CategoryDetailPage } from './pages/CategoryDetail';
 import { MakersModelsPage } from './pages/MakersModels';
 import { IndustrySalesPage } from './pages/IndustrySales';
+import { RtoAnalysisPage } from './pages/RtoAnalysis';
 import { useQuery } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
 import { useScrapeProgress } from './hooks/useIsLiveData';
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
             <Route path="/makers" element={<MakersModelsPage />} />
             <Route path="/industry-sales" element={<IndustrySalesPage />} />
+            <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
           </Routes>
         </main>
       </div>

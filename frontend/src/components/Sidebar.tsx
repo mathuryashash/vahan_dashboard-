@@ -1,6 +1,6 @@
 // frontend/src/components/Sidebar.tsx
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, TrendingUp, BarChart3, Car, Award, ChevronLeft, ChevronRight } from './Icons';
+import { LayoutDashboard, Map, TrendingUp, BarChart3, Car, Award, Building, ChevronLeft, ChevronRight } from './Icons';
 import clsx from 'clsx';
 import { useAppStore } from '../hooks/useAppStore';
 
@@ -11,6 +11,7 @@ const navItems = [
   { to: '/categories', icon: BarChart3, label: 'Categories & Fuel' },
   { to: '/makers', icon: Car, label: 'Makers & Models' },
   { to: '/industry-sales', icon: Award, label: 'Industry Sales' },
+  { to: '/rto-analysis', icon: Building, label: 'RTO Analysis' },
 ];
 
 function NavItem({ to, icon: Icon, label, collapsed }: { to: string; icon: React.FC<{ className?: string }>; label: string; collapsed: boolean }) {

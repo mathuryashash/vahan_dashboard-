@@ -9,6 +9,7 @@ from app.api.v1.endpoints import (
     refresh,
     geo,
     oem_sales,
+    rto,
 )
 
 api_router = APIRouter()
@@ -24,3 +25,4 @@ api_router.include_router(categories.router, prefix="/categories", tags=["Catego
 api_router.include_router(refresh.router, prefix="/refresh", tags=["Refresh"])
 api_router.include_router(geo.router, prefix="/geo", tags=["Geo Hierarchy"])
 api_router.include_router(oem_sales.router, prefix="/oem-sales", tags=["OEM Sales"])
+api_router.include_router(rto.router, prefix="/rto", tags=["RTO Analysis"])

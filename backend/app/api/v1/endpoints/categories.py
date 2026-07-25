@@ -1,47 +1,56 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
+from app.core.query_filters import apply_common_filters, latest_month_with_data
 from app.models.models import Registration
 
 router = APIRouter()
 
+_DEFAULT_YEAR = datetime.now().year
+
 
 @router.get("/")
 async def get_categories(
-    year: int = 2026,
+    year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db)
 ):
+    # vehicle_class='All' is the placeholder used by real scraped rows that
+    # don't carry class info at that pivot (the maker- and fuel-dimension
+    # passes -- see Registration.is_supplementary). Excluding it here means
+    # this breakdown only reflects rows that actually have a real class:
+    # synthetic data (always did) and the vehicle_class-dimension real pass.
     q_curr = (
         select(Registration.vehicle_class, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year)
+        .where(Registration.year == year, Registration.vehicle_class != "All")
     )
     q_prev = (
         select(Registration.vehicle_class, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year - 1)
+        .where(Registration.year == year - 1, Registration.vehicle_class != "All")
     )
 
-    # Apply filters
-    for q in [q_curr, q_prev]:
-        # Wait, since q is immutable, we must update it
-        pass
+    # When no specific month is requested, compare year-to-date rather than
+    # full calendar year vs full calendar year (see summary.py get_dashboard_kpis
+    # for the same fix and full rationale): cap both years at the latest month
+    # that actually has data for `year`, so a partially-populated current year
+    # isn't compared against a fully-populated prior year.
+    compare_month = month
+    if compare_month is None:
+        compare_month = await latest_month_with_data(db, year)
 
-    if state:
-        q_curr = q_curr.where(Registration.state_name == state)
-        q_prev = q_prev.where(Registration.state_name == state)
     if month:
         q_curr = q_curr.where(Registration.month == month)
         q_prev = q_prev.where(Registration.month == month)
-    if maker:
-        q_curr = q_curr.where(Registration.maker == maker)
-        q_prev = q_prev.where(Registration.maker == maker)
-    if vehicle_model:
-        q_curr = q_curr.where(Registration.vehicle_model == vehicle_model)
-        q_prev = q_prev.where(Registration.vehicle_model == vehicle_model)
+    elif compare_month:
+        q_curr = q_curr.where(Registration.month <= compare_month)
+        q_prev = q_prev.where(Registration.month <= compare_month)
+    q_curr = apply_common_filters(q_curr, state=state, maker=maker, vehicle_model=vehicle_model)
+    q_prev = apply_common_filters(q_prev, state=state, maker=maker, vehicle_model=vehicle_model)
 
     q_curr = q_curr.group_by(Registration.vehicle_class).order_by(desc("total"))
     q_prev = q_prev.group_by(Registration.vehicle_class)
@@ -72,7 +81,7 @@ async def get_categories(
 @router.get("/top-makers")
 async def get_top_makers(
     vehicle_class: str | None = None,
-    year: int = 2026,
+    year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
     vehicle_model: str | None = None,
@@ -83,14 +92,11 @@ async def get_top_makers(
         Registration.maker, func.sum(Registration.count).label("total")
     ).where(Registration.year == year, Registration.maker.isnot(None))
 
-    if vehicle_class:
-        query = query.where(Registration.vehicle_class == vehicle_class)
     if month:
         query = query.where(Registration.month == month)
-    if state:
-        query = query.where(Registration.state_name == state)
-    if vehicle_model:
-        query = query.where(Registration.vehicle_model == vehicle_model)
+    query = apply_common_filters(
+        query, state=state, vehicle_class=vehicle_class, vehicle_model=vehicle_model
+    )
 
     query = query.group_by(Registration.maker).order_by(desc("total")).limit(limit)
 
@@ -102,7 +108,7 @@ async def get_top_makers(
 @router.get("/fuel-breakdown")
 async def get_fuel_breakdown(
     vehicle_class: str | None = None,
-    year: int = 2026,
+    year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
     maker: str | None = None,
@@ -113,16 +119,11 @@ async def get_fuel_breakdown(
         Registration.fuel_type, func.sum(Registration.count).label("total")
     ).where(Registration.year == year, Registration.fuel_type.isnot(None))
 
-    if vehicle_class:
-        query = query.where(Registration.vehicle_class == vehicle_class)
     if month:
         query = query.where(Registration.month == month)
-    if state:
-        query = query.where(Registration.state_name == state)
-    if maker:
-        query = query.where(Registration.maker == maker)
-    if vehicle_model:
-        query = query.where(Registration.vehicle_model == vehicle_model)
+    query = apply_common_filters(
+        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    )
 
     query = query.group_by(Registration.fuel_type).order_by(desc("total"))
 
@@ -135,7 +136,7 @@ async def get_fuel_breakdown(
 async def get_model_breakdown(
     vehicle_class: str | None = None,
     maker: str | None = None,
-    year: int = 2026,
+    year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
     limit: int = 15,
@@ -149,14 +150,11 @@ async def get_model_breakdown(
         Registration.vehicle_model != ""
     )
 
-    if vehicle_class:
-        query = query.where(Registration.vehicle_class == vehicle_class)
-    if maker:
-        query = query.where(Registration.maker == maker)
     if month:
         query = query.where(Registration.month == month)
-    if state:
-        query = query.where(Registration.state_name == state)
+    query = apply_common_filters(
+        query, state=state, vehicle_class=vehicle_class, maker=maker
+    )
 
     query = query.group_by(Registration.vehicle_model).order_by(desc("total")).limit(limit)
 

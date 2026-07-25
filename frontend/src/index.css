@@ -66,6 +66,20 @@ body {
   color: var(--accent-contrast);
 }
 
+/* The open dropdown list of a native <select> is drawn by the OS/browser,
+   not by our CSS -- it only picks up our theme if the element itself has a
+   real (non-transparent) background-color and color, which some of our
+   selects were missing (falling back to the OS's white/blue default and
+   clashing with the dark theme). */
+select {
+  background-color: var(--bg-sunken);
+  color: var(--text-primary);
+}
+select option {
+  background-color: var(--bg-sunken);
+  color: var(--text-primary);
+}
+
 ::-webkit-scrollbar {
   width: 5px;
   height: 5px;

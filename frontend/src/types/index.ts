@@ -85,3 +85,26 @@ export interface OEMTrendPoint {
   count: number;
   share_percent: number | null;
 }
+
+export interface RTOListItem {
+  rto_code: string;
+  rto_name: string | null;
+  total: number;
+}
+
+export interface RTOMakerShare {
+  maker: string;
+  count: number;
+  share_percent: number;
+}
+
+export interface RTOAnalysis {
+  rto_code: string;
+  rto_name: string | null;
+  state_name: string | null;
+  year: number;
+  total: number;
+  avg_monthly: number;
+  months_with_data: number;
+  makers: RTOMakerShare[];
+}

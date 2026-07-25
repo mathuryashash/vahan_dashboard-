@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -12,6 +13,17 @@ logger = logging.getLogger("scheduler")
 
 REFRESH_INTERVAL_HOURS = 5
 FADA_CHECK_INTERVAL_HOURS = 24
+# Caps how far a failing loop's interval can back off to -- without this, a
+# multi-day site outage would otherwise mean a monotonically growing sleep
+# that never comes back down to check again in reasonable time.
+MAX_BACKOFF_HOURS = 24
+FADA_MAX_BACKOFF_HOURS = 24 * 7
+
+
+def _backoff_hours(base_hours: float, consecutive_failures: int, cap_hours: float) -> float:
+    if consecutive_failures == 0:
+        return base_hours
+    return min(base_hours * (2 ** consecutive_failures), cap_hours)
 
 
 async def run_scheduler_loop() -> None:
@@ -24,16 +36,26 @@ async def run_scheduler_loop() -> None:
     run_scraper() runs its three dimensions concurrently (~1-1.5h wall time);
     at the old sequential ~4.5h runtime this would have meant a ~9.5h cycle
     (scrape time + 5h idle), not 5h.
+
+    Consecutive failures back off exponentially (capped at MAX_BACKOFF_HOURS)
+    instead of retrying at the normal 5h cadence forever -- a multi-day site
+    outage would otherwise mean dozens of doomed attempts hammering it.
     """
+    consecutive_failures = 0
     while True:
+        started = time.monotonic()
         try:
             await run_scraper()
+            logger.info("Scheduled scrape succeeded in %.0fs (after %d prior failures)", time.monotonic() - started, consecutive_failures)
+            consecutive_failures = 0
         except Exception as exc:
-            logger.error("Scheduled scrape failed: %s", exc)
+            consecutive_failures += 1
+            logger.error("Scheduled scrape failed after %.0fs (%d consecutive): %s", time.monotonic() - started, consecutive_failures, exc)
 
-        next_run = datetime.now(timezone.utc) + timedelta(hours=REFRESH_INTERVAL_HOURS)
-        logger.info("Next scheduled scrape at %s UTC", next_run.isoformat())
-        await asyncio.sleep(REFRESH_INTERVAL_HOURS * 3600)
+        interval_hours = _backoff_hours(REFRESH_INTERVAL_HOURS, consecutive_failures, MAX_BACKOFF_HOURS)
+        next_run = datetime.now(timezone.utc) + timedelta(hours=interval_hours)
+        logger.info("Next scheduled scrape at %s UTC (interval %.1fh)", next_run.isoformat(), interval_hours)
+        await asyncio.sleep(interval_hours * 3600)
 
 
 async def run_fada_scheduler_loop() -> None:
@@ -43,7 +65,10 @@ async def run_fada_scheduler_loop() -> None:
     folded into run_scheduler_loop's 5h VAHAN cadence, since they're
     different sources with no reason to be coupled.
     """
+    consecutive_failures = 0
     while True:
+        started = time.monotonic()
+        ingested = 0
         try:
             async with httpx.AsyncClient(
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
@@ -69,10 +94,15 @@ async def run_fada_scheduler_loop() -> None:
                             if rows:
                                 await persist_oem_sales(db, rows, source="FADA", source_document=release["title"])
                                 await db.commit()
+                                ingested += 1
                                 logger.info("FADA scheduler: ingested new release %r", release["title"])
                         except Exception as exc:
                             logger.error("FADA scheduler: failed processing %r: %s", release["title"], exc)
+            logger.info("FADA scheduled check succeeded in %.0fs, ingested %d release(s)", time.monotonic() - started, ingested)
+            consecutive_failures = 0
         except Exception as exc:
-            logger.error("FADA scheduled check failed: %s", exc)
+            consecutive_failures += 1
+            logger.error("FADA scheduled check failed after %.0fs (%d consecutive): %s", time.monotonic() - started, consecutive_failures, exc)
 
-        await asyncio.sleep(FADA_CHECK_INTERVAL_HOURS * 3600)
+        interval_hours = _backoff_hours(FADA_CHECK_INTERVAL_HOURS, consecutive_failures, FADA_MAX_BACKOFF_HOURS)
+        await asyncio.sleep(interval_hours * 3600)

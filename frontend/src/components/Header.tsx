@@ -1,24 +1,51 @@
 // frontend/src/components/Header.tsx
 import { useQueryClient } from '@tanstack/react-query';
 import { triggerRefresh } from '../api/vahan';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
+import type { RefreshStatus, ScrapeProgress } from '../types';
 
 interface HeaderProps {
-  lastUpdated: string | null;
+  refreshStatus: RefreshStatus | null;
+  /** Timestamp of the last successful refreshStatus fetch (from react-query's
+   * dataUpdatedAt). Used instead of `refreshStatus` itself as the effect
+   * dependency below: react-query's structural sharing returns the *same*
+   * object reference when consecutive polls return identical data (e.g. two
+   * back-to-back "error" results), so a poll that changes nothing would never
+   * be observed by an effect keyed on the data reference or its status value. */
+  statusUpdatedAt: number;
+  scrapeProgress: ScrapeProgress | null;
 }
 
-export function Header({ lastUpdated }: HeaderProps) {
+export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress }: HeaderProps) {
   const queryClient = useQueryClient();
-  const [refreshing, setRefreshing] = useState(false);
+  const [starting, setStarting] = useState(false);
+
+  const status = refreshStatus?.status ?? 'idle';
+  const lastUpdated = refreshStatus?.last_updated ?? null;
+  const isRunning = starting || status === 'running';
+
+  useEffect(() => {
+    if (!refreshStatus || refreshStatus.status === 'running') {
+      return;
+    }
+    setStarting((wasStarting) => {
+      if (wasStarting) {
+        queryClient.invalidateQueries();
+      }
+      return false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on statusUpdatedAt, see HeaderProps.statusUpdatedAt doc
+  }, [statusUpdatedAt, queryClient]);
 
   const handleRefresh = async () => {
-    setRefreshing(true);
-    await triggerRefresh();
-    setTimeout(() => {
-      queryClient.invalidateQueries();
-      setRefreshing(false);
-    }, 2000);
+    if (isRunning) return;
+    setStarting(true);
+    try {
+      await triggerRefresh();
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['refreshStatus'] });
+    }
   };
 
   return (
@@ -38,25 +65,56 @@ export function Header({ lastUpdated }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-3">
-        {lastUpdated && (
+        {scrapeProgress && scrapeProgress.states_done < scrapeProgress.states_total && (
+          <div
+            className="flex items-center gap-2"
+            title={`${scrapeProgress.states_done}/${scrapeProgress.states_total} states replaced with live data (${scrapeProgress.rtos_done.toLocaleString('en-IN')} RTOs scraped so far)`}
+          >
+            <span className="text-[10px] text-[var(--text-muted)] font-mono uppercase tracking-widest whitespace-nowrap">
+              Live Data Migration
+            </span>
+            <div className="w-28 h-1.5 bg-[var(--bg-sunken)] rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full bg-[var(--accent)] transition-all duration-700 ease-out"
+                style={{ width: `${scrapeProgress.percent}%` }}
+              />
+            </div>
+            <span className="text-[10px] font-mono font-semibold text-[var(--text-secondary)] w-10">
+              {scrapeProgress.percent.toFixed(0)}%
+            </span>
+            <div className="w-px h-5 bg-[var(--border)]" />
+          </div>
+        )}
+
+        {isRunning ? (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] font-mono">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse-soft" />
+            <span>SYNCING — CAN TAKE UP TO AN HOUR</span>
+          </div>
+        ) : status === 'error' ? (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--danger)] font-mono" title={refreshStatus?.error ?? 'Refresh failed'}>
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--danger)]" />
+            <span>SYNC FAILED</span>
+          </div>
+        ) : lastUpdated ? (
           <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] font-mono">
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)] animate-pulse-soft" />
             <span>SYNC {lastUpdated}</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] font-mono">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--text-muted)]" />
+            <span>NEVER SYNCED</span>
           </div>
         )}
 
         <button
           onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border)] text-[var(--text-secondary)] text-xs font-semibold rounded-lg transition-all duration-200 disabled:opacity-50"
+          disabled={isRunning}
+          title="Pulls fresh data from Parivahan. A full India refresh can take over an hour."
+          className="px-3 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border)] text-[var(--text-secondary)] text-xs font-semibold rounded-lg transition-all duration-200 disabled:opacity-50"
         >
-          <svg
-            className={refreshing ? 'animate-spin' : ''}
-            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
-          >
-            <path d="M21 12a9 9 0 0 1-9 9m0 0a9 9 0 0 1-9-9m9 9v-4m0-8H5a4 4 0 0 0-4 4v4a4 4 0 0 0 4 4h4" />
-          </svg>
-          {refreshing ? 'SYNCING...' : 'REFRESH'}
+          {isRunning ? 'SYNCING...' : 'REFRESH'}
         </button>
 
         <div className="w-px h-5 bg-[var(--border)]" />
