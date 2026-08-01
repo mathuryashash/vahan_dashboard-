@@ -9,14 +9,12 @@ import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
-import { useIsLiveData } from '../hooks/useIsLiveData';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 
 export function CategoriesPage() {
   const navigate = useNavigate();
   const chart = useChartTheme();
   const { selectedYear } = useAppStore();
-  const isLiveData = useIsLiveData();
 
   const { data: categories, isLoading } = useQuery({
     queryKey: ['categories', selectedYear],
@@ -39,17 +37,6 @@ export function CategoriesPage() {
             Vehicle category and powertrain breakdown — FY {selectedYear}
           </p>
         </div>
-        {isLiveData ? (
-          <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-mono" title="Sourced from Parivahan/VAHAN4">
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
-            LIVE DATA
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-mono" title="Sample data for demonstration — not sourced from Parivahan yet">
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
-            DEMO DATA
-          </div>
-        )}
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">

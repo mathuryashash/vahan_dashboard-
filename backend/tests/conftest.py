@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.core.database import Base
@@ -5,15 +7,23 @@ import app.models.models  # noqa: F401 - ensures models are registered on Base.m
 from app.main import app
 from app.core.database import get_db
 
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://vahan:vahan@127.0.0.1:5432/vahan_test",
+)
+
 
 @pytest.fixture
 async def db_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with session_factory() as session:
         yield session
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
 
 

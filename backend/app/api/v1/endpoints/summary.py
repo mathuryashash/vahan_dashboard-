@@ -1,9 +1,9 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import select, func, desc
 from app.core.database import get_db
-from app.core.query_filters import apply_total_filters, exclude_supplementary
+from app.core.query_filters import apply_total_filters, exclude_supplementary, latest_month_with_data
 from app.models.models import Registration
 from app.schemas.schemas import DashboardKPIs
 from app.core.config import settings
@@ -94,42 +94,11 @@ async def get_dashboard_kpis(
     top_state = top_row[0] if top_row else "N/A"
     top_state_count = top_row[1] if top_row else 0
 
-    # Today's Registrations (or latest day count). Finds the true latest
-    # calendar date (month, day) with daily-granularity data and sums that
-    # exact date in one round trip via a CTE, instead of a separate query to
-    # find the date followed by a second one to sum it. Max day-of-month
-    # alone isn't enough: different months can share a day number (e.g. both
-    # May and June have a "day 30"), so this needs a specific (month, day)
-    # pair, found by ordering, not two independent maxes.
-    latest_day_cte = (
-        select(Registration.month.label("month"), Registration.day.label("day"))
-        .where(Registration.year == current_year, Registration.day.isnot(None))
-        .order_by(desc(Registration.month), desc(Registration.day))
-        .limit(1)
-    ).cte("latest_day")
-
-    q_today = (
-        select(func.sum(Registration.count))
-        .select_from(Registration)
-        .join(
-            latest_day_cte,
-            and_(Registration.month == latest_day_cte.c.month, Registration.day == latest_day_cte.c.day),
-        )
-        .where(Registration.year == current_year)
-    )
-    if month:
-        q_today = q_today.where(Registration.month == month)
-    q_today = apply_total_filters(
-        q_today, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
-    )
-    result_today = await db.execute(q_today)
-    today_scalar = result_today.scalar()
-    if today_scalar is None:
-        # No day-granularity data at all for this year (the CTE was empty) --
-        # fall back to a daily average of the period, same as before.
-        total_today = int(total_this_period / 30) if total_this_period > 0 else 0
-    else:
-        total_today = today_scalar
+    # VAHAN4 supplies month-wise, not day-wise, registrations. Avoid a large
+    # scan for a date that cannot exist and expose an honest daily average
+    # instead. The API field name stays stable for the current frontend.
+    period_months = month or await latest_month_with_data(db, current_year) or 1
+    total_today = int(total_this_period / (period_months * 30)) if total_this_period > 0 else 0
 
     last_updated = settings.LAST_UPDATED
 

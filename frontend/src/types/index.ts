@@ -53,7 +53,7 @@ export type ViewMode = 'overview' | 'comparison' | 'yoy' | 'category';
 
 export interface RefreshStatus {
   last_updated: string | null;
-  status: 'idle' | 'running' | 'success' | 'error';
+  status: 'idle' | 'running' | 'success' | 'retrying' | 'error';
   error: string | null;
 }
 

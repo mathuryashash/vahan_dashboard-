@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Vahan Dashboard API"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
-    DATABASE_URL: str = "sqlite+aiosqlite:///./data/vahan.db"
+    DATABASE_URL: str = "postgresql+asyncpg://vahan:vahan@localhost:5432/vahan"
     SCRAPER_DATA_DIR: str = "./data"
     LOG_LEVEL: str = "INFO"
     # No wildcard: "*" would let any website on the internet make credentialed

@@ -72,17 +72,14 @@ class Registration(Base):
     # synthetic rows, which were never split this way and are safe to sum.
     is_supplementary = Column(Boolean, nullable=True, default=False, index=True)
 
-    # Nearly every summary/KPI query is a SUM(count) filtered on year (+
-    # month, + is_supplementary or state_name). A plain (year, month,
-    # is_supplementary) index still means a rowid lookup into the main table
-    # per matching row just to read `count` -- with ~13M rows that's the
-    # difference between an index-only scan and hundreds of thousands of
-    # table lookups (measured ~13x on this data: 1.16s -> 0.088s). Including
-    # `count` makes these genuinely covering indexes, so SQLite can answer
-    # the whole aggregate from the index alone.
+    # These covering indexes support the dashboard's high-cardinality
+    # aggregates on both PostgreSQL and SQLite migration sources.
     __table_args__ = (
         Index("idx_reg_year_month_supp_count", "year", "month", "is_supplementary", "count"),
         Index("idx_reg_state_year_month_count", "state_name", "year", "month", "count"),
+        Index("idx_reg_year_class_month_count", "year", "vehicle_class", "month", "count"),
+        Index("idx_reg_class_state_rto", "vehicle_class", "state_name", "rto_code"),
+        Index("idx_reg_rto_year_supp_month_maker_count", "rto_code", "year", "is_supplementary", "month", "maker", "count"),
     )
 
 

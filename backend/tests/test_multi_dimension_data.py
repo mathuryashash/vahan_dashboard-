@@ -92,6 +92,20 @@ async def test_state_ranking_does_not_triple_count(client, db_session):
     assert rows[0]["total_count"] == 100
 
 
+async def test_all_states_comparison_share_uses_national_total(client, db_session):
+    db_session.add_all([
+        Registration(state_code="DL", state_name="Delhi", rto_code="DL1", month=1, year=2026, vehicle_class="All", maker="A", count=100),
+        Registration(state_code="MH", state_name="Maharashtra", rto_code="MH1", month=1, year=2026, vehicle_class="All", maker="B", count=300),
+    ])
+    await db_session.commit()
+
+    response = await client.get("/api/v1/comparison/all-states", params={"year": 2026, "limit": 1})
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["state_name"] == "Maharashtra"
+    assert row["share_percent"] == 75.0
+
+
 async def test_categories_breakdown_uses_vehicle_class_dimension(client, db_session):
     await _seed_real_rto(db_session)
 

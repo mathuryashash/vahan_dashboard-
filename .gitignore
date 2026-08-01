@@ -13,6 +13,7 @@ nul
 **/nul
 .worktrees/
 .superpowers/
+docker/docker-compose.override.yml
 .serena/
 *.log
 test_screenshots/

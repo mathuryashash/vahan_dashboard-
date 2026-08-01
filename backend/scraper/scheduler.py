@@ -27,15 +27,11 @@ def _backoff_hours(base_hours: float, consecutive_failures: int, cap_hours: floa
 
 
 async def run_scheduler_loop() -> None:
-    """Runs run_scraper() once immediately, then every REFRESH_INTERVAL_HOURS forever.
-    Intended to be launched as a background asyncio task from the FastAPI lifespan.
+    """Runs every REFRESH_INTERVAL_HOURS without scraping on server startup.
 
-    The sleep is measured from when a run *finishes*, not from a fixed clock,
-    so this loop can never overlap itself -- there's no separate lock needed
-    here. REFRESH_INTERVAL_HOURS=5 only gives a real ~5h cadence now that
-    run_scraper() runs its three dimensions concurrently (~1-1.5h wall time);
-    at the old sequential ~4.5h runtime this would have meant a ~9.5h cycle
-    (scrape time + 5h idle), not 5h.
+    A restart should make the dashboard available, not immediately trigger a
+    multi-hour third-party scrape. Operators can still use the refresh action
+    when they explicitly need fresh data.
 
     Consecutive failures back off exponentially (capped at MAX_BACKOFF_HOURS)
     instead of retrying at the normal 5h cadence forever -- a multi-day site
@@ -43,6 +39,11 @@ async def run_scheduler_loop() -> None:
     """
     consecutive_failures = 0
     while True:
+        interval_hours = _backoff_hours(REFRESH_INTERVAL_HOURS, consecutive_failures, MAX_BACKOFF_HOURS)
+        next_run = datetime.now(timezone.utc) + timedelta(hours=interval_hours)
+        logger.info("Next scheduled scrape at %s UTC (interval %.1fh)", next_run.isoformat(), interval_hours)
+        await asyncio.sleep(interval_hours * 3600)
+
         started = time.monotonic()
         try:
             await run_scraper()
@@ -51,11 +52,6 @@ async def run_scheduler_loop() -> None:
         except Exception as exc:
             consecutive_failures += 1
             logger.error("Scheduled scrape failed after %.0fs (%d consecutive): %s", time.monotonic() - started, consecutive_failures, exc)
-
-        interval_hours = _backoff_hours(REFRESH_INTERVAL_HOURS, consecutive_failures, MAX_BACKOFF_HOURS)
-        next_run = datetime.now(timezone.utc) + timedelta(hours=interval_hours)
-        logger.info("Next scheduled scrape at %s UTC (interval %.1fh)", next_run.isoformat(), interval_hours)
-        await asyncio.sleep(interval_hours * 3600)
 
 
 async def run_fada_scheduler_loop() -> None:

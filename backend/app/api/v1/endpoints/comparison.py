@@ -67,7 +67,15 @@ async def get_all_states_comparison(
         .limit(limit)
     )
     rows = result.all()
-    total = sum(r[1] for r in rows)
+    # A state's share must be calculated against the whole country, not just
+    # the top-N rows returned to the chart. The previous denominator made the
+    # top five states always add up to 100%, which is misleading.
+    total_result = await db.execute(
+        exclude_supplementary(
+            select(func.sum(Registration.count)).where(Registration.year == year)
+        )
+    )
+    total = total_result.scalar() or 0
     return [
         {
             "state_name": r[0],

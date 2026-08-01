@@ -6,8 +6,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
-
-RUN mkdir -p data
+COPY scraper/ ./scraper/
+COPY data/reference/ ./data/reference/
 
 EXPOSE 8020
 

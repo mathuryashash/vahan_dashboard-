@@ -22,6 +22,19 @@ _NAME_CORRECTIONS = {
     "LA": "Ladakh",
 }
 
+_STATES = (
+    ("AN", "Andaman & Nicobar Island"), ("AP", "Andhra Pradesh"), ("AR", "Arunachal Pradesh"),
+    ("AS", "Assam"), ("BR", "Bihar"), ("CH", "Chandigarh"), ("CG", "Chhattisgarh"),
+    ("DN", "UT of DNH and DD"), ("DL", "Delhi"), ("GA", "Goa"), ("GJ", "Gujarat"),
+    ("HP", "Himachal Pradesh"), ("HR", "Haryana"), ("JH", "Jharkhand"), ("JK", "Jammu and Kashmir"),
+    ("KA", "Karnataka"), ("KL", "Kerala"), ("LD", "Lakshadweep"), ("LA", "Ladakh"),
+    ("MH", "Maharashtra"), ("ML", "Meghalaya"), ("MN", "Manipur"), ("MP", "Madhya Pradesh"),
+    ("MZ", "Mizoram"), ("NL", "Nagaland"), ("OD", "Odisha"), ("PB", "Punjab"),
+    ("PY", "Puducherry"), ("RJ", "Rajasthan"), ("SK", "Sikkim"), ("TS", "Telangana"),
+    ("TN", "Tamil Nadu"), ("TR", "Tripura"), ("UK", "Uttarakhand"), ("UP", "Uttar Pradesh"),
+    ("WB", "West Bengal"),
+)
+
 # Real, single RTO codes: 2 letters + 1-3 digits + an optional short letter suffix for
 # vehicle-category sub-codes (e.g. "DL1L", "UP53AG", "CH01 G" -- confirmed against the
 # real RTO.csv). ~17 of the 1093 real rows are compound/malformed values instead --
@@ -39,15 +52,16 @@ async def seed_from_rows(db: AsyncSession, rto_rows: list[dict]) -> None:
 
     # 2. State corrections + zone assignment
     states = (await db.execute(select(State))).scalars().all()
+    if not states:
+        db.add_all(State(state_code=code, state_name=name) for code, name in _STATES)
+        await db.flush()
+        states = (await db.execute(select(State))).scalars().all()
     for state in states:
         if state.state_code in _NAME_CORRECTIONS:
             state.state_name = _NAME_CORRECTIONS[state.state_code]
         state.zone_code = ZONE_BY_STATE_CODE.get(state.state_code)
     await db.flush()
 
-    # If `states` is empty (a fresh DB that hasn't run the separate seed_data.py/setup
-    # seeding yet), every RTO row below gets skipped since no state code is known --
-    # only zones get seeded. States must be pre-populated before this runs.
     known_state_codes = {s.state_code for s in states}
 
     # Bulk-fetch existing keys once, up front, instead of one db.get() round-trip per

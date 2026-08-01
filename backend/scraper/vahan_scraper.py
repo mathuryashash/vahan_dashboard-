@@ -163,6 +163,22 @@ class _VahanSession:
                 )
                 await asyncio.sleep(5 * (attempt + 1))
                 continue
+            except httpx.RequestError as exc:
+                # Network/DNS/TLS failures are just as transient as a 5xx
+                # response from VAHAN. Previously these escaped immediately,
+                # so a short outage made every scraper subprocess fail even
+                # though load() advertises retry behaviour.
+                last_exc = exc
+                if attempt == retries - 1:
+                    raise
+                logger.warning(
+                    "Network error loading VAHAN4 (attempt %d/%d): %s; retrying...",
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
 
             viewstate = _extract_viewstate(resp.text)
             if viewstate is None:

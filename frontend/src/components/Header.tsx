@@ -91,10 +91,10 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress }: Heade
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse-soft" />
             <span>SYNCING — CAN TAKE UP TO AN HOUR</span>
           </div>
-        ) : status === 'error' ? (
-          <div className="flex items-center gap-1.5 text-[11px] text-[var(--danger)] font-mono" title={refreshStatus?.error ?? 'Refresh failed'}>
-            <div className="w-1.5 h-1.5 rounded-full bg-[var(--danger)]" />
-            <span>SYNC FAILED</span>
+        ) : status === 'retrying' || status === 'error' ? (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--accent)] font-mono" title={refreshStatus?.error ?? 'The next scheduled refresh will retry automatically'}>
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse-soft" />
+            <span>SYNC RETRY PENDING</span>
           </div>
         ) : lastUpdated ? (
           <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] font-mono">

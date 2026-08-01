@@ -12,7 +12,6 @@ import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
-import { useIsLiveData } from '../hooks/useIsLiveData';
 import type { MonthDetail } from '../types';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -53,7 +52,6 @@ function CustomTooltip({ active, payload, label, chart }: TooltipProps<number, s
 
 export function OverviewPage() {
   const chart = useChartTheme();
-  const isLiveData = useIsLiveData();
   const {
     selectedYear,
     selectedMonth,
@@ -224,17 +222,6 @@ export function OverviewPage() {
               Reset Filters ({activeFiltersCount})
             </button>
           )}
-          {isLiveData ? (
-            <div className="flex items-center gap-1.5" title="Sourced from Parivahan/VAHAN4">
-              <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
-              <span>LIVE DATA</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5" title="Sample data for demonstration — not sourced from Parivahan yet">
-              <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
-              <span>DEMO DATA</span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -312,7 +299,7 @@ export function OverviewPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <KPICard label="Total Registrations" value={kpis?.total_this_month ?? 0} change={kpis?.yoy_growth_percent} icon={<Car className="w-4 h-4" />} loading={kpisLoading} index={0} />
         <KPICard label="YoY Growth" value={kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—'} change={kpis?.yoy_growth_percent} icon={<TrendingUp className="w-4 h-4" />} loading={kpisLoading} index={1} />
-        <KPICard label="Latest Day Sales" value={kpis?.total_registrations_today ?? 0} icon={<Bike className="w-4 h-4" />} loading={kpisLoading} index={2} />
+        <KPICard label="Avg Daily Registrations" value={kpis?.total_registrations_today ?? 0} icon={<Bike className="w-4 h-4" />} loading={kpisLoading} index={2} />
         <KPICard label="Top State" value={kpis?.top_state ?? '—'} icon={<Award className="w-4 h-4" />} loading={kpisLoading} index={3} />
       </div>
 

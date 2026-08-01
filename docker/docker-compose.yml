@@ -1,54 +1,50 @@
-version: '3.9'
+name: vahan-dashboard
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vahan}
+      POSTGRES_USER: ${POSTGRES_USER:-vahan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vahan}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile
-    container_name: vahan-backend
     ports:
       - "8020:8020"
-    volumes:
-      - ./backend/data:/app/data
-      - ./backend/scraper_output:/app/scraper_output
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./data/vahan.db
-      - SCRAPER_DATA_DIR=./data
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vahan}:${POSTGRES_PASSWORD:-vahan}@postgres:5432/${POSTGRES_DB:-vahan}
       - TZ=Asia/Kolkata
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8020/health"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8020/health')\""]
       interval: 30s
       timeout: 10s
       retries: 3
 
   frontend:
     build:
-      context: ./frontend
+      context: ../frontend
       dockerfile: Dockerfile
-    container_name: vahan-frontend
     ports:
       - "3000:3000"
     depends_on:
-      - backend
-    environment:
-      - VITE_API_BASE_URL=http://localhost:8020
+      backend:
+        condition: service_started
     restart: unless-stopped
 
-  scraper:
-    build:
-      context: ./backend/scraper
-      dockerfile: Dockerfile
-    container_name: vahan-scraper
-    volumes:
-      - ./backend/scraper_output:/app/output
-      - ./backend/data:/app/data
-    environment:
-      - DB_PATH=/app/data/vahan.db
-      - OUTPUT_DIR=/app/output
-      - TZ=Asia/Kolkata
-    restart: on-failure
-    command: python scheduler.py
-
 volumes:
-  vahan-data:
+  postgres-data:

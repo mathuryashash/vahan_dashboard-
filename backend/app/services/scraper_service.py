@@ -7,11 +7,19 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import checkpoint_wal
 from app.models.models import Registration, State
 from scraper.vahan_scraper import DIMENSIONS
 
 logger = logging.getLogger("scraper_service")
+
+
+class ScrapeFailedError(RuntimeError):
+    """A completed scraper run that could not refresh the source data."""
+
+
+def _mark_retry_pending(message: str) -> None:
+    settings.REFRESH_STATUS = "retrying"
+    settings.REFRESH_ERROR = message
 
 
 async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dimension: str = "maker") -> None:
@@ -113,8 +121,7 @@ async def run_scraper() -> None:
     load on the target site beyond what already happens serially today (same
     three sessions, same per-RTO throttle each -- just overlapped in time
     instead of laid end to end). The only new risk this introduces is three
-    processes writing the same SQLite file at once, which is why
-    app.core.database now sets WAL + a busy_timeout on every connection.
+    processes writing to PostgreSQL through independent connection pools.
     """
     settings.REFRESH_STATUS = "running"
     settings.REFRESH_ERROR = None
@@ -126,30 +133,29 @@ async def run_scraper() -> None:
             *(asyncio.to_thread(_run_dimension_sync, dimension) for dimension in DIMENSIONS),
             return_exceptions=True,
         )
-    except BaseException as exc:
-        # BaseException, not Exception: asyncio.CancelledError (e.g. from app
-        # shutdown while a scrape is in flight) doesn't subclass Exception, and
-        # without this REFRESH_STATUS would stay "running" forever, permanently
-        # blocking future refresh triggers.
-        settings.REFRESH_STATUS = "error"
-        settings.REFRESH_ERROR = str(exc) or exc.__class__.__name__
-        logger.error("Scraper failed: %s", exc)
+    except asyncio.CancelledError:
+        # A shutdown is not a failed refresh. Leave the next server instance
+        # free to schedule its normal run.
+        settings.REFRESH_STATUS = "idle"
         raise
+    except Exception as exc:
+        message = str(exc) or exc.__class__.__name__
+        _mark_retry_pending(message)
+        logger.error("Scraper failed: %s", exc)
+        raise ScrapeFailedError(message) from exc
 
     for dimension, result in zip(DIMENSIONS, results):
-        if isinstance(result, Exception):
-            settings.REFRESH_STATUS = "error"
-            settings.REFRESH_ERROR = f"Scraper subprocess for {dimension} raised: {result}"
-            logger.error("Scraper subprocess for %s raised: %s", dimension, result)
-            return
+        if isinstance(result, BaseException):
+            message = f"Scraper subprocess for {dimension} raised: {result}"
+            _mark_retry_pending(message)
+            logger.error(message)
+            raise ScrapeFailedError(message) from result
         if result != 0:
-            settings.REFRESH_STATUS = "error"
-            settings.REFRESH_ERROR = f"Scraper subprocess for {dimension} exited with code {result}"
-            logger.error("Scraper subprocess for %s exited with code %s", dimension, result)
-            return
+            message = f"Scraper subprocess for {dimension} exited with code {result}"
+            _mark_retry_pending(message)
+            logger.error(message)
+            raise ScrapeFailedError(message)
 
     settings.LAST_UPDATED = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     settings.REFRESH_STATUS = "success"
     logger.info("Live VAHAN4 scrape complete.")
-    await checkpoint_wal()
-

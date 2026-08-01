@@ -1,8 +1,9 @@
 import time
+import pytest
 from sqlalchemy import select
 from app.models.models import Registration
 from app.core.config import settings
-from app.services.scraper_service import persist_rto_batch, run_scraper
+from app.services.scraper_service import ScrapeFailedError, persist_rto_batch, run_scraper
 
 
 async def test_persist_rto_batch_inserts_records(db_session):
@@ -150,3 +151,15 @@ async def test_run_scraper_runs_dimensions_concurrently_not_sequentially(monkeyp
     assert {c[0] for c in calls} == {"maker", "vehicle_class", "fuel"}
     # Sequential would take >= 0.6s (3 x 0.2s); concurrent finishes near 0.2s.
     assert elapsed < 0.45, f"expected concurrent dimensions to overlap, took {elapsed:.2f}s"
+
+
+async def test_run_scraper_marks_network_failure_for_retry(monkeypatch):
+    monkeypatch.setattr("app.services.scraper_service._run_dimension_sync", lambda _dimension: 1)
+    settings.REFRESH_STATUS = "idle"
+    settings.REFRESH_ERROR = None
+
+    with pytest.raises(ScrapeFailedError):
+        await run_scraper()
+
+    assert settings.REFRESH_STATUS == "retrying"
+    assert settings.REFRESH_ERROR == "Scraper subprocess for maker exited with code 1"
