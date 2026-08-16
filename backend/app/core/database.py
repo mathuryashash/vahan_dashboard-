@@ -39,8 +39,10 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    from app.core.migrations import ensure_columns
+    from app.core.migrations import ensure_analyzed, ensure_columns, ensure_indexes
     await ensure_columns(engine, {
         "states": {"zone_code": "VARCHAR(10)"},
         "registrations": {"is_supplementary": "BOOLEAN DEFAULT FALSE"},
     })
+    await ensure_indexes(engine, Base.metadata)
+    await ensure_analyzed(engine, list(Base.metadata.tables))

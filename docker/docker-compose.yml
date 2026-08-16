@@ -9,6 +9,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vahan}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Official Postgres image auto-runs every .sql/.sql.gz/.sh file here, in
+      # name order, but ONLY the very first time it starts against an empty
+      # data directory -- exactly a fresh client's first `docker compose up`.
+      # Without this, they'd get an empty dashboard until the scheduler's
+      # first scrape (hours later) populates just the current year. See
+      # backend/app/scripts/export_seed_data.py for how seed.sql.gz is made.
+      - ./seed:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
