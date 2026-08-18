@@ -53,7 +53,9 @@ async def test_export_seed_round_trips_through_psql(db_session, monkeypatch, tmp
         contents = f.read()
     assert "CREATE TABLE registrations" in contents
     assert "COPY registrations FROM stdin;" in contents
-    assert "ANALYZE;" in contents
+    # Per-table, not a blanket ANALYZE; -- a blanket one also hits every
+    # system catalog, which a non-superuser role can't analyze.
+    assert "ANALYZE registrations;" in contents
 
     # Load it into a fresh, empty schema in the same database -- the "vahan"
     # role here has no CREATEDB privilege (matches the deployed client's

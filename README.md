@@ -22,6 +22,34 @@ Open:
 To stop: `docker compose down` (add `-v` to also delete the database volume
 and start fresh next time — you'll lose any data scraped since first run).
 
+## Run it without Docker
+
+No Docker Desktop available? `setup-native.sh` does the same job directly on
+your machine: creates the Postgres role/database, loads the same seed data,
+installs backend/frontend dependencies into a Python venv and `node_modules`,
+and starts both servers.
+
+**Prerequisites:** Python 3.12+, Node 18+, and PostgreSQL already installed
+and running.
+
+```bash
+./setup-native.sh
+```
+
+Uses `postgres`/`postgres` as the Postgres superuser by default (creates the
+app's own `vahan`/`vahan` role and database under it); override with
+`PGSUPERUSER`/`PGSUPERPASSWORD` env vars if your install uses different
+superuser credentials, e.g.:
+
+```bash
+PGSUPERUSER=postgres PGSUPERPASSWORD=mysecret ./setup-native.sh
+```
+
+Re-running is safe — it skips steps that are already done (existing
+role/database, already-loaded data, existing venv). Stop both servers with
+`./stop-native.sh`. Same URLs as the Docker path: dashboard on
+`localhost:3000`, API on `localhost:8020`.
+
 ## What you get out of the box
 
 The dashboard comes pre-loaded with real VAHAN registration data (not demo

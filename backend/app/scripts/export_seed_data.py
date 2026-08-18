@@ -96,7 +96,14 @@ async def export_seed(output_path: Path, min_year: int) -> None:
                     copied = await _copy_table(asyncpg_conn, out, table_name, filter_year)
                     print(f"{table_name}: {copied:,} rows", flush=True)
                 out.write(_indexes_sql().encode())
-                out.write(b"\n\nANALYZE;\n")
+                out.write(b"\n\n")
+                # Per-table, not a blanket ANALYZE; -- that would also hit
+                # every system catalog, which a non-superuser role (the
+                # normal case for a client's own Postgres install) can't
+                # analyze, spamming harmless-but-alarming permission-denied
+                # warnings on every fresh load.
+                for table_name in TABLE_ORDER:
+                    out.write(f"ANALYZE {table_name};\n".encode())
         size_mb = output_path.stat().st_size / (1024 * 1024)
         print(f"Wrote {output_path} ({size_mb:.1f} MB)")
     finally:
