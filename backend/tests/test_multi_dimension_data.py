@@ -123,7 +123,9 @@ async def test_fuel_breakdown_uses_fuel_dimension(client, db_session):
     response = await client.get("/api/v1/categories/fuel-breakdown", params={"year": 2026, "month": 1})
     assert response.status_code == 200
     rows = {r["fuel_type"]: r["count"] for r in response.json()}
-    assert rows == {"PETROL": 90, "ELECTRIC": 10}
+    # Raw VAHAN fuel_type values grouped into the handful of categories
+    # people actually compare -- see query_filters.fuel_category.
+    assert rows == {"Petrol": 90, "EV": 10}
 
 
 async def test_top_makers_unaffected_by_supplementary_rows(client, db_session):

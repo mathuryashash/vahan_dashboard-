@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
-from app.core.query_filters import apply_common_filters, latest_month_with_data
+from app.core.query_filters import apply_common_filters, fuel_category, latest_month_with_data
 from app.models.models import Registration
 
 router = APIRouter()
@@ -125,11 +125,24 @@ async def get_fuel_breakdown(
         query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
     )
 
-    query = query.group_by(Registration.fuel_type).order_by(desc("total"))
+    query = query.group_by(Registration.fuel_type)
 
+    # Grouped in Python, not SQL: VAHAN's raw fuel_type is a specific
+    # powertrain/fuel-system string (e.g. "PETROL/HYBRID/CNG"), not the
+    # handful of categories people actually want to compare -- see
+    # fuel_category's docstring. Re-aggregating ~37 already-summed rows in
+    # Python is negligible cost next to the query itself, and keeps the
+    # bucket rules in one plain-Python place instead of a SQL CASE
+    # expression that has to be kept in sync with it by hand.
     result = await db.execute(query)
-    rows = result.all()
-    return [{"fuel_type": r[0], "count": r[1]} for r in rows]
+    totals: dict[str, int] = {}
+    for raw_fuel_type, total in result.all():
+        bucket = fuel_category(raw_fuel_type)
+        totals[bucket] = totals.get(bucket, 0) + total
+    return [
+        {"fuel_type": bucket, "count": total}
+        for bucket, total in sorted(totals.items(), key=lambda item: item[1], reverse=True)
+    ]
 
 
 @router.get("/model-breakdown")

@@ -69,6 +69,36 @@ def apply_total_filters(
     )
 
 
+# VAHAN's raw fuel_type values (37 distinct strings observed in scraped
+# data, e.g. "PETROL/HYBRID/CNG", "STRONG HYBRID EV", "DUAL DIESEL/CNG")
+# describe exact powertrain/fuel-system combinations, not the handful of
+# categories people actually compare (EV/Petrol/Diesel/Hybrid/CNG) -- shown
+# raw, a fuel breakdown chart is ~37 slivers instead of a few meaningful
+# bars. First matching substring wins, checked in this order so a
+# multi-fuel value (e.g. "PETROL/HYBRID/CNG") lands in the bucket that
+# actually describes what makes it different from a plain single-fuel
+# vehicle, not just the first fuel word in its name. LPG isn't one of the
+# five requested buckets, so LPG-inclusive values fall to "Other" rather
+# than being folded into "Petrol". Anything not matched here (ethanol,
+# methanol, solar, hydrogen-ICE, "NOT APPLICABLE", ...) is "Other" too.
+_FUEL_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Hybrid", ("HYBRID",)),
+    ("CNG", ("CNG",)),
+    ("Other", ("LPG",)),
+    ("EV", ("ELECTRIC", "PURE EV", "FUEL CELL")),
+    ("Diesel", ("DIESEL",)),
+    ("Petrol", ("PETROL",)),
+)
+
+
+def fuel_category(raw_fuel_type: str) -> str:
+    upper = raw_fuel_type.upper()
+    for bucket, substrings in _FUEL_CATEGORY_RULES:
+        if any(s in upper for s in substrings):
+            return bucket
+    return "Other"
+
+
 async def latest_month_with_data(db: AsyncSession, year: int) -> int | None:
     """Highest month with any registration row for `year`, or None if the
     year has no data yet. Used to cap a year-to-date comparison at the same
