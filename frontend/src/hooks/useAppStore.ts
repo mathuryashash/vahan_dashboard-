@@ -5,6 +5,7 @@ interface AppState {
   selectedMonth: number | null;
   selectedState: string | null;
   selectedCategory: string | null;
+  fuelGroup: string | null;
   selectedMaker: string | null;
   selectedModel: string | null;
   comparisonYearA: number;
@@ -14,6 +15,7 @@ interface AppState {
   setSelectedMonth: (month: number | null) => void;
   setSelectedState: (state: string | null) => void;
   setSelectedCategory: (cat: string | null) => void;
+  setFuelGroup: (group: string | null) => void;
   setSelectedMaker: (maker: string | null) => void;
   setSelectedModel: (model: string | null) => void;
   setComparisonYears: (a: number, b: number) => void;
@@ -25,6 +27,7 @@ export const useAppStore = create<AppState>((set) => ({
   selectedMonth: null,
   selectedState: null,
   selectedCategory: null,
+  fuelGroup: null,
   selectedMaker: null,
   selectedModel: null,
   comparisonYearA: new Date().getFullYear() - 1,
@@ -34,6 +37,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSelectedMonth: (month) => set({ selectedMonth: month }),
   setSelectedState: (state) => set({ selectedState: state }),
   setSelectedCategory: (cat) => set({ selectedCategory: cat }),
+  setFuelGroup: (group) => set({ fuelGroup: group }),
   setSelectedMaker: (maker) => set({ selectedMaker: maker, selectedModel: null }),
   setSelectedModel: (model) => set({ selectedModel: model }),
   setComparisonYears: (a, b) => set({ comparisonYearA: a, comparisonYearB: b }),

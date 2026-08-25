@@ -57,12 +57,14 @@ export function OverviewPage() {
     selectedMonth,
     selectedState,
     selectedCategory,
+    fuelGroup,
     selectedMaker,
     selectedModel,
     setSelectedYear,
     setSelectedMonth,
     setSelectedState,
     setSelectedCategory,
+    setFuelGroup,
     setSelectedMaker,
     setSelectedModel,
   } = useAppStore();
@@ -71,35 +73,38 @@ export function OverviewPage() {
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
-    queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, selectedMaker, selectedModel],
+    queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
     queryFn: () => getKPIs({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
-      vehicle_class: selectedCategory,
+      vehicle_category: selectedCategory,
+      fuel_group: fuelGroup,
       maker: selectedMaker,
       vehicle_model: selectedModel
     }),
   });
 
   const { data: trend, isLoading: trendLoading } = useQuery({
-    queryKey: ['trend', selectedYear, selectedState, selectedCategory, selectedMaker, selectedModel],
+    queryKey: ['trend', selectedYear, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
     queryFn: () => getTrend({
       year: selectedYear,
       state: selectedState,
-      vehicle_class: selectedCategory,
+      vehicle_category: selectedCategory,
+      fuel_group: fuelGroup,
       maker: selectedMaker,
       vehicle_model: selectedModel
     }),
   });
 
   const { data: ranking, isLoading: rankingLoading } = useQuery({
-    queryKey: ['stateRanking', selectedYear, selectedMonth, selectedState, selectedCategory, selectedMaker, selectedModel],
+    queryKey: ['stateRanking', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
     queryFn: () => getStateRanking({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
-      vehicle_class: selectedCategory,
+      vehicle_category: selectedCategory,
+      fuel_group: fuelGroup,
       maker: selectedMaker,
       vehicle_model: selectedModel,
       limit: 10
@@ -136,7 +141,7 @@ export function OverviewPage() {
   const { data: models, isLoading: modelsLoading } = useQuery({
     queryKey: ['models', selectedCategory, selectedMaker, selectedYear, selectedMonth, selectedState],
     queryFn: () => getModelBreakdown({
-      vehicle_class: selectedCategory,
+      vehicle_category: selectedCategory,
       maker: selectedMaker,
       year: selectedYear,
       month: selectedMonth,
@@ -153,12 +158,13 @@ export function OverviewPage() {
   // (and year-to-date through it) is the finest granularity this data source
   // can ever supply.
   const { data: monthDetail, isLoading: monthDetailLoading, isError: monthDetailError } = useQuery<MonthDetail>({
-    queryKey: ['monthDetail', selectedYear, selectedMonth, selectedState, selectedCategory, selectedMaker, selectedModel],
+    queryKey: ['monthDetail', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
     queryFn: () => getMonthDetail({
       year: selectedYear,
       month: selectedMonth!,
       state: selectedState,
-      vehicle_class: selectedCategory,
+      vehicle_category: selectedCategory,
+      fuel_group: fuelGroup,
       maker: selectedMaker,
       vehicle_model: selectedModel,
     }),
@@ -170,8 +176,8 @@ export function OverviewPage() {
     count: d.count,
   }));
 
-  const pieData = capForDonut((categories || []).map((c: { vehicle_class: string; total_count: number }) => ({
-    name: c.vehicle_class,
+  const pieData = capForDonut((categories || []).map((c: { vehicle_category: string; total_count: number }) => ({
+    name: c.vehicle_category,
     value: c.total_count,
   })));
   const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
@@ -188,6 +194,7 @@ export function OverviewPage() {
     selectedState,
     selectedMonth,
     selectedCategory,
+    fuelGroup,
     selectedMaker,
     selectedModel
   ].filter(Boolean).length;
@@ -196,6 +203,7 @@ export function OverviewPage() {
     setSelectedState(null);
     setSelectedMonth(null);
     setSelectedCategory(null);
+    setFuelGroup(null);
     setSelectedMaker(null);
     setSelectedModel(null);
   };
@@ -225,7 +233,7 @@ export function OverviewPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance">
         <div className="flex flex-col gap-1.5">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
           <select value={selectedState || ''} onChange={(e) => setSelectedState(e.target.value || null)} className={selectClass}>
@@ -257,10 +265,29 @@ export function OverviewPage() {
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
           <select value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
             <option value="">All Categories</option>
-            {(categories || []).map((c: { vehicle_class: string }) => (
-              <option key={c.vehicle_class} value={c.vehicle_class}>{c.vehicle_class}</option>
+            {(categories || []).map((c: { vehicle_category: string }) => (
+              <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
             ))}
           </select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</label>
+          <div className="flex rounded-xl border border-[var(--border)] overflow-hidden h-[34px]">
+            {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
+              <button
+                key={group}
+                onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
+                className={`flex-1 text-xs font-semibold transition-colors ${
+                  fuelGroup === group
+                    ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+                }`}
+              >
+                {group}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="flex flex-col gap-1.5">

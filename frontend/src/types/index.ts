@@ -19,7 +19,7 @@ export interface StateRanking {
 }
 
 export interface CategoryItem {
-  vehicle_class: string;
+  vehicle_category: string;
   total_count: number;
   share_percent: number;
   prev_count: number;

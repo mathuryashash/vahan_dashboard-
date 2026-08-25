@@ -29,17 +29,17 @@ export function CategoryDetailPage() {
     queryFn: () => getCategories({ year: selectedYear }),
   });
 
-  const currentCat = (cats || []).find((c: { vehicle_class: string }) => c.vehicle_class === decoded);
+  const currentCat = (cats || []).find((c: { vehicle_category: string }) => c.vehicle_category === decoded);
 
   const { data: makers, isLoading: makersLoading } = useQuery({
     queryKey: ['makers', decoded, selectedYear],
-    queryFn: () => getTopMakers({ vehicle_class: decoded, year: selectedYear }),
+    queryFn: () => getTopMakers({ vehicle_category: decoded, year: selectedYear }),
     enabled: !!decoded,
   });
 
   const { data: fuel, isLoading: fuelLoading } = useQuery({
     queryKey: ['fuel', decoded, selectedYear],
-    queryFn: () => getFuelBreakdown({ vehicle_class: decoded, year: selectedYear }),
+    queryFn: () => getFuelBreakdown({ vehicle_category: decoded, year: selectedYear }),
     enabled: !!decoded,
   });
 

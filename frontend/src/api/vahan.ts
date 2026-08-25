@@ -10,6 +10,9 @@ export interface FilterParams {
   month?: number | null;
   state?: string | null;
   vehicle_class?: string | null;
+  vehicle_category?: string | null;
+  commercial_tier?: string | null;
+  fuel_group?: string | null;
   maker?: string | null;
   vehicle_model?: string | null;
 }

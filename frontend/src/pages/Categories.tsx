@@ -1,4 +1,5 @@
 // frontend/src/pages/Categories.tsx
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   PieChart, Pie, Cell, BarChart, Bar, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip
@@ -21,8 +22,8 @@ export function CategoriesPage() {
     queryFn: () => getCategories({ year: selectedYear }),
   });
 
-  const pieData = capForDonut((categories || []).map((c: { vehicle_class: string; total_count: number }) => ({
-    name: c.vehicle_class,
+  const pieData = capForDonut((categories || []).map((c: { vehicle_category: string; total_count: number }) => ({
+    name: c.vehicle_category,
     value: c.total_count,
   })));
   const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
@@ -88,17 +89,17 @@ export function CategoriesPage() {
             <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">Click any category to explore makers & fuel</p>
           </div>
           <div className="space-y-3">
-            {(categories || []).map((c: { vehicle_class: string; total_count: number; share_percent: number; yoy_growth: number }, i: number) => (
+            {(categories || []).map((c: { vehicle_category: string; total_count: number; share_percent: number; yoy_growth: number }, i: number) => (
               <div
                 key={i}
-                onClick={() => navigate(`/categories/${encodeURIComponent(c.vehicle_class)}`)}
+                onClick={() => navigate(`/categories/${encodeURIComponent(c.vehicle_category)}`)}
                 className="flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-all duration-200 border border-transparent hover:border-[var(--border-strong)] hover:bg-[var(--bg-card-hover)] group"
               >
-                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: chart.seriesColor(c.vehicle_class) }} />
+                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: chart.seriesColor(c.vehicle_category) }} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] transition-colors truncate">{c.vehicle_class}</div>
+                  <div className="text-sm font-semibold text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] transition-colors truncate">{c.vehicle_category}</div>
                   <div className="w-full bg-[var(--bg-sunken)] rounded-full h-1.5 mt-1.5">
-                    <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${c.share_percent}%`, backgroundColor: chart.seriesColor(c.vehicle_class) }} />
+                    <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${c.share_percent}%`, backgroundColor: chart.seriesColor(c.vehicle_category) }} />
                   </div>
                 </div>
                 <div className="text-right shrink-0">
@@ -118,8 +119,64 @@ export function CategoriesPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <CategoryChart title="Top Makers — All Categories" queryKey="makers" fn={() => getTopMakers({ year: selectedYear })} year={selectedYear} chart={chart} index={0} />
-        <CategoryChart title="Fuel Type Breakdown — All Categories" queryKey="fuel" fn={() => getFuelBreakdown({ year: selectedYear })} year={selectedYear} chart={chart} index={1} />
+        <FuelBreakdownChart title="Fuel Type Breakdown — All Categories" year={selectedYear} chart={chart} index={1} />
       </div>
+    </div>
+  );
+}
+
+function FuelBreakdownChart({ title, year, chart, index }: { title: string; year: number; chart: ReturnType<typeof useChartTheme>; index: number }) {
+  const [fuelGroup, setFuelGroup] = useState<string | null>(null);
+  const { data, isLoading } = useQuery({
+    queryKey: ['fuel', year, fuelGroup],
+    queryFn: () => getFuelBreakdown({ year, fuel_group: fuelGroup }),
+  });
+
+  const chartData = ((data as { fuel_type?: string; count: number }[]) || []).map((d) => ({
+    name: d.fuel_type || '',
+    count: d.count,
+  }));
+
+  return (
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: `${250 + index * 80}ms` }}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{title}</h3>
+        <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
+          {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
+            <button
+              key={group}
+              onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
+              className={`px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+                fuelGroup === group
+                  ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                  : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+              }`}
+            >
+              {group}
+            </button>
+          ))}
+        </div>
+      </div>
+      {isLoading ? (
+        <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+      ) : (
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={chartData} layout="vertical">
+            <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+            <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={150} />
+            <Tooltip
+              formatter={(val: number) => [val.toLocaleString('en-IN'), 'Count']}
+              contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
+            />
+            <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+              {chartData.map((d: { name: string }, i: number) => (
+                <Cell key={i} fill={chart.seriesColor(d.name)} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }

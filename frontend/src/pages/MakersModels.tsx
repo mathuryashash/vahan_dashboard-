@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { getTopMakers, getModelBreakdown } from '../api/vahan';
+import { getTopMakers, getModelBreakdown, getCategories } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -11,6 +11,12 @@ export function MakersModelsPage() {
   const chart = useChartTheme();
   const { selectedYear } = useAppStore();
   const [selectedMaker, setSelectedMaker] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+
+  const { data: categories } = useQuery({
+    queryKey: ['categories', selectedYear],
+    queryFn: () => getCategories({ year: selectedYear }),
+  });
 
   const { data: makers, isLoading: makersLoading } = useQuery({
     queryKey: ['makers-full', selectedYear],
@@ -34,6 +40,25 @@ export function MakersModelsPage() {
           Manufacturer and model leaderboard — FY {selectedYear}
         </p>
       </div>
+
+      <div className="flex items-center gap-3 animate-entrance" style={{ animationDelay: '40ms' }}>
+        <select
+          value={selectedCategory || ''}
+          onChange={(e) => setSelectedCategory(e.target.value || null)}
+          className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl"
+        >
+          <option value="">All Categories</option>
+          {(categories || []).map((c: { vehicle_category: string }) => (
+            <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+          ))}
+        </select>
+      </div>
+      {selectedCategory && (
+        <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          <span className="font-semibold text-[var(--accent)]">Category + Maker together always shows 0 —</span>{' '}
+          VAHAN's live scraper can only pivot one dimension (maker OR category) per visit, so this leaderboard can't be scoped to a category. Showing all-category maker totals instead.
+        </div>
+      )}
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '80ms' }}>
         <div className="flex items-center justify-between mb-4">
