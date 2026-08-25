@@ -51,13 +51,7 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress }: Heade
   return (
     <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-surface)] flex items-center justify-between px-6 shrink-0">
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-[var(--accent)] flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-contrast)" strokeWidth="2.5" strokeLinecap="round">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="2" y1="12" x2="22" y2="12" />
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-          </svg>
-        </div>
+        <img src="/company-logo.png" alt="Logo" className="w-8 h-8 rounded-lg object-cover" />
         <div>
           <h1 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">VAHAN SEWA</h1>
           <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">Vehicle Analytics Observatory</p>
@@ -111,7 +105,7 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress }: Heade
         <button
           onClick={handleRefresh}
           disabled={isRunning}
-          title="Pulls fresh data from Parivahan. A full India refresh can take over an hour."
+          title="Pulls fresh data from the live source. A full India refresh can take over an hour."
           className="px-3 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border)] text-[var(--text-secondary)] text-xs font-semibold rounded-lg transition-all duration-200 disabled:opacity-50"
         >
           {isRunning ? 'SYNCING...' : 'REFRESH'}

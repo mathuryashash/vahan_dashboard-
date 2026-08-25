@@ -48,12 +48,11 @@ export function Sidebar() {
       <div className="px-4 py-5 border-b border-[var(--border)]">
         {!sidebarCollapsed && (
           <div className="animate-entrance">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-[var(--text-muted)] font-mono mb-0.5">Ministry of Road Transport</p>
             <p className="text-sm font-bold text-[var(--text-primary)] tracking-tight">VAHAN SEWA</p>
           </div>
         )}
         {sidebarCollapsed && (
-          <div className="w-6 h-6 rounded-md bg-[var(--accent)] mx-auto" />
+          <img src="/company-logo.png" alt="Logo" className="w-8 h-8 rounded-lg object-cover mx-auto" />
         )}
       </div>
 
