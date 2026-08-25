@@ -375,16 +375,20 @@ async def _configure_pivot(session: _VahanSession, year: int, yaxis_value: str, 
         await session.select(YEAR_SELECT_ID, str(year), YEAR_SELECT_ID, YEAR_SELECT_ID)
 
 
-async def scrape_maker_category_table(session: _VahanSession, year: int) -> list[dict]:
-    """Assumes state + RTO are already selected. Configures the Maker x
-    Vehicle Class pivot (X-axis=Vehicle Class instead of Month Wise -- the
-    only way to get maker and category on the same row, discovered live
-    against VAHAN this session; see docs/superpowers/specs/
-    2026-08-25-maker-category-crosstab-design.md). No month breakdown exists
-    in this response at all -- returns
-    [{'maker': str, 'vehicle_class': str, 'count': int}, ...] for the whole
-    year in one shot."""
-    await _configure_pivot(session, year, DIMENSIONS["maker"], xaxis_value="Vehicle Class")
+async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int, yaxis_value: str, label_key: str) -> list[dict]:
+    """Assumes state + RTO are already selected. Configures <yaxis_value> x
+    Vehicle Class (X-axis=Vehicle Class instead of Month Wise -- the only
+    way to get a second real dimension alongside vehicle class, discovered
+    live against VAHAN this session; see docs/superpowers/specs/
+    2026-08-25-maker-category-crosstab-design.md). Works identically for
+    yaxis_value='Maker' or 'Fuel' -- VAHAN's table layout is the same
+    regardless of which Y-axis dimension is selected, only the row label's
+    meaning differs (a maker name vs. a raw fuel_type string), which is why
+    this takes `label_key` rather than hardcoding "maker" in the record
+    dict. No month breakdown exists in this response at all -- returns
+    [{label_key: str, 'vehicle_class': str, 'count': int}, ...] for the
+    whole year in one shot."""
+    await _configure_pivot(session, year, yaxis_value, xaxis_value="Vehicle Class")
     table_html = await session.click_refresh()
 
     class_cols = _parse_vehicle_class_columns(table_html)
@@ -398,11 +402,11 @@ async def scrape_maker_category_table(session: _VahanSession, year: int) -> list
         for row in rows:
             if len(row) < 2 + 1 + len(class_cols):
                 continue
-            maker = html.unescape(row[1]).strip()
+            label = html.unescape(row[1]).strip()
             for offset, vehicle_class in enumerate(class_cols):
                 count = parse_count(row[3 + offset])
                 if count:
-                    records.append({"maker": maker, "vehicle_class": vehicle_class, "count": count})
+                    records.append({label_key: label, "vehicle_class": vehicle_class, "count": count})
 
     _rows_to_records(_parse_maker_category_table_rows(table_html, len(class_cols)))
 
@@ -415,6 +419,18 @@ async def scrape_maker_category_table(session: _VahanSession, year: int) -> list
         pages_fetched += 1
 
     return records
+
+
+async def scrape_maker_category_table(session: _VahanSession, year: int) -> list[dict]:
+    """Maker x Vehicle Class -- see scrape_yaxis_by_vehicle_class_table."""
+    return await scrape_yaxis_by_vehicle_class_table(session, year, DIMENSIONS["maker"], "maker")
+
+
+async def scrape_fuel_category_table(session: _VahanSession, year: int) -> list[dict]:
+    """Fuel x Vehicle Class -- see scrape_yaxis_by_vehicle_class_table.
+    'label' is a raw fuel_type string (e.g. 'CNG ONLY'), not yet grouped
+    into ICE/Hybrid/EV -- that happens at persist time via fuel_group()."""
+    return await scrape_yaxis_by_vehicle_class_table(session, year, DIMENSIONS["fuel"], "fuel_type")
 
 
 async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) -> list[dict]:
@@ -624,18 +640,22 @@ async def scrape_all_india(
                 yield item
 
 
-async def scrape_all_india_maker_category(
+async def scrape_all_india_crosstab(
     year: int,
+    table_scraper,
+    dimension_label: str,
     delay_seconds: float = REQUEST_DELAY_SECONDS,
     skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006 - never mutated
 ):
-    """Async generator for the Maker x Vehicle Class pivot -- same shape of
+    """Async generator for a <Y-axis> x Vehicle Class pivot -- same shape of
     yields as scrape_all_india (RTO batches + state-complete summaries), but
-    serial-only (no concurrent_states) and no `dimension` param, since this
-    is one pivot, not a choice of three. Kept deliberately simpler than
-    scrape_all_india: this is a new, not-yet-backfilled capability (see the
-    design spec's "out of scope" section), not a proven-at-scale path that
-    needs the same throughput levers yet.
+    serial-only (no concurrent_states) and parameterized by which table
+    scraper to call (scrape_maker_category_table or scrape_fuel_category_table)
+    rather than a `dimension` choice of three, since each of these is one
+    pivot, not a family. Kept deliberately simpler than scrape_all_india:
+    these are new, not-yet-backfilled capabilities (see the design spec's
+    "out of scope" section), not a proven-at-scale path that needs the same
+    throughput levers yet.
     """
     async with httpx.AsyncClient(
         headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
@@ -684,12 +704,12 @@ async def scrape_all_india_maker_category(
             for rto in rtos:
                 try:
                     await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
-                    records = await scrape_maker_category_table(session, year)
+                    records = await table_scraper(session, year)
                     if not records:
                         empty += 1
                         logger.warning(
-                            "%s / %s: zero records (dimension=maker_category, year=%d)",
-                            state_name, rto["rto_code"], year,
+                            "%s / %s: zero records (dimension=%s, year=%d)",
+                            state_name, rto["rto_code"], dimension_label, year,
                         )
                     yield {
                         "state_name": state_name,
@@ -711,6 +731,16 @@ async def scrape_all_india_maker_category(
                 "rto_succeeded": succeeded,
                 "rto_empty": empty,
             }
+
+
+def scrape_all_india_maker_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
+    """Maker x Vehicle Class -- see scrape_all_india_crosstab."""
+    return scrape_all_india_crosstab(year, scrape_maker_category_table, "maker_category", delay_seconds, skip_rtos)
+
+
+def scrape_all_india_fuel_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
+    """Fuel x Vehicle Class -- see scrape_all_india_crosstab."""
+    return scrape_all_india_crosstab(year, scrape_fuel_category_table, "fuel_category", delay_seconds, skip_rtos)
 
 
 if __name__ == "__main__":

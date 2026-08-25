@@ -120,6 +120,36 @@ class MakerCategoryTotal(Base):
     )
 
 
+class FuelCategoryTotal(Base):
+    """Real Fuel x Vehicle Category totals -- same shape and same reason as
+    MakerCategoryTotal: the fuel-dimension pass always stores
+    vehicle_class='All' (see Registration.is_supplementary), so fuel_group
+    filtering can never combine with a real vehicle_category on Registration
+    rows. VAHAN's report offers Vehicle Class as an X-axis option when
+    Y-axis=Fuel too, giving a genuine cross-tab -- verified live this
+    session, same discovery as the maker one. Year-only, no month column,
+    for the same reason (X-axis holds either Month Wise or Vehicle Class,
+    never both)."""
+    __tablename__ = "fuel_category_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_code = Column(String(5), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    rto_code = Column(String(10), nullable=True)
+    rto_name = Column(String(200), nullable=True)
+    year = Column(Integer, nullable=False, index=True)
+    fuel_type = Column(String(100), nullable=False, index=True)
+    vehicle_class = Column(String(200), nullable=False)
+    vehicle_category = Column(String(20), nullable=False, index=True)
+    commercial_tier = Column(String(15), nullable=True)
+    count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_fct_year_category_fuel", "year", "vehicle_category", "fuel_type"),
+        Index("idx_fct_year_fuel", "year", "fuel_type"),
+    )
+
+
 class DashboardSummary(Base):
     __tablename__ = "dashboard_summary"
 

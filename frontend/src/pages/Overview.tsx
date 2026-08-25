@@ -7,7 +7,7 @@ import {
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -191,6 +191,12 @@ export function OverviewPage() {
   // -- surfaced below via MakerCategoryPanel instead of leaving this an
   // always-zero dead end.
   const impossibleCrossFilter = !!(selectedCategory && selectedMaker);
+  // Same limitation, same fix shape, between Category and Powertrain instead
+  // of Category and Maker: the fuel-dimension pass also always stores
+  // vehicle_class='All', so fuel_group can't combine with a real category on
+  // Registration rows either. FuelCategoryPanel below is sourced from the
+  // separate Fuel x Vehicle Class cross-tab (see FuelCategoryTotal).
+  const impossibleFuelCategoryFilter = !!(selectedCategory && fuelGroup);
 
   const activeFiltersCount = [
     selectedState,
@@ -323,6 +329,16 @@ export function OverviewPage() {
           year={selectedYear}
           category={selectedCategory!}
           maker={selectedMaker!}
+          month={selectedMonth}
+          state={selectedState}
+        />
+      )}
+
+      {impossibleFuelCategoryFilter && (
+        <FuelCategoryPanel
+          year={selectedYear}
+          category={selectedCategory!}
+          fuelGroup={fuelGroup!}
           month={selectedMonth}
           state={selectedState}
         />
@@ -566,6 +582,39 @@ function MakerCategoryPanel({ year, category, maker, month, state }: { year: num
         <span>
           <span className="font-semibold text-[var(--accent)]">{maker}</span> in{' '}
           <span className="font-semibold text-[var(--accent)]">{category}</span>, FY {year}
+          {state && <> · {state}</>}:
+        </span>
+        {isLoading ? (
+          <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
+        ) : (
+          <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
+        )}
+      </div>
+      {month && (
+        <p className="text-[10px] text-[var(--text-muted)] mt-1">
+          This is a year total — the underlying data has no month breakdown, so the Month filter doesn't apply here.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Same shape as MakerCategoryPanel, sourced from the separate Fuel x
+ * Vehicle Class cross-tab (see FuelCategoryTotal / fuel-category-breakdown).
+ * Rendered only when both selectedCategory and fuelGroup are set. */
+function FuelCategoryPanel({ year, category, fuelGroup, month, state }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['fuelCategoryBreakdown', year, category, fuelGroup, state],
+    queryFn: () => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }),
+  });
+
+  const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
+
+  return (
+    <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span>
+          <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span> {category}, FY {year}
           {state && <> · {state}</>}:
         </span>
         {isLoading ? (

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.query_filters import classify_vehicle
-from app.models.models import MakerCategoryTotal, Registration, State
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, Registration, State
 from scraper.vahan_scraper import DIMENSIONS
 
 logger = logging.getLogger("scraper_service")
@@ -104,6 +104,35 @@ async def persist_maker_category_batch(db: AsyncSession, batch: dict, state_code
             rto_name=batch["rto_name"],
             year=year,
             maker=record["maker"],
+            vehicle_class=record["vehicle_class"],
+            vehicle_category=category,
+            commercial_tier=tier,
+            count=record["count"],
+        ))
+
+
+async def persist_fuel_category_batch(db: AsyncSession, batch: dict, state_code: str, year: int) -> None:
+    """Same shape and same reason as persist_maker_category_batch -- see
+    FuelCategoryTotal's docstring. `batch['records']` items carry a raw
+    fuel_type string, classified via classify_vehicle() same as the other
+    tables (fuel_group grouping is applied at query time, not persisted,
+    matching how fuel_group already works for Registration)."""
+    rto_code = batch["rto_code"]
+    await db.execute(
+        delete(FuelCategoryTotal).where(
+            FuelCategoryTotal.rto_code == rto_code,
+            FuelCategoryTotal.year == year,
+        )
+    )
+    for record in batch["records"]:
+        category, tier = classify_vehicle(record["vehicle_class"])
+        db.add(FuelCategoryTotal(
+            state_code=state_code,
+            state_name=batch["state_name"],
+            rto_code=rto_code,
+            rto_name=batch["rto_name"],
+            year=year,
+            fuel_type=record["fuel_type"],
             vehicle_class=record["vehicle_class"],
             vehicle_category=category,
             commercial_tier=tier,

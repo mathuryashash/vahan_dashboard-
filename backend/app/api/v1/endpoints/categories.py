@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
-from app.models.models import MakerCategoryTotal, Registration
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, Registration
 
 router = APIRouter()
 
@@ -238,3 +238,43 @@ async def get_maker_category_breakdown(
 
     key_name = "vehicle_category" if maker else "maker"
     return [{key_name: r[0], "count": r[1]} for r in rows]
+
+
+@router.get("/fuel-category-breakdown")
+async def get_fuel_category_breakdown(
+    year: int = _DEFAULT_YEAR,
+    state: str | None = None,
+    vehicle_category: str | None = None,
+    fuel_group_filter: str | None = Query(None, alias="fuel_group"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Real Fuel-group x Vehicle Category totals -- year-only, same
+    limitation and same fix shape as maker-category-breakdown (see
+    FuelCategoryTotal's docstring). Groups by whichever of fuel_group/
+    vehicle_category is left unfixed: pass vehicle_category to rank ICE/
+    Hybrid/EV within it, or pass fuel_group to rank categories within it.
+    Grouped in Python, not SQL, since fuel_group is computed from the raw
+    fuel_type column (same reason /fuel-breakdown already does this).
+    """
+    query = select(FuelCategoryTotal.fuel_type, FuelCategoryTotal.vehicle_category, FuelCategoryTotal.count).where(
+        FuelCategoryTotal.year == year
+    )
+    if state:
+        query = query.where(FuelCategoryTotal.state_name == state)
+    if vehicle_category:
+        query = query.where(FuelCategoryTotal.vehicle_category == vehicle_category)
+
+    result = await db.execute(query)
+    totals: dict[str, int] = {}
+    for raw_fuel_type, row_category, count in result.all():
+        group = fuel_group(raw_fuel_type)
+        if fuel_group_filter and group != fuel_group_filter:
+            continue
+        key = row_category if fuel_group_filter else group
+        totals[key] = totals.get(key, 0) + count
+
+    key_name = "vehicle_category" if fuel_group_filter else "fuel_group"
+    return sorted(
+        [{key_name: k, "count": v} for k, v in totals.items()],
+        key=lambda item: item["count"], reverse=True,
+    )
