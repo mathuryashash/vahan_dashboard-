@@ -73,6 +73,22 @@ async def test_kpis_filtered_by_real_vehicle_class_reads_the_vehicle_class_pass(
     assert data["total_this_month"] == 30
 
 
+async def test_kpis_filtered_by_fuel_group_reads_the_fuel_pass(client, db_session):
+    """Same bug class as test_kpis_filtered_by_real_vehicle_class_reads_the_vehicle_class_pass:
+    the maker-pass (is_supplementary=False) never carries a real fuel_type either
+    (always NULL), so filtering by fuel_group must also stop excluding
+    supplementary rows -- otherwise every fuel_group-filtered total silently
+    zeroes out, same as the vehicle_class case this test mirrors."""
+    await _seed_real_rto(db_session)  # PETROL: 90, ELECTRIC: 10
+
+    response = await client.get(
+        "/api/v1/summary/kpis", params={"year": 2026, "month": 1, "fuel_group": "EV"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_this_month"] == 10
+
+
 async def test_trend_does_not_triple_count(client, db_session):
     await _seed_real_rto(db_session)
 

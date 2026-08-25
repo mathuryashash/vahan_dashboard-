@@ -69,7 +69,7 @@ async def get_dashboard_kpis(
     q_totals = apply_fuel_group_filter(
         apply_total_filters(
             q_totals, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+            commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
     ).group_by(Registration.year)
@@ -94,7 +94,7 @@ async def get_dashboard_kpis(
     q_top_state = apply_fuel_group_filter(
         apply_total_filters(
             q_top_state, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+            commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
     )
@@ -145,7 +145,7 @@ async def get_trend(
     query = apply_fuel_group_filter(
         apply_total_filters(
             query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+            commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
     )
@@ -179,7 +179,7 @@ async def get_state_ranking(
     query = apply_fuel_group_filter(
         apply_total_filters(
             query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+            commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
     )
@@ -221,7 +221,7 @@ async def _period_sum(
     query = apply_fuel_group_filter(
         apply_total_filters(
             query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+            commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
     )

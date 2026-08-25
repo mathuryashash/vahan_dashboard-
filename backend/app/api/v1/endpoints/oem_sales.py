@@ -8,8 +8,17 @@ router = APIRouter()
 
 
 @router.get("/categories")
-async def get_oem_categories(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(OEMMonthlySales.category).distinct())
+async def get_oem_categories(year: int | None = None, db: AsyncSession = Depends(get_db)):
+    """Categories with real FADA data. Filtered to `year` when given, so the
+    dropdown doesn't offer a category (e.g. one FADA only started breaking
+    out in 2024) that has zero rows for whatever year is currently selected
+    -- that combination always rendered as an empty "No FADA data" state,
+    which reads as broken rather than as an honest "nothing published yet."
+    """
+    query = select(OEMMonthlySales.category).distinct()
+    if year is not None:
+        query = query.where(OEMMonthlySales.year == year)
+    result = await db.execute(query)
     return [row[0] for row in result.all()]
 
 

@@ -46,8 +46,8 @@ export const getMonthDetail = (params: { year: number; month: number } & Omit<Fi
 export const getAvailableYears = (): Promise<number[]> => api.get('/summary/available-years').then(r => r.data);
 export const getScrapeProgress = () => api.get('/refresh/scrape-progress').then(r => r.data);
 
-export const getOemCategories = (): Promise<string[]> =>
-  api.get('/oem-sales/categories').then(r => r.data);
+export const getOemCategories = (year?: number): Promise<string[]> =>
+  api.get('/oem-sales/categories', { params: { year } }).then(r => r.data);
 export const getOemMonthly = (params: { category: string; year: number; month?: number | null }) =>
   api.get('/oem-sales/monthly', { params }).then(r => r.data);
 export const getOemTrend = (params: { maker: string; category: string }) =>

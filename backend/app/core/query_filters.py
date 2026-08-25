@@ -57,20 +57,24 @@ def apply_total_filters(
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
+    fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
 ) -> Select:
     """apply_common_filters, for queries that sum toward an overall total
     (KPIs, trend, state-ranking) -- also excludes supplementary rows, unless
-    vehicle_class narrows to one specific real class. The canonical maker-pass
-    (is_supplementary=False) always stores vehicle_class='All', so it can
-    never match a specific class filter anyway; the only rows that ever carry
-    a real class are the vehicle_class-dimension pass (is_supplementary=True)
-    and synthetic seed data. Excluding supplementary rows in that case would
-    silently zero out every category-filtered total for live-scraped years,
-    since it would strip out the only rows that could ever match.
+    vehicle_class narrows to one specific real class, or fuel_group is set.
+    The canonical maker-pass (is_supplementary=False) always stores
+    vehicle_class='All' and fuel_type=NULL, so it can never match a specific
+    class filter or a fuel_group filter anyway; the only rows that ever carry
+    a real class are the vehicle_class-dimension pass, and the only rows that
+    ever carry a real fuel_type are the fuel-dimension pass (both
+    is_supplementary=True). Excluding supplementary rows in either case would
+    silently zero out the filtered total for live-scraped years, since it
+    would strip out the only rows that could ever match -- this exact bug
+    shipped once already for vehicle_class and had to be fixed the same way.
     """
-    if not vehicle_class or vehicle_class == "All":
+    if (not vehicle_class or vehicle_class == "All") and not fuel_group:
         query = exclude_supplementary(query)
     return apply_common_filters(
         query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,

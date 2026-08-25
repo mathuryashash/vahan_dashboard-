@@ -21,8 +21,17 @@ export function IndustrySalesPage() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedMaker, setSelectedMaker] = useState<string | null>(null);
 
-  const { data: categories } = useQuery({ queryKey: ['oemCategories'], queryFn: getOemCategories });
-  const category = selectedCategory ?? categories?.[0] ?? null;
+  const { data: categories } = useQuery({
+    queryKey: ['oemCategories', selectedYear],
+    queryFn: () => getOemCategories(selectedYear),
+  });
+  // selectedCategory can point at a category that had data for a previously
+  // selected year but not this one (categories are now filtered per-year) --
+  // fall back to the first category the current year actually has instead of
+  // holding onto a choice that no longer applies.
+  const category = (selectedCategory && categories?.includes(selectedCategory))
+    ? selectedCategory
+    : categories?.[0] ?? null;
 
   const { data: monthly, isLoading: monthlyLoading } = useQuery({
     queryKey: ['oemMonthly', category, selectedYear, selectedMonth],
