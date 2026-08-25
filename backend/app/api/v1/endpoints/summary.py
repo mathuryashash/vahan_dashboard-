@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
-from app.core.query_filters import apply_total_filters, exclude_supplementary, latest_month_with_data
+from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, exclude_supplementary, latest_month_with_data
 from app.models.models import Registration
 from app.schemas.schemas import DashboardKPIs
 from app.core.config import settings
@@ -36,6 +36,9 @@ async def get_dashboard_kpis(
     month: int | None = None,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
+    fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -63,8 +66,12 @@ async def get_dashboard_kpis(
     q_totals = select(Registration.year, func.sum(Registration.count).label("total")).where(
         Registration.year.in_([current_year, prev_year]), month_filter
     )
-    q_totals = apply_total_filters(
-        q_totals, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    q_totals = apply_fuel_group_filter(
+        apply_total_filters(
+            q_totals, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+        ),
+        fuel_group,
     ).group_by(Registration.year)
 
     result_totals = await db.execute(q_totals)
@@ -84,8 +91,12 @@ async def get_dashboard_kpis(
         select(Registration.state_name, func.sum(Registration.count).label("total"))
         .where(Registration.year == current_year, month_filter)
     )
-    q_top_state = apply_total_filters(
-        q_top_state, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    q_top_state = apply_fuel_group_filter(
+        apply_total_filters(
+            q_top_state, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+        ),
+        fuel_group,
     )
 
     q_top_state = q_top_state.group_by(Registration.state_name).order_by(desc("total")).limit(1)
@@ -117,6 +128,9 @@ async def get_trend(
     year: int = _DEFAULT_YEAR,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
+    fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -128,8 +142,12 @@ async def get_trend(
     query = select(
         Registration.month, func.sum(Registration.count).label("count")
     ).where(Registration.year == year)
-    query = apply_total_filters(
-        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    query = apply_fuel_group_filter(
+        apply_total_filters(
+            query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+        ),
+        fuel_group,
     )
 
     query = query.group_by(Registration.month).order_by(Registration.month)
@@ -144,6 +162,9 @@ async def get_state_ranking(
     month: int | None = None,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
+    fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
     limit: int = 10,
@@ -155,8 +176,12 @@ async def get_state_ranking(
 
     if month:
         query = query.where(Registration.month == month)
-    query = apply_total_filters(
-        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    query = apply_fuel_group_filter(
+        apply_total_filters(
+            query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+        ),
+        fuel_group,
     )
 
     query = query.group_by(Registration.state_name).order_by(desc("total")).limit(limit)
@@ -182,6 +207,9 @@ async def _period_sum(
     month_lt: int | None = None,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
+    fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
 ) -> int:
@@ -190,8 +218,12 @@ async def _period_sum(
         query = query.where(Registration.month == month)
     if month_lt is not None:
         query = query.where(Registration.month < month_lt)
-    query = apply_total_filters(
-        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+    query = apply_fuel_group_filter(
+        apply_total_filters(
+            query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+        ),
+        fuel_group,
     )
     result = await db.execute(query)
     return result.scalar() or 0
@@ -209,6 +241,9 @@ async def get_month_detail(
     month: int,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
+    fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -226,7 +261,10 @@ async def get_month_detail(
     a whole month's total and year-to-date, both real, no estimation needed.
     """
     prev_year = year - 1
-    filters = dict(state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model)
+    filters = dict(
+        state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+        commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
+    )
 
     month_count = await _period_sum(db, year, month=month, **filters)
     prior_months_count = await _period_sum(db, year, month_lt=month, **filters)

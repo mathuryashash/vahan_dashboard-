@@ -238,6 +238,28 @@ def fuel_group(raw_fuel_type: str) -> str:
     return _FUEL_GROUP_MAP[fuel_category(raw_fuel_type)]
 
 
+def apply_fuel_group_filter(query: Select, group: str | None) -> Select:
+    """SQL-level equivalent of filtering by fuel_group(), for aggregate
+    endpoints (KPIs/trend/state-ranking) that SUM in SQL rather than fetch
+    per-row fuel_type like fuel-breakdown does. Mirrors fuel_category's
+    priority order exactly: HYBRID is checked first, so "ICE" (which
+    fuel_group maps Petrol/Diesel/CNG/Other onto) is precisely "not Hybrid
+    and not EV" -- there's no separate Petrol/Diesel/CNG substring list to
+    keep in sync here.
+    """
+    if not group:
+        return query
+    is_hybrid = Registration.fuel_type.ilike("%HYBRID%")
+    is_ev = Registration.fuel_type.ilike("%ELECTRIC%") | Registration.fuel_type.ilike("%PURE EV%") | Registration.fuel_type.ilike("%FUEL CELL%")
+    if group == "Hybrid":
+        return query.where(is_hybrid)
+    if group == "EV":
+        return query.where(~is_hybrid & is_ev)
+    if group == "ICE":
+        return query.where(~is_hybrid & ~is_ev)
+    return query
+
+
 async def latest_month_with_data(db: AsyncSession, year: int) -> int | None:
     """Highest month with any registration row for `year`, or None if the
     year has no data yet. Used to cap a year-to-date comparison at the same
