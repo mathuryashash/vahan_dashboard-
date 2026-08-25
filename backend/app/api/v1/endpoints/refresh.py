@@ -39,7 +39,7 @@ async def trigger_refresh(background_tasks: BackgroundTasks):
     # of them actually flips REFRESH_STATUS to "running".
     settings.REFRESH_STATUS = "running"
     settings.LAST_REFRESH_STARTED_AT = datetime.now(timezone.utc)
-    background_tasks.add_task(run_scraper)
+    background_tasks.add_task(run_scraper, concurrent_states=settings.SCRAPER_CONCURRENT_STATES)
     return RefreshResponse(
         status="started",
         message="Scraper job started in background. This can take over an hour for a full India refresh.",

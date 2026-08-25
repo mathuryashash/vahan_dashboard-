@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # site the scraper hits.
     REFRESH_COOLDOWN_MINUTES: int = 30
     LAST_REFRESH_STARTED_AT: datetime | None = None
+    # Number of states to scrape in parallel within each dimension process.
+    # Each state runs in its own HTTP session with its own pacing (1.5s between
+    # RTO requests), so N concurrent states means N requests every ~1.5s instead of 1.
+    # Default 1 preserves original serial behavior. Increase to 2-4 for higher throughput.
+    SCRAPER_CONCURRENT_STATES: int = 1
 
     class Config:
         env_file = ".env"
