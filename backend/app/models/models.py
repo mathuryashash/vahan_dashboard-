@@ -91,6 +91,35 @@ class Registration(Base):
     )
 
 
+class MakerCategoryTotal(Base):
+    """Real Maker x Vehicle Category totals -- a genuinely different pivot
+    from Registration, not a supplementary dimension of it. VAHAN's report
+    X-axis can hold Vehicle Class OR Month Wise, never both, so this table
+    has no month column at all: it's a full-year total per (state/RTO,
+    maker, vehicle_class) cell. See docs/superpowers/specs/
+    2026-08-25-maker-category-crosstab-design.md for how this was
+    discovered and why it can't just be added as another Registration
+    dimension."""
+    __tablename__ = "maker_category_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_code = Column(String(5), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    rto_code = Column(String(10), nullable=True)
+    rto_name = Column(String(200), nullable=True)
+    year = Column(Integer, nullable=False, index=True)
+    maker = Column(String(200), nullable=False, index=True)
+    vehicle_class = Column(String(200), nullable=False)
+    vehicle_category = Column(String(20), nullable=False, index=True)
+    commercial_tier = Column(String(15), nullable=True)
+    count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_mct_year_category_maker", "year", "vehicle_category", "maker"),
+        Index("idx_mct_year_maker", "year", "maker"),
+    )
+
+
 class DashboardSummary(Base):
     __tablename__ = "dashboard_summary"
 

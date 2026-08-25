@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.query_filters import classify_vehicle
-from app.models.models import Registration, State
+from app.models.models import MakerCategoryTotal, Registration, State
 from scraper.vahan_scraper import DIMENSIONS
 
 logger = logging.getLogger("scraper_service")
@@ -79,6 +79,36 @@ async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dime
         category, tier = classify_vehicle(fields["vehicle_class"])
         fields.update(vehicle_category=category, commercial_tier=tier)
         db.add(Registration(**fields))
+
+
+async def persist_maker_category_batch(db: AsyncSession, batch: dict, state_code: str, year: int) -> None:
+    """Replace any existing MakerCategoryTotal rows for this (rto_code, year)
+    with freshly scraped ones. Separate table, separate delete-before-insert
+    scope from persist_rto_batch -- this pivot has no month column and no
+    is_supplementary concept, it's a genuinely different shape, not another
+    Registration dimension (see docs/superpowers/specs/
+    2026-08-25-maker-category-crosstab-design.md)."""
+    rto_code = batch["rto_code"]
+    await db.execute(
+        delete(MakerCategoryTotal).where(
+            MakerCategoryTotal.rto_code == rto_code,
+            MakerCategoryTotal.year == year,
+        )
+    )
+    for record in batch["records"]:
+        category, tier = classify_vehicle(record["vehicle_class"])
+        db.add(MakerCategoryTotal(
+            state_code=state_code,
+            state_name=batch["state_name"],
+            rto_code=rto_code,
+            rto_name=batch["rto_name"],
+            year=year,
+            maker=record["maker"],
+            vehicle_class=record["vehicle_class"],
+            vehicle_category=category,
+            commercial_tier=tier,
+            count=record["count"],
+        ))
 
 
 async def _state_code_lookup(db: AsyncSession) -> dict[str, str]:

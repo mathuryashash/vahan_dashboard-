@@ -132,6 +132,49 @@ def _parse_row_count(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+# When Y-axis=Maker and X-axis=Vehicle Class, VAHAN's own column headers are
+# ['S No', <a static "Vehicle Class" label VAHAN always shows here regardless
+# of Y-axis choice -- a UI quirk, not a real column>, 'TOTAL', <class1>,
+# <class2>, ...] -- TOTAL sits right after the row label, *before* the
+# per-class columns, unlike the month pivot where TOTAL is last. Confirmed
+# against a live response this session (2026-08-25).
+_MAKER_CATEGORY_NON_CLASS_HEADERS = {"S NO", "VEHICLE CLASS", "TOTAL"}
+
+
+def _parse_vehicle_class_columns(text: str) -> list[str]:
+    """Vehicle class names in column order for the Maker x Vehicle Class
+    pivot, read from aria-label headers same as _parse_month_columns reads
+    month abbreviations -- but here the values are full class names, not
+    fixed 3-letter codes, so this can't reuse the same MONTH_ABBR allowlist.
+    Excludes the fixed S No/Vehicle Class-label/TOTAL headers that appear on
+    every response regardless of which classes are actually present."""
+    # Bounded to 1-40 chars: matches the exact pattern confirmed live against
+    # a real click_refresh() response this session -- these responses are
+    # JSF partial-response fragments scoped to just the table panel, not the
+    # full page, so an unscoped aria-label scan doesn't pick up unrelated
+    # page chrome the way it would on a full-page load.
+    labels = re.findall(r'aria-label="([^"]{1,40})"', text)
+    classes = []
+    for label in labels:
+        cleaned = label.strip("\xa0 \t")
+        if not cleaned or cleaned.upper() in _MAKER_CATEGORY_NON_CLASS_HEADERS:
+            continue
+        classes.append(html.unescape(cleaned))
+    return classes
+
+
+def _parse_maker_category_table_rows(text: str, num_class_cols: int) -> list[list[str]]:
+    """Row cell text values in order: [S No, Maker, Total, <class>...] -- same
+    cell-extraction mechanism as _parse_table_rows (same TABLE_ID-based label
+    regex), just a different column layout (Total before the per-class
+    counts, not after)."""
+    cells = re.findall(rf'<label id="{TABLE_ID}:\d+:[^"]*"[^>]*>([^<]*)</label>', text)
+    row_len = 2 + 1 + num_class_cols
+    if row_len <= 0:
+        return []
+    return [cells[i : i + row_len] for i in range(0, len(cells) - row_len + 1, row_len)]
+
+
 class _VahanSession:
     """One authenticated (session-cookie) conversation with the VAHAN4
     dashboard's stateful JSF form. Not thread-safe / not for concurrent use —
@@ -321,15 +364,57 @@ DIMENSIONS = {
 }
 
 
-async def _configure_pivot(session: _VahanSession, year: int, yaxis_value: str) -> None:
+async def _configure_pivot(session: _VahanSession, year: int, yaxis_value: str, xaxis_value: str = "Month Wise") -> None:
     await session.select(YAXIS_SELECT_ID, yaxis_value, YAXIS_SELECT_ID, XAXIS_SELECT_ID)
-    xaxis_resp = await session.select(XAXIS_SELECT_ID, "Month Wise", XAXIS_SELECT_ID, "multipleYear")
+    xaxis_resp = await session.select(XAXIS_SELECT_ID, xaxis_value, XAXIS_SELECT_ID, "multipleYear")
     # Month Wise locks selectedYearType to Calendar Year and re-defaults
     # selectedYear to the current year server-side; pick that up before
     # possibly overriding the year below.
     session.sync_defaults_from(xaxis_resp)
     if session._form.get(f"{YEAR_SELECT_ID}_input") != str(year):
         await session.select(YEAR_SELECT_ID, str(year), YEAR_SELECT_ID, YEAR_SELECT_ID)
+
+
+async def scrape_maker_category_table(session: _VahanSession, year: int) -> list[dict]:
+    """Assumes state + RTO are already selected. Configures the Maker x
+    Vehicle Class pivot (X-axis=Vehicle Class instead of Month Wise -- the
+    only way to get maker and category on the same row, discovered live
+    against VAHAN this session; see docs/superpowers/specs/
+    2026-08-25-maker-category-crosstab-design.md). No month breakdown exists
+    in this response at all -- returns
+    [{'maker': str, 'vehicle_class': str, 'count': int}, ...] for the whole
+    year in one shot."""
+    await _configure_pivot(session, year, DIMENSIONS["maker"], xaxis_value="Vehicle Class")
+    table_html = await session.click_refresh()
+
+    class_cols = _parse_vehicle_class_columns(table_html)
+    row_count = _parse_row_count(table_html)
+    if not class_cols or row_count == 0:
+        return []
+
+    records: list[dict] = []
+
+    def _rows_to_records(rows: list[list[str]]) -> None:
+        for row in rows:
+            if len(row) < 2 + 1 + len(class_cols):
+                continue
+            maker = html.unescape(row[1]).strip()
+            for offset, vehicle_class in enumerate(class_cols):
+                count = parse_count(row[3 + offset])
+                if count:
+                    records.append({"maker": maker, "vehicle_class": vehicle_class, "count": count})
+
+    _rows_to_records(_parse_maker_category_table_rows(table_html, len(class_cols)))
+
+    first = PAGE_SIZE
+    pages_fetched = 0
+    while first < row_count and pages_fetched < MAX_PAGES:
+        page_html = await session.fetch_table_page(first)
+        _rows_to_records(_parse_maker_category_table_rows(page_html, len(class_cols)))
+        first += PAGE_SIZE
+        pages_fetched += 1
+
+    return records
 
 
 async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) -> list[dict]:
@@ -538,20 +623,94 @@ async def scrape_all_india(
             for item in items:
                 yield item
 
-    # Concurrent path: partition states across workers, each with its own session
-    semaphore = asyncio.Semaphore(max_concurrent_states)
 
-    async def _worker(state: dict) -> list[dict]:
-        async with semaphore:
-            already_done = skip_rtos.get(state["state_name"], frozenset())
-            return await _scrape_state_worker(state, state_select_id, year, dimension, delay_seconds, already_done)
+async def scrape_all_india_maker_category(
+    year: int,
+    delay_seconds: float = REQUEST_DELAY_SECONDS,
+    skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006 - never mutated
+):
+    """Async generator for the Maker x Vehicle Class pivot -- same shape of
+    yields as scrape_all_india (RTO batches + state-complete summaries), but
+    serial-only (no concurrent_states) and no `dimension` param, since this
+    is one pivot, not a choice of three. Kept deliberately simpler than
+    scrape_all_india: this is a new, not-yet-backfilled capability (see the
+    design spec's "out of scope" section), not a proven-at-scale path that
+    needs the same throughput levers yet.
+    """
+    async with httpx.AsyncClient(
+        headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
+    ) as client:
+        session = _VahanSession(client)
+        page_html = await session.load()
+        state_select_id = discover_state_select_id(page_html)
+        if state_select_id is None:
+            raise RuntimeError(
+                "Could not find the State dropdown on the live page -- its marker text "
+                f"({_STATE_SELECT_MARKER!r}) wasn't found in any <select>. The page's "
+                "structure changed in some way beyond an id shift; inspect a fresh fetch."
+            )
+        states = await get_states(session, page_html, state_select_id)
+        logger.info("Discovered %d states", len(states))
 
-    # Launch all state workers
-    tasks = [_worker(state) for state in states]
-    for coro in asyncio.as_completed(tasks):
-        items = await coro
-        for item in items:
-            yield item
+        for state in states:
+            state_name = state["state_name"]
+            already_done = skip_rtos.get(state_name, frozenset())
+            try:
+                rto_resp = await session.select(
+                    state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
+                )
+            except Exception as exc:
+                logger.warning("Failed selecting state %s: %s", state_name, exc)
+                yield {
+                    "state_complete": True, "state_name": state_name,
+                    "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
+                }
+                continue
+
+            all_rtos = [
+                {**parsed, "rto_value": value}
+                for value, text in _parse_options(rto_resp, RTO_SELECT_ID)
+                if value != "-1"
+                for parsed in [parse_rto_option(text)]
+                if parsed
+            ]
+            rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
+            skipped_count = len(all_rtos) - len(rtos)
+            if skipped_count:
+                logger.info("%s: skipping %d already-scraped RTOs, %d remaining", state_name, skipped_count, len(rtos))
+
+            succeeded = 0
+            empty = 0
+            for rto in rtos:
+                try:
+                    await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
+                    records = await scrape_maker_category_table(session, year)
+                    if not records:
+                        empty += 1
+                        logger.warning(
+                            "%s / %s: zero records (dimension=maker_category, year=%d)",
+                            state_name, rto["rto_code"], year,
+                        )
+                    yield {
+                        "state_name": state_name,
+                        "rto_code": rto["rto_code"],
+                        "rto_name": rto["rto_name"],
+                        "records": records,
+                    }
+                    succeeded += 1
+                except Exception as exc:
+                    logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
+                finally:
+                    await asyncio.sleep(delay_seconds)
+
+            yield {
+                "state_complete": True,
+                "state_name": state_name,
+                "rto_total": len(all_rtos),
+                "rto_skipped": skipped_count,
+                "rto_succeeded": succeeded,
+                "rto_empty": empty,
+            }
 
 
 if __name__ == "__main__":

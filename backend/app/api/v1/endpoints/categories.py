@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
-from app.models.models import Registration
+from app.models.models import MakerCategoryTotal, Registration
 
 router = APIRouter()
 
@@ -203,3 +203,38 @@ async def get_model_breakdown(
         }
         for r in rows
     ]
+
+
+@router.get("/maker-category-breakdown")
+async def get_maker_category_breakdown(
+    year: int = _DEFAULT_YEAR,
+    state: str | None = None,
+    vehicle_category: str | None = None,
+    maker: str | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    """Real Maker x Vehicle Category totals -- year-only, no month
+    breakdown exists in this pivot at all (see MakerCategoryTotal's
+    docstring). Groups by whichever of maker/vehicle_category is left
+    unfixed: pass vehicle_category to rank makers within it, or pass maker
+    to rank its categories. If both are given, groups by maker (returns the
+    single row matching both).
+    """
+    group_col = MakerCategoryTotal.vehicle_category if maker else MakerCategoryTotal.maker
+    query = select(group_col, func.sum(MakerCategoryTotal.count).label("total")).where(
+        MakerCategoryTotal.year == year
+    )
+    if state:
+        query = query.where(MakerCategoryTotal.state_name == state)
+    if vehicle_category:
+        query = query.where(MakerCategoryTotal.vehicle_category == vehicle_category)
+    if maker:
+        query = query.where(MakerCategoryTotal.maker == maker)
+
+    query = query.group_by(group_col).order_by(desc("total")).limit(limit)
+    result = await db.execute(query)
+    rows = result.all()
+
+    key_name = "vehicle_category" if maker else "maker"
+    return [{key_name: r[0], "count": r[1]} for r in rows]
