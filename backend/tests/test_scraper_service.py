@@ -135,7 +135,7 @@ async def test_run_scraper_runs_dimensions_concurrently_not_sequentially(monkeyp
     would silently 3x the wall-clock time of every refresh."""
     calls = []
 
-    def fake_dimension_sync(dimension):
+    def fake_dimension_sync(dimension, concurrent_states=1, force=True):
         calls.append((dimension, "start", time.monotonic()))
         time.sleep(0.2)
         calls.append((dimension, "end", time.monotonic()))
@@ -154,7 +154,7 @@ async def test_run_scraper_runs_dimensions_concurrently_not_sequentially(monkeyp
 
 
 async def test_run_scraper_marks_network_failure_for_retry(monkeypatch):
-    monkeypatch.setattr("app.services.scraper_service._run_dimension_sync", lambda _dimension: 1)
+    monkeypatch.setattr("app.services.scraper_service._run_dimension_sync", lambda dimension, concurrent_states=1, force=True: 1)
     settings.REFRESH_STATUS = "idle"
     settings.REFRESH_ERROR = None
 

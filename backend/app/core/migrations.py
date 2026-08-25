@@ -5,6 +5,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.schema import CreateIndex
 
+from app.core.query_filters import classify_vehicle
+
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -56,6 +58,39 @@ async def ensure_indexes(engine: AsyncEngine, metadata) -> None:
             for index in table.indexes:
                 ddl = CreateIndex(index, if_not_exists=True)
                 await conn.execute(ddl)
+
+
+async def ensure_vehicle_category_backfilled(engine: AsyncEngine, table_name: str = "registrations") -> None:
+    """Classify every row with vehicle_category still NULL. Chunked (not one
+    giant UPDATE) so this is safe to run against 13M+ existing rows on
+    startup without holding a long-lived lock or blowing up memory reading
+    every row into Python at once. Idempotent: only ever touches rows where
+    vehicle_category IS NULL, so a completed backfill costs one cheap COUNT
+    on every subsequent startup.
+    """
+    if not _IDENTIFIER_RE.match(table_name):
+        raise ValueError(f"Invalid table name: {table_name!r}")
+    CHUNK_SIZE = 5000
+    async with engine.connect() as conn:
+        while True:
+            rows = (
+                await conn.execute(
+                    text(f"SELECT id, vehicle_class FROM {table_name} WHERE vehicle_category IS NULL LIMIT :n"),
+                    {"n": CHUNK_SIZE},
+                )
+            ).all()
+            if not rows:
+                break
+            for row_id, vehicle_class in rows:
+                category, tier = classify_vehicle(vehicle_class)
+                await conn.execute(
+                    text(
+                        f"UPDATE {table_name} SET vehicle_category = :category, commercial_tier = :tier "
+                        f"WHERE id = :id"
+                    ),
+                    {"category": category, "tier": tier, "id": row_id},
+                )
+            await conn.commit()
 
 
 async def ensure_analyzed(engine: AsyncEngine, table_names: list[str]) -> None:

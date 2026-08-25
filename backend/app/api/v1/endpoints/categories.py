@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
-from app.core.query_filters import apply_common_filters, fuel_category, latest_month_with_data
+from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
 from app.models.models import Registration
 
 router = APIRouter()
@@ -18,6 +18,7 @@ async def get_categories(
     state: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
+    raw: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
     # vehicle_class='All' is the placeholder used by real scraped rows that
@@ -25,12 +26,18 @@ async def get_categories(
     # passes -- see Registration.is_supplementary). Excluding it here means
     # this breakdown only reflects rows that actually have a real class:
     # synthetic data (always did) and the vehicle_class-dimension real pass.
+    #
+    # Groups by the broad vehicle_category by default (2W/3W/4W/Commercial/
+    # Other -- see query_filters.classify_vehicle); ?raw=true groups by the
+    # original 89-value vehicle_class instead, for anyone who wants the
+    # granular view.
+    group_col = Registration.vehicle_class if raw else Registration.vehicle_category
     q_curr = (
-        select(Registration.vehicle_class, func.sum(Registration.count).label("total"))
+        select(group_col, func.sum(Registration.count).label("total"))
         .where(Registration.year == year, Registration.vehicle_class != "All")
     )
     q_prev = (
-        select(Registration.vehicle_class, func.sum(Registration.count).label("total"))
+        select(group_col, func.sum(Registration.count).label("total"))
         .where(Registration.year == year - 1, Registration.vehicle_class != "All")
     )
 
@@ -52,8 +59,8 @@ async def get_categories(
     q_curr = apply_common_filters(q_curr, state=state, maker=maker, vehicle_model=vehicle_model)
     q_prev = apply_common_filters(q_prev, state=state, maker=maker, vehicle_model=vehicle_model)
 
-    q_curr = q_curr.group_by(Registration.vehicle_class).order_by(desc("total"))
-    q_prev = q_prev.group_by(Registration.vehicle_class)
+    q_curr = q_curr.group_by(group_col).order_by(desc("total"))
+    q_prev = q_prev.group_by(group_col)
 
     result = await db.execute(q_curr)
     rows = result.all()
@@ -62,9 +69,10 @@ async def get_categories(
     prev_result = await db.execute(q_prev)
     prev_rows = {r[0]: r[1] for r in prev_result.all()}
 
+    key_name = "vehicle_class" if raw else "vehicle_category"
     return [
         {
-            "vehicle_class": r[0],
+            key_name: r[0],
             "total_count": r[1],
             "share_percent": round((r[1] / total * 100) if total > 0 else 0, 2),
             "prev_count": prev_rows.get(r[0], 0),
@@ -81,6 +89,8 @@ async def get_categories(
 @router.get("/top-makers")
 async def get_top_makers(
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
@@ -95,7 +105,8 @@ async def get_top_makers(
     if month:
         query = query.where(Registration.month == month)
     query = apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, vehicle_model=vehicle_model
+        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+        commercial_tier=commercial_tier, vehicle_model=vehicle_model,
     )
 
     query = query.group_by(Registration.maker).order_by(desc("total")).limit(limit)
@@ -108,6 +119,9 @@ async def get_top_makers(
 @router.get("/fuel-breakdown")
 async def get_fuel_breakdown(
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
+    fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = None,
@@ -122,7 +136,8 @@ async def get_fuel_breakdown(
     if month:
         query = query.where(Registration.month == month)
     query = apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+        commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
     )
 
     query = query.group_by(Registration.fuel_type)
@@ -137,6 +152,8 @@ async def get_fuel_breakdown(
     result = await db.execute(query)
     totals: dict[str, int] = {}
     for raw_fuel_type, total in result.all():
+        if fuel_group_filter and fuel_group(raw_fuel_type) != fuel_group_filter:
+            continue
         bucket = fuel_category(raw_fuel_type)
         totals[bucket] = totals.get(bucket, 0) + total
     return [
@@ -148,6 +165,8 @@ async def get_fuel_breakdown(
 @router.get("/model-breakdown")
 async def get_model_breakdown(
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
     maker: str | None = None,
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
@@ -166,7 +185,8 @@ async def get_model_breakdown(
     if month:
         query = query.where(Registration.month == month)
     query = apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, maker=maker
+        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+        commercial_tier=commercial_tier, maker=maker,
     )
 
     query = query.group_by(Registration.vehicle_model).order_by(desc("total")).limit(limit)

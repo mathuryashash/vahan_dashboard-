@@ -6,7 +6,7 @@ from sqlalchemy import Column, Index, Integer, MetaData, String, Table, inspect,
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from app.core.migrations import ensure_analyzed, ensure_columns, ensure_indexes
+from app.core.migrations import ensure_analyzed, ensure_columns, ensure_indexes, ensure_vehicle_category_backfilled
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -153,4 +153,59 @@ async def test_ensure_analyzed_rejects_invalid_identifier():
     engine = create_async_engine(TEST_DATABASE_URL, future=True)
     with pytest.raises(ValueError):
         await ensure_analyzed(engine, ["states; DROP TABLE states"])
+    await engine.dispose()
+
+
+async def test_ensure_vehicle_category_backfilled_classifies_existing_rows():
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, vehicle_class TEXT NOT NULL, "
+            f"vehicle_category TEXT, commercial_tier TEXT)"
+        ))
+        await conn.execute(text(
+            f"INSERT INTO {table_name} (vehicle_class) VALUES "
+            f"('M-CYCLE/SCOOTER'), ('MOTOR CAR'), ('Heavy Truck'), ('AGRICULTURAL TRACTOR')"
+        ))
+
+    await ensure_vehicle_category_backfilled(engine, table_name=table_name)
+
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text(
+            f"SELECT vehicle_class, vehicle_category, commercial_tier FROM {table_name} ORDER BY id"
+        ))).all()
+    assert rows == [
+        ("M-CYCLE/SCOOTER", "Two-Wheeler", None),
+        ("MOTOR CAR", "Four-Wheeler", None),
+        ("Heavy Truck", "Commercial Vehicle", "HCV"),
+        ("AGRICULTURAL TRACTOR", "Other", None),
+    ]
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_ensure_vehicle_category_backfilled_is_idempotent():
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, vehicle_class TEXT NOT NULL, "
+            f"vehicle_category TEXT, commercial_tier TEXT)"
+        ))
+        await conn.execute(text(f"INSERT INTO {table_name} (vehicle_class) VALUES ('MOTOR CAR')"))
+
+    await ensure_vehicle_category_backfilled(engine, table_name=table_name)
+    await ensure_vehicle_category_backfilled(engine, table_name=table_name)  # must not raise or reclassify
+
+    async with engine.connect() as conn:
+        row = (await conn.execute(text(
+            f"SELECT vehicle_category FROM {table_name} WHERE vehicle_class = 'MOTOR CAR'"
+        ))).scalar()
+    assert row == "Four-Wheeler"
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
     await engine.dispose()

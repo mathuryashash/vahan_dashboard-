@@ -71,6 +71,14 @@ class Registration(Base):
     # (the default) covers the canonical maker-dimension real rows and all
     # synthetic rows, which were never split this way and are safe to sum.
     is_supplementary = Column(Boolean, nullable=True, default=False, index=True)
+    # Broad category (2W/3W/4W/Commercial/Other) and, for Commercial rows
+    # only, a size tier (LCV/MCV/HCV/Unspecified) -- see
+    # app.core.query_filters.classify_vehicle. Persisted (not computed on
+    # read like fuel_category) so it's usable as a real SQL filter, not just
+    # a display label -- category-based access control needs a real
+    # predicate to enforce against.
+    vehicle_category = Column(String(20), nullable=True, index=True)
+    commercial_tier = Column(String(15), nullable=True)
 
     # These covering indexes support the dashboard's high-cardinality
     # aggregates on both PostgreSQL and SQLite migration sources.

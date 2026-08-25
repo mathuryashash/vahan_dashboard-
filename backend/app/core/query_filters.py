@@ -9,6 +9,8 @@ def apply_common_filters(
     *,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
 ) -> Select:
@@ -21,6 +23,10 @@ def apply_common_filters(
         query = query.where(Registration.state_name == state)
     if vehicle_class:
         query = query.where(Registration.vehicle_class == vehicle_class)
+    if vehicle_category:
+        query = query.where(Registration.vehicle_category == vehicle_category)
+    if commercial_tier:
+        query = query.where(Registration.commercial_tier == commercial_tier)
     if maker:
         query = query.where(Registration.maker == maker)
     if vehicle_model:
@@ -49,6 +55,8 @@ def apply_total_filters(
     *,
     state: str | None = None,
     vehicle_class: str | None = None,
+    vehicle_category: str | None = None,
+    commercial_tier: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
 ) -> Select:
@@ -65,7 +73,8 @@ def apply_total_filters(
     if not vehicle_class or vehicle_class == "All":
         query = exclude_supplementary(query)
     return apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, maker=maker, vehicle_model=vehicle_model
+        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+        commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
     )
 
 
@@ -97,6 +106,136 @@ def fuel_category(raw_fuel_type: str) -> str:
         if any(s in upper for s in substrings):
             return bucket
     return "Other"
+
+
+# VAHAN's 89 raw vehicle_class values, mapped to the 4 broad categories a
+# commercial buyer actually thinks in (2W/3W/4W/Commercial), with LCV/MCV/HCV
+# sub-tiers for Commercial where VAHAN's raw label states a size class.
+# "Unspecified" (not a guess) when VAHAN's label doesn't state one -- e.g.
+# plain "GOODS CARRIER" or "BUS" never says LCV/MCV/HCV, so this doesn't
+# invent a size VAHAN never gave us. Anything not in this table (a future
+# VAHAN category, or "All"/"Other" placeholders) falls to ("Other", None)
+# rather than being guessed into a bucket -- see the design spec at
+# docs/superpowers/specs/2026-08-23-vehicle-taxonomy-design.md for the full
+# rationale behind each judgment call (cabs -> Four-Wheeler not Commercial,
+# quadricycles -> Three-Wheeler, etc).
+_VEHICLE_CATEGORY_MAP: dict[str, tuple[str, str | None]] = {
+    # Two-Wheeler
+    "M-CYCLE/SCOOTER": ("Two-Wheeler", None),
+    "MOPED": ("Two-Wheeler", None),
+    "MOTORISED CYCLE (CC > 25CC)": ("Two-Wheeler", None),
+    "TWO-WHEELER": ("Two-Wheeler", None),
+    "MOTOR CYCLE/SCOOTER-USED FOR HIRE": ("Two-Wheeler", None),
+    "M-CYCLE/SCOOTER-WITH SIDE CAR": ("Two-Wheeler", None),
+    "MOTOR CYCLE/SCOOTER-SIDECAR(T)": ("Two-Wheeler", None),
+    "MOTOR CYCLE/SCOOTER-WITH TRAILER": ("Two-Wheeler", None),
+    # Three-Wheeler
+    "THREE WHEELER (PASSENGER)": ("Three-Wheeler", None),
+    "THREE WHEELER (GOODS)": ("Three-Wheeler", None),
+    "THREE WHEELER (PERSONAL)": ("Three-Wheeler", None),
+    "E-RICKSHAW(P)": ("Three-Wheeler", None),
+    "E-RICKSHAW WITH CART (G)": ("Three-Wheeler", None),
+    "THREE-WHEELER": ("Three-Wheeler", None),
+    "QUADRICYCLE (COMMERCIAL)": ("Three-Wheeler", None),
+    "QUADRICYCLE (PRIVATE)": ("Three-Wheeler", None),
+    # Four-Wheeler
+    "MOTOR CAR": ("Four-Wheeler", None),
+    "MOTOR CAR/JEEP/TAXI": ("Four-Wheeler", None),
+    "MOTOR CAB": ("Four-Wheeler", None),
+    "MAXI CAB": ("Four-Wheeler", None),
+    "LUXURY CAB": ("Four-Wheeler", None),
+    "LIGHT MOTOR VEHICLE": ("Four-Wheeler", None),
+    "ADAPTED VEHICLE": ("Four-Wheeler", None),
+    "PRIVATE SERVICE VEHICLE": ("Four-Wheeler", None),
+    "PRIVATE SERVICE VEHICLE (INDIVIDUAL USE)": ("Four-Wheeler", None),
+    # Commercial Vehicle
+    "GOODS CARRIER": ("Commercial Vehicle", "Unspecified"),
+    "TRACTOR (COMMERCIAL)": ("Commercial Vehicle", "HCV"),
+    "TRACTOR-TROLLEY(COMMERCIAL)": ("Commercial Vehicle", "Unspecified"),
+    "MINI BUS": ("Commercial Vehicle", "LCV"),
+    "BUS": ("Commercial Vehicle", "HCV"),
+    "MEDIUM BUS": ("Commercial Vehicle", "MCV"),
+    "OMNI BUS": ("Commercial Vehicle", "Unspecified"),
+    "OMNI BUS (PRIVATE USE)": ("Commercial Vehicle", "Unspecified"),
+    "EDUCATIONAL INSTITUTION BUS": ("Commercial Vehicle", "Unspecified"),
+    "SCHOOL BUS": ("Commercial Vehicle", "Unspecified"),
+    "MEDIUM TRUCK": ("Commercial Vehicle", "MCV"),
+    "HEAVY TRUCK": ("Commercial Vehicle", "HCV"),
+    "TRAILER (COMMERCIAL)": ("Commercial Vehicle", "HCV"),
+    "ARTICULATED VEHICLE": ("Commercial Vehicle", "HCV"),
+    "SEMI-TRAILER (COMMERCIAL)": ("Commercial Vehicle", "HCV"),
+    "AUXILIARY TRAILER": ("Commercial Vehicle", "Unspecified"),
+    "DUMPER": ("Commercial Vehicle", "HCV"),
+    "MODULAR HYDRAULIC TRAILER": ("Commercial Vehicle", "Unspecified"),
+    # Other / Special Purpose
+    "AGRICULTURAL TRACTOR": ("Other", None),
+    "TRAILER (AGRICULTURAL)": ("Other", None),
+    "TRACTOR": ("Other", None),
+    "HARVESTER": ("Other", None),
+    "POWER TILLER": ("Other", None),
+    "POWER TILLER (COMMERCIAL)": ("Other", None),
+    "PULLER TRACTOR": ("Other", None),
+    "CONSTRUCTION EQUIPMENT VEHICLE": ("Other", None),
+    "CONSTRUCTION EQUIPMENT VEHICLE (COMMERCIAL)": ("Other", None),
+    "CONSTRUCTION EQUIPMENT": ("Other", None),
+    "EARTH MOVING EQUIPMENT": ("Other", None),
+    "EXCAVATOR (NT)": ("Other", None),
+    "EXCAVATOR (COMMERCIAL)": ("Other", None),
+    "CRANE MOUNTED VEHICLE": ("Other", None),
+    "FORK LIFT": ("Other", None),
+    "ROAD ROLLER": ("Other", None),
+    "BULLDOZER": ("Other", None),
+    "VEHICLE FITTED WITH RIG": ("Other", None),
+    "VEHICLE FITTED WITH COMPRESSOR": ("Other", None),
+    "VEHICLE FITTED WITH GENERATOR": ("Other", None),
+    "TOW TRUCK": ("Other", None),
+    "RECOVERY VEHICLE": ("Other", None),
+    "BREAKDOWN VAN": ("Other", None),
+    "AMBULANCE": ("Other", None),
+    "ANIMAL AMBULANCE": ("Other", None),
+    "FIRE FIGHTING VEHICLE": ("Other", None),
+    "FIRE TENDERS": ("Other", None),
+    "HEARSES": ("Other", None),
+    "ARMOURED/SPECIALISED VEHICLE": ("Other", None),
+    "SNORKED LADDERS": ("Other", None),
+    "TREE TRIMMING VEHICLE": ("Other", None),
+    "MOBILE CANTEEN": ("Other", None),
+    "CASH VAN": ("Other", None),
+    "MOBILE CLINIC": ("Other", None),
+    "MOBILE WORKSHOP": ("Other", None),
+    "LIBRARY VAN": ("Other", None),
+    "X-RAY VAN": ("Other", None),
+    "TOWER WAGON": ("Other", None),
+    "CAMPER VAN / TRAILER": ("Other", None),
+    "CAMPER VAN / TRAILER (PRIVATE USE)": ("Other", None),
+    "TRAILER FOR PERSONAL USE": ("Other", None),
+    "MOTOR CARAVAN": ("Other", None),
+    "VINTAGE MOTOR VEHICLE": ("Other", None),
+    "OTHER": ("Other", None),
+    "ALL": ("Other", None),
+}
+
+
+def classify_vehicle(raw_vehicle_class: str) -> tuple[str, str | None]:
+    return _VEHICLE_CATEGORY_MAP.get(raw_vehicle_class.upper(), ("Other", None))
+
+
+# ICE/Hybrid/EV is a coarser regrouping of fuel_category's own buckets, not a
+# separate ruleset -- Hybrid stays its own bucket rather than folding into
+# ICE, since a buyer deciding whether to compete in pure-EV needs to see
+# hybrids separately from plain combustion (see design spec).
+_FUEL_GROUP_MAP = {
+    "Petrol": "ICE",
+    "Diesel": "ICE",
+    "CNG": "ICE",
+    "Other": "ICE",
+    "Hybrid": "Hybrid",
+    "EV": "EV",
+}
+
+
+def fuel_group(raw_fuel_type: str) -> str:
+    return _FUEL_GROUP_MAP[fuel_category(raw_fuel_type)]
 
 
 async def latest_month_with_data(db: AsyncSession, year: int) -> int | None:

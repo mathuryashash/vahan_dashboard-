@@ -106,15 +106,26 @@ async def test_all_states_comparison_share_uses_national_total(client, db_sessio
     assert row["share_percent"] == 75.0
 
 
-async def test_categories_breakdown_uses_vehicle_class_dimension(client, db_session):
+async def test_categories_breakdown_groups_by_broad_vehicle_category(client, db_session):
     await _seed_real_rto(db_session)
 
     response = await client.get("/api/v1/categories/", params={"year": 2026, "month": 1})
     assert response.status_code == 200
-    rows = {r["vehicle_class"]: r["total_count"] for r in response.json()}
-    # The real vehicle_class breakdown shows up, not a single 'All' bucket.
-    assert rows == {"Two-Wheeler": 70, "Motor Car/Jeep/Taxi": 30}
+    rows = {r["vehicle_category"]: r["total_count"] for r in response.json()}
+    # classify_vehicle regroups the real vehicle_class breakdown into broad
+    # categories -- Two-Wheeler stays Two-Wheeler, Motor Car/Jeep/Taxi becomes
+    # Four-Wheeler.
+    assert rows == {"Two-Wheeler": 70, "Four-Wheeler": 30}
     assert "All" not in rows
+
+
+async def test_categories_breakdown_raw_flag_returns_original_vehicle_class(client, db_session):
+    await _seed_real_rto(db_session)
+
+    response = await client.get("/api/v1/categories/", params={"year": 2026, "month": 1, "raw": True})
+    assert response.status_code == 200
+    rows = {r["vehicle_class"]: r["total_count"] for r in response.json()}
+    assert rows == {"Two-Wheeler": 70, "Motor Car/Jeep/Taxi": 30}
 
 
 async def test_fuel_breakdown_uses_fuel_dimension(client, db_session):
@@ -126,6 +137,51 @@ async def test_fuel_breakdown_uses_fuel_dimension(client, db_session):
     # Raw VAHAN fuel_type values grouped into the handful of categories
     # people actually compare -- see query_filters.fuel_category.
     assert rows == {"Petrol": 90, "EV": 10}
+
+
+async def test_fuel_breakdown_filters_by_fuel_group(client, db_session):
+    await _seed_real_rto(db_session)  # PETROL: 90, ELECTRIC: 10
+
+    response = await client.get(
+        "/api/v1/categories/fuel-breakdown", params={"year": 2026, "month": 1, "fuel_group": "EV"}
+    )
+    assert response.status_code == 200
+    rows = {r["fuel_type"]: r["count"] for r in response.json()}
+    assert rows == {"EV": 10}
+
+
+async def test_persist_rto_batch_sets_vehicle_category(db_session):
+    vc_batch = {
+        "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
+        "records": [{"label": "Heavy Truck", "month": 1, "year": 2026, "count": 5}],
+    }
+    await persist_rto_batch(db_session, vc_batch, state_code="DL", dimension="vehicle_class")
+    await db_session.commit()
+
+    from sqlalchemy import select
+    result = await db_session.execute(
+        select(Registration.vehicle_category, Registration.commercial_tier)
+        .where(Registration.rto_code == "DL1", Registration.year == 2026)
+    )
+    assert result.one() == ("Commercial Vehicle", "HCV")
+
+
+async def test_persist_rto_batch_maker_pass_classifies_from_placeholder_all(db_session):
+    # Maker-pass rows always store vehicle_class='All' (see persist_rto_batch
+    # docstring) -- classify_vehicle('All') resolves to ("Other", None), same
+    # as any other unrecognized/placeholder value.
+    maker_batch = {
+        "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
+        "records": [{"label": "HONDA", "month": 1, "year": 2026, "count": 5}],
+    }
+    await persist_rto_batch(db_session, maker_batch, state_code="DL", dimension="maker")
+    await db_session.commit()
+
+    from sqlalchemy import select
+    result = await db_session.execute(
+        select(Registration.vehicle_category).where(Registration.rto_code == "DL1", Registration.year == 2026)
+    )
+    assert result.scalar() == "Other"
 
 
 async def test_top_makers_unaffected_by_supplementary_rows(client, db_session):

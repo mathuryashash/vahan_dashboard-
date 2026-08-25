@@ -15,7 +15,7 @@ from app.core.config import settings
 async def test_trigger_refresh_rejects_within_cooldown(client, monkeypatch):
     called = False
 
-    async def fake_run_scraper():
+    async def fake_run_scraper(concurrent_states=1):
         nonlocal called
         called = True
 
@@ -34,7 +34,7 @@ async def test_trigger_refresh_rejects_within_cooldown(client, monkeypatch):
 async def test_trigger_refresh_allowed_once_cooldown_elapses(client, monkeypatch):
     called = False
 
-    async def fake_run_scraper():
+    async def fake_run_scraper(concurrent_states=1):
         nonlocal called
         called = True
 
@@ -62,7 +62,7 @@ async def test_trigger_refresh_concurrent_burst_starts_scraper_only_once(client,
     """
     starts = 0
 
-    async def fake_run_scraper():
+    async def fake_run_scraper(concurrent_states=1):
         nonlocal starts
         starts += 1
         await asyncio.sleep(0.05)

@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.query_filters import classify_vehicle
 from app.models.models import Registration, State
 from scraper.vahan_scraper import DIMENSIONS
 
@@ -75,6 +76,8 @@ async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dime
             fields.update(vehicle_class="All", maker=None, fuel_type=record["label"])
         else:
             raise ValueError(f"Unknown dimension: {dimension!r}")
+        category, tier = classify_vehicle(fields["vehicle_class"])
+        fields.update(vehicle_category=category, commercial_tier=tier)
         db.add(Registration(**fields))
 
 
@@ -83,10 +86,12 @@ async def _state_code_lookup(db: AsyncSession) -> dict[str, str]:
     return {name: code for name, code in result.all()}
 
 
-def _run_dimension_sync(dimension: str) -> int:
+def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool = True) -> int:
     import subprocess
-    cmd = [sys.executable, "-m", "scraper.run_full_scrape", "--dimension", dimension]
-    logger.info("Starting scraper subprocess for dimension: %s", dimension)
+    cmd = [sys.executable, "-m", "scraper.run_full_scrape", "--dimension", dimension, "--concurrent-states", str(concurrent_states)]
+    if force:
+        cmd.append("--force")
+    logger.info("Starting scraper subprocess for dimension: %s (concurrent_states=%s, force=%s)", dimension, concurrent_states, force)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -104,7 +109,7 @@ def _run_dimension_sync(dimension: str) -> int:
     return proc.wait()
 
 
-async def run_scraper() -> None:
+async def run_scraper(concurrent_states: int = 1, force: bool = True) -> None:
     """Launch the full-India live scrape as separate OS processes and await completion.
 
     Playwright's Chromium subprocess was observed (during manual verification) to crash
@@ -122,15 +127,28 @@ async def run_scraper() -> None:
     three sessions, same per-RTO throttle each -- just overlapped in time
     instead of laid end to end). The only new risk this introduces is three
     processes writing to PostgreSQL through independent connection pools.
+
+    `concurrent_states` controls how many states are scraped in parallel within
+    each dimension process. Each state runs in its own HTTP session with its
+    own pacing (1.5s between RTO requests), so N concurrent states means
+    N requests every ~1.5s instead of 1.
+
+    `force` (default True): re-scrape every RTO for the current year even if
+    it already has data. run_full_scrape.py's --year always defaults to the
+    current calendar year, so this never touches historical years -- but
+    without it, VAHAN's own late/backfilled registrations for recent months
+    never get picked up: any RTO that already has *a* row for this year gets
+    silently skipped, so the same stale numbers persist run after run no
+    matter how often the scheduler fires.
     """
     settings.REFRESH_STATUS = "running"
     settings.REFRESH_ERROR = None
     settings.LAST_REFRESH_STARTED_AT = datetime.now(timezone.utc)
-    logger.info("Starting live VAHAN4 scrape at %s", settings.LAST_REFRESH_STARTED_AT)
+    logger.info("Starting live VAHAN4 scrape at %s (concurrent_states=%s, force=%s)", settings.LAST_REFRESH_STARTED_AT, concurrent_states, force)
 
     try:
         results = await asyncio.gather(
-            *(asyncio.to_thread(_run_dimension_sync, dimension) for dimension in DIMENSIONS),
+            *(asyncio.to_thread(_run_dimension_sync, dimension, concurrent_states, force) for dimension in DIMENSIONS),
             return_exceptions=True,
         )
     except asyncio.CancelledError:
