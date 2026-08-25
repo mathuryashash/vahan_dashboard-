@@ -7,7 +7,7 @@ import {
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown, getMonthDetail, getAvailableYears } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -183,11 +183,13 @@ export function OverviewPage() {
   const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
   const vehicleMixReady = useSettledLayout(categoriesLoading);
 
-  // The live scraper can only pivot one dimension (maker OR vehicle_class)
-  // per RTO visit, so a category filter and a brand filter can never both
-  // match the same row for any live-scraped year -- combining them always
-  // zeroes out every KPI. Surfaced explicitly so it reads as a known
-  // data-source limitation instead of looking like broken data.
+  // The KPI cards/trend chart above can't combine Category + Maker (the live
+  // scraper's maker-pass and vehicle_class-pass never share a row for the
+  // same RTO/month). A real answer for this combination DOES exist though --
+  // the separate Maker x Vehicle Class cross-tab (year-only, no month
+  // breakdown, see docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md)
+  // -- surfaced below via MakerCategoryPanel instead of leaving this an
+  // always-zero dead end.
   const impossibleCrossFilter = !!(selectedCategory && selectedMaker);
 
   const activeFiltersCount = [
@@ -317,10 +319,13 @@ export function OverviewPage() {
       </div>
 
       {impossibleCrossFilter && (
-        <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
-          <span className="font-semibold text-[var(--accent)]">Category + Brand together always shows 0 —</span>{' '}
-          VAHAN's scraper can only capture one of these dimensions per RTO visit, so no row ever has both a specific category and a specific brand for live-scraped years. This isn't missing data, it's a source limitation. Clear one filter to see real numbers.
-        </div>
+        <MakerCategoryPanel
+          year={selectedYear}
+          category={selectedCategory!}
+          maker={selectedMaker!}
+          month={selectedMonth}
+          state={selectedState}
+        />
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -539,6 +544,41 @@ export function OverviewPage() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Real Category + Maker combined data, from the separate Maker x Vehicle
+ * Class cross-tab (year-only, no month breakdown -- see
+ * docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md).
+ * Rendered only when both selectedCategory and selectedMaker are set. */
+function MakerCategoryPanel({ year, category, maker, month, state }: { year: number; category: string; maker: string; month: number | null; state: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['makerCategoryBreakdown', year, category, maker, state],
+    queryFn: () => getMakerCategoryBreakdown({ year, vehicle_category: category, maker, state }),
+  });
+
+  const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
+
+  return (
+    <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span>
+          <span className="font-semibold text-[var(--accent)]">{maker}</span> in{' '}
+          <span className="font-semibold text-[var(--accent)]">{category}</span>, FY {year}
+          {state && <> · {state}</>}:
+        </span>
+        {isLoading ? (
+          <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
+        ) : (
+          <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
+        )}
+      </div>
+      {month && (
+        <p className="text-[10px] text-[var(--text-muted)] mt-1">
+          This is a year total — the underlying data has no month breakdown, so the Month filter doesn't apply here.
+        </p>
+      )}
     </div>
   );
 }

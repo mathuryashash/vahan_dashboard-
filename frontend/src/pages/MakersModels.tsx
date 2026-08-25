@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { getTopMakers, getModelBreakdown, getCategories } from '../api/vahan';
+import { getTopMakers, getModelBreakdown, getCategories, getMakerCategoryBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -18,9 +18,15 @@ export function MakersModelsPage() {
     queryFn: () => getCategories({ year: selectedYear }),
   });
 
+  // When a category is selected, this ranks real makers within it -- the
+  // Maker x Vehicle Category cross-tab (year-only, no month breakdown, see
+  // docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md) --
+  // instead of the all-category leaderboard.
   const { data: makers, isLoading: makersLoading } = useQuery({
-    queryKey: ['makers-full', selectedYear],
-    queryFn: () => getTopMakers({ year: selectedYear, limit: 20 }),
+    queryKey: ['makers-full', selectedYear, selectedCategory],
+    queryFn: () => selectedCategory
+      ? getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory, limit: 20 })
+      : getTopMakers({ year: selectedYear, limit: 20 }),
   });
 
   const { data: models, isLoading: modelsLoading } = useQuery({
@@ -54,16 +60,17 @@ export function MakersModelsPage() {
         </select>
       </div>
       {selectedCategory && (
-        <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
-          <span className="font-semibold text-[var(--accent)]">Category + Maker together always shows 0 —</span>{' '}
-          VAHAN's live scraper can only pivot one dimension (maker OR category) per visit, so this leaderboard can't be scoped to a category. Showing all-category maker totals instead.
+        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory}</span> registrations for FY {selectedYear} — a year total, no month breakdown available for this view.
         </div>
       )}
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '80ms' }}>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Top Manufacturers</h3>
+            <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
+              {selectedCategory ? `Top Manufacturers — ${selectedCategory}` : 'Top Manufacturers'}
+            </h3>
             <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">click a maker to see its model breakdown below</p>
           </div>
           {selectedMaker && (
