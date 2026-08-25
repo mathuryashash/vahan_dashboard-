@@ -4,7 +4,7 @@ Chromium subprocess was observed to crash reliably within seconds when driven fr
 background task sharing uvicorn's event loop, but runs cleanly as an independent process.
 See app.services.scraper_service.run_scraper(), which launches this via subprocess.
 
-Usage: python -m scraper.run_full_scrape [--year YYYY] [--dimension maker|vehicle_class|fuel]
+Usage: python -m scraper.run_full_scrape [--year YYYY] [--dimension maker|vehicle_class|fuel] [--concurrent-states N]
 
 The live site can only pivot on one dimension per RTO visit (see
 scraper/vahan_scraper.py's DIMENSIONS), so getting maker + vehicle-class + fuel
@@ -97,16 +97,22 @@ async def _purge_synthetic_for_state(db, state_name: str, year: int) -> int:
     return result.rowcount or 0
 
 
-async def main(year: int, dimension: str) -> None:
+async def main(year: int, dimension: str, concurrent_states: int = 1, force: bool = False) -> None:
     logger.info(
-        "Starting live VAHAN4 scrape (year=%s, dimension=%s) at %s",
-        year, dimension, datetime.now(timezone.utc),
+        "Starting live VAHAN4 scrape (year=%s, dimension=%s, concurrent_states=%s, force=%s) at %s",
+        year, dimension, concurrent_states, force, datetime.now(timezone.utc),
     )
     await init_db()  # ensures is_supplementary column exists; this script doesn't go through app.main's lifespan
 
     async with AsyncSessionLocal() as db:
         state_codes = await _state_code_lookup(db)
-        skip_rtos = await _already_done_rtos(db, year, dimension)
+        # force=True re-scrapes every RTO regardless of existing data -- for
+        # refreshing stale numbers, not just resuming an interrupted run.
+        # _already_done_rtos can't tell "already has data from an interrupted
+        # attempt of *this* run" apart from "already has data from a normal
+        # scrape weeks ago"; without force, a full re-scrape intended to
+        # correct stale numbers silently skips almost every RTO instead.
+        skip_rtos = {} if force else await _already_done_rtos(db, year, dimension)
         if skip_rtos:
             total_skipped = sum(len(v) for v in skip_rtos.values())
             logger.info("Resuming: %d RTOs across %d states already scraped this run", total_skipped, len(skip_rtos))
@@ -114,7 +120,7 @@ async def main(year: int, dimension: str) -> None:
         rto_count = 0
         states_replaced = 0
         states_partial = 0
-        async for item in scrape_all_india(year=year, dimension=dimension, skip_rtos=skip_rtos):
+        async for item in scrape_all_india(year=year, dimension=dimension, skip_rtos=skip_rtos, max_concurrent_states=concurrent_states):
             if item.get("state_complete"):
                 state_name = item["state_name"]
                 total, skipped, succeeded = item["rto_total"], item["rto_skipped"], item["rto_succeeded"]
@@ -162,5 +168,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=datetime.now().year)
     parser.add_argument("--dimension", choices=sorted(DIMENSIONS), default="maker")
+    parser.add_argument("--concurrent-states", type=int, default=1, help="Number of states to scrape in parallel (default: 1)")
+    parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data (vs. only resuming an interrupted run)")
     args = parser.parse_args()
-    asyncio.run(main(args.year, args.dimension))
+    asyncio.run(main(args.year, args.dimension, args.concurrent_states, args.force))

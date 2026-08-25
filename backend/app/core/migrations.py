@@ -5,7 +5,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.schema import CreateIndex
 
-from app.core.query_filters import classify_vehicle
+from app.core.query_filters import _VEHICLE_CATEGORY_MAP
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -60,37 +60,50 @@ async def ensure_indexes(engine: AsyncEngine, metadata) -> None:
                 await conn.execute(ddl)
 
 
+def _sql_literal(value: str) -> str:
+    """Single-quoted SQL string literal, with embedded quotes doubled.
+    Values here always come from our own hardcoded classification table
+    (never user input), but this still avoids a bad literal if a future
+    raw value ever contains an apostrophe."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 async def ensure_vehicle_category_backfilled(engine: AsyncEngine, table_name: str = "registrations") -> None:
-    """Classify every row with vehicle_category still NULL. Chunked (not one
-    giant UPDATE) so this is safe to run against 13M+ existing rows on
-    startup without holding a long-lived lock or blowing up memory reading
-    every row into Python at once. Idempotent: only ever touches rows where
-    vehicle_category IS NULL, so a completed backfill costs one cheap COUNT
-    on every subsequent startup.
+    """Classify every row with vehicle_category still NULL, in one bulk
+    UPDATE using a SQL CASE expression built from classify_vehicle's own
+    lookup table -- not a per-row Python loop. A per-row loop here was
+    originally tried and measured at ~100 rows/sec against this table (one
+    network round trip per row), which projects to over 3 days against
+    13M+ existing rows; a single indexed bulk UPDATE does the same work
+    server-side in one pass. Idempotent: only ever touches rows where
+    vehicle_category IS NULL, so a completed backfill costs one cheap
+    no-op UPDATE (matches zero rows) on every subsequent startup.
     """
     if not _IDENTIFIER_RE.match(table_name):
         raise ValueError(f"Invalid table name: {table_name!r}")
-    CHUNK_SIZE = 5000
-    async with engine.connect() as conn:
-        while True:
-            rows = (
-                await conn.execute(
-                    text(f"SELECT id, vehicle_class FROM {table_name} WHERE vehicle_category IS NULL LIMIT :n"),
-                    {"n": CHUNK_SIZE},
-                )
-            ).all()
-            if not rows:
-                break
-            for row_id, vehicle_class in rows:
-                category, tier = classify_vehicle(vehicle_class)
-                await conn.execute(
-                    text(
-                        f"UPDATE {table_name} SET vehicle_category = :category, commercial_tier = :tier "
-                        f"WHERE id = :id"
-                    ),
-                    {"category": category, "tier": tier, "id": row_id},
-                )
-            await conn.commit()
+
+    category_cases = "\n        ".join(
+        f"WHEN {_sql_literal(raw)} THEN {_sql_literal(category)}"
+        for raw, (category, _tier) in _VEHICLE_CATEGORY_MAP.items()
+    )
+    tier_cases = "\n        ".join(
+        f"WHEN {_sql_literal(raw)} THEN {_sql_literal(tier)}"
+        for raw, (_category, tier) in _VEHICLE_CATEGORY_MAP.items()
+        if tier is not None
+    )
+    async with engine.begin() as conn:
+        await conn.execute(text(f"""
+            UPDATE {table_name}
+            SET vehicle_category = CASE UPPER(vehicle_class)
+                {category_cases}
+                ELSE 'Other'
+            END,
+            commercial_tier = CASE UPPER(vehicle_class)
+                {tier_cases}
+                ELSE NULL
+            END
+            WHERE vehicle_category IS NULL
+        """))
 
 
 async def ensure_analyzed(engine: AsyncEngine, table_names: list[str]) -> None:
@@ -110,11 +123,21 @@ async def ensure_analyzed(engine: AsyncEngine, table_names: list[str]) -> None:
     correct statistics for (confirmed by hand while building this check).
     reltuples is what create_all()/ANALYZE actually write and what the
     planner reads, so it can't drift from what matters like that.
+
+    Note: For SQLite, we just run ANALYZE unconditionally since it's fast.
     """
+    is_sqlite = str(engine.url).startswith("sqlite")
     async with engine.connect() as conn:
         for table_name in table_names:
             if not _IDENTIFIER_RE.match(table_name):
                 raise ValueError(f"Invalid table name: {table_name!r}")
+            
+            if is_sqlite:
+                # SQLite: just run ANALYZE (fast, no pg_class)
+                await conn.execute(text(f"ANALYZE {table_name}"))
+                await conn.commit()
+                continue
+                
             reltuples = (
                 await conn.execute(
                     text("SELECT reltuples FROM pg_class WHERE relname = :table_name"),

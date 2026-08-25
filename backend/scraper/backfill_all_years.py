@@ -9,7 +9,7 @@ higher chance of tripping its bot detection. Fully resumable: interrupting
 and re-running just resumes mid-year (per-RTO tracking, see
 run_full_scrape._already_done_rtos) or moves to the next year in the list.
 
-Usage: python -m scraper.backfill_all_years [--start-year 2025] [--end-year 2003]
+Usage: python -m scraper.backfill_all_years [--start-year 2025] [--end-year 2003] [--concurrent-states N]
 """
 import argparse
 import asyncio
@@ -26,15 +26,17 @@ logger = logging.getLogger("backfill_all_years")
 DIMENSION_RETRIES = 3
 DIMENSION_RETRY_BASE_DELAY = 30  # seconds, doubled each attempt
 
+CONCURRENT_STATES = 1  # Can be overridden via CLI
 
-async def _run_dimension_with_retries(year: int, dimension: str) -> None:
+
+async def _run_dimension_with_retries(year: int, dimension: str, concurrent_states: int = CONCURRENT_STATES, force: bool = False) -> None:
     """scrape_year_dimension resumes from the last completed RTO on every
     call (main() re-queries the DB for already-done RTOs at the top), so
     retrying a failed dimension is just calling it again -- no separate
     checkpoint bookkeeping needed here."""
     for attempt in range(DIMENSION_RETRIES):
         try:
-            await scrape_year_dimension(year, dimension)
+            await scrape_year_dimension(year, dimension, concurrent_states, force)
             return
         except Exception as exc:
             if attempt == DIMENSION_RETRIES - 1:
@@ -47,10 +49,10 @@ async def _run_dimension_with_retries(year: int, dimension: str) -> None:
             await asyncio.sleep(delay)
 
 
-async def run_year(year: int) -> None:
+async def run_year(year: int, concurrent_states: int = CONCURRENT_STATES, force: bool = False) -> None:
     logger.info("=== Starting year %s (maker, vehicle_class, fuel concurrently) ===", year)
     results = await asyncio.gather(
-        *(_run_dimension_with_retries(year, dimension) for dimension in sorted(DIMENSIONS)),
+        *(_run_dimension_with_retries(year, dimension, concurrent_states, force) for dimension in sorted(DIMENSIONS)),
         return_exceptions=True,
     )
     for dimension, result in zip(sorted(DIMENSIONS), results):
@@ -59,12 +61,12 @@ async def run_year(year: int) -> None:
     logger.info("=== Year %s done ===", year)
 
 
-async def main(start_year: int, end_year: int) -> None:
+async def main(start_year: int, end_year: int, concurrent_states: int = CONCURRENT_STATES, force: bool = False) -> None:
     step = -1 if start_year >= end_year else 1
     years = list(range(start_year, end_year + step, step))
-    logger.info("Backfill plan: %d years, newest to oldest: %s", len(years), years)
+    logger.info("Backfill plan: %d years, newest to oldest: %s (force=%s)", len(years), years, force)
     for year in years:
-        await run_year(year)
+        await run_year(year, concurrent_states, force)
     logger.info("Backfill complete: %s", datetime.now())
 
 
@@ -72,5 +74,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--start-year", type=int, default=2025)
     parser.add_argument("--end-year", type=int, default=2003)
+    parser.add_argument("--concurrent-states", type=int, default=1, help="Number of states to scrape in parallel per dimension (default: 1)")
+    parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data, instead of only resuming an interrupted run")
     args = parser.parse_args()
-    asyncio.run(main(args.start_year, args.end_year))
+    asyncio.run(main(args.start_year, args.end_year, args.concurrent_states, args.force))

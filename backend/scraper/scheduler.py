@@ -8,6 +8,7 @@ import httpx
 from app.core.database import AsyncSessionLocal
 from app.services.scraper_service import run_scraper
 from scraper.fada_scraper import discover_releases, parse_release_pdf, persist_oem_sales
+from app.core.config import settings
 
 logger = logging.getLogger("scheduler")
 
@@ -46,7 +47,7 @@ async def run_scheduler_loop() -> None:
 
         started = time.monotonic()
         try:
-            await run_scraper()
+            await run_scraper(concurrent_states=settings.SCRAPER_CONCURRENT_STATES)
             logger.info("Scheduled scrape succeeded in %.0fs (after %d prior failures)", time.monotonic() - started, consecutive_failures)
             consecutive_failures = 0
         except Exception as exc:

@@ -372,11 +372,106 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
     return records
 
 
+async def _scrape_state(
+    session: _VahanSession,
+    state: dict,
+    state_select_id: str,
+    year: int,
+    dimension: str,
+    delay_seconds: float,
+    already_done: frozenset[str],
+) -> list[dict]:
+    """Scrape all RTOs for a single state. Returns list of yielded items (RTO batches + state_complete)."""
+    state_name = state["state_name"]
+    items: list[dict] = []
+    try:
+        rto_resp = await session.select(
+            state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
+        )
+    except Exception as exc:
+        logger.warning("Failed selecting state %s: %s", state_name, exc)
+        items.append({
+            "state_complete": True, "state_name": state_name,
+            "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
+        })
+        return items
+
+    all_rtos = [
+        {**parsed, "rto_value": value}
+        for value, text in _parse_options(rto_resp, RTO_SELECT_ID)
+        if value != "-1"
+        for parsed in [parse_rto_option(text)]
+        if parsed
+    ]
+    rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
+    skipped_count = len(all_rtos) - len(rtos)
+    if skipped_count:
+        logger.info("%s: skipping %d already-scraped RTOs, %d remaining", state_name, skipped_count, len(rtos))
+
+    succeeded = 0
+    empty = 0
+    for rto in rtos:
+        try:
+            await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
+            records = await scrape_pivot_table(session, year, dimension)
+            if not records:
+                empty += 1
+                logger.warning(
+                    "%s / %s: zero records (dimension=%s, year=%d)",
+                    state_name, rto["rto_code"], dimension, year,
+                )
+            items.append({
+                "state_name": state_name,
+                "rto_code": rto["rto_code"],
+                "rto_name": rto["rto_name"],
+                "records": records,
+            })
+            succeeded += 1
+        except Exception as exc:
+            logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
+        finally:
+            await asyncio.sleep(delay_seconds)
+
+    if empty:
+        logger.warning(
+            "%s: %d/%d scraped RTOs returned zero records (dimension=%s, year=%d)",
+            state_name, empty, succeeded, dimension, year,
+        )
+
+    items.append({
+        "state_complete": True,
+        "state_name": state_name,
+        "rto_total": len(all_rtos),
+        "rto_skipped": skipped_count,
+        "rto_succeeded": succeeded,
+        "rto_empty": empty,
+    })
+    return items
+
+
+async def _scrape_state_worker(
+    state: dict,
+    state_select_id: str,
+    year: int,
+    dimension: str,
+    delay_seconds: float,
+    already_done: frozenset[str],
+) -> list[dict]:
+    """Independent worker: creates its own HTTP client + session, scrapes one state fully."""
+    async with httpx.AsyncClient(
+        headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
+    ) as client:
+        session = _VahanSession(client)
+        await session.load()
+        return await _scrape_state(session, state, state_select_id, year, dimension, delay_seconds, already_done)
+
+
 async def scrape_all_india(
     year: int,
     dimension: str = "maker",
     delay_seconds: float = REQUEST_DELAY_SECONDS,
     skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006 - never mutated
+    max_concurrent_states: int = 1,
 ):
     """Async generator yielding one dict per (state, rto) combination:
     {'state_name': str, 'rto_code': str, 'rto_name': str, 'records': [ {label, month, year, count}, ... ]}
@@ -396,6 +491,12 @@ async def scrape_all_india(
     partially-done state instead of restarting it from its first RTO every
     time — this matters a lot for large states when the process keeps getting
     cut off before finishing even one of them.
+
+    `max_concurrent_states` controls how many states are scraped in parallel.
+    Each state runs in its own independent HTTP session with its own pacing
+    (delay_seconds between RTO requests), so N concurrent states means N
+    requests every ~delay_seconds instead of 1. Default=1 preserves the
+    original serial behavior.
     """
     async with httpx.AsyncClient(
         headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
@@ -412,78 +513,45 @@ async def scrape_all_india(
         states = await get_states(session, page_html, state_select_id)
         logger.info("Discovered %d states", len(states))
 
-        for state in states:
-            state_name = state["state_name"]
-            already_done = skip_rtos.get(state_name, frozenset())
-            try:
-                rto_resp = await session.select(
-                    state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
-                )
-            except Exception as exc:
-                logger.warning("Failed selecting state %s: %s", state_name, exc)
-                yield {
-                    "state_complete": True, "state_name": state_name,
-                    "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
-                }
-                continue
+        if max_concurrent_states <= 1:
+            # Original serial path - reuse the discovery session (client stays open)
+            for state in states:
+                state_name = state["state_name"]
+                already_done = skip_rtos.get(state_name, frozenset())
+                items = await _scrape_state(session, state, state_select_id, year, dimension, delay_seconds, already_done)
+                for item in items:
+                    yield item
+            return
 
-            all_rtos = [
-                {**parsed, "rto_value": value}
-                for value, text in _parse_options(rto_resp, RTO_SELECT_ID)
-                if value != "-1"
-                for parsed in [parse_rto_option(text)]
-                if parsed
-            ]
-            rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
-            skipped_count = len(all_rtos) - len(rtos)
-            if skipped_count:
-                logger.info("%s: skipping %d already-scraped RTOs, %d remaining", state_name, skipped_count, len(rtos))
+        # Concurrent path: partition states across workers, each with its own session
+        semaphore = asyncio.Semaphore(max_concurrent_states)
 
-            succeeded = 0
-            empty = 0
-            for rto in rtos:
-                try:
-                    await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
-                    records = await scrape_pivot_table(session, year, dimension)
-                    if not records:
-                        # Can't tell here whether this RTO genuinely has zero
-                        # registrations for this year/dimension or the scrape
-                        # silently no-op'd (stale ViewState, unexpected page,
-                        # a selector that didn't take) -- either way it's
-                        # worth surfacing rather than passing through quietly,
-                        # since a real parsing regression looks identical to
-                        # this from inside a single RTO.
-                        empty += 1
-                        logger.warning(
-                            "%s / %s: zero records (dimension=%s, year=%d)",
-                            state_name, rto["rto_code"], dimension, year,
-                        )
-                    yield {
-                        "state_name": state_name,
-                        "rto_code": rto["rto_code"],
-                        "rto_name": rto["rto_name"],
-                        "records": records,
-                    }
-                    succeeded += 1
-                except Exception as exc:
-                    logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
-                finally:
-                    await asyncio.sleep(delay_seconds)
+        async def _worker(state: dict) -> list[dict]:
+            async with semaphore:
+                already_done = skip_rtos.get(state["state_name"], frozenset())
+                return await _scrape_state_worker(state, state_select_id, year, dimension, delay_seconds, already_done)
 
-            if empty:
-                logger.warning(
-                    "%s: %d/%d scraped RTOs returned zero records (dimension=%s, year=%d)",
-                    state_name, empty, succeeded, dimension, year,
-                )
+        # Launch all state workers
+        tasks = [_worker(state) for state in states]
+        for coro in asyncio.as_completed(tasks):
+            items = await coro
+            for item in items:
+                yield item
 
-            yield {
-                "state_complete": True,
-                "state_name": state_name,
-                "rto_total": len(all_rtos),
-                "rto_skipped": skipped_count,
-                "rto_succeeded": succeeded,
-                "rto_empty": empty,
-            }
+    # Concurrent path: partition states across workers, each with its own session
+    semaphore = asyncio.Semaphore(max_concurrent_states)
+
+    async def _worker(state: dict) -> list[dict]:
+        async with semaphore:
+            already_done = skip_rtos.get(state["state_name"], frozenset())
+            return await _scrape_state_worker(state, state_select_id, year, dimension, delay_seconds, already_done)
+
+    # Launch all state workers
+    tasks = [_worker(state) for state in states]
+    for coro in asyncio.as_completed(tasks):
+        items = await coro
+        for item in items:
+            yield item
 
 
 if __name__ == "__main__":

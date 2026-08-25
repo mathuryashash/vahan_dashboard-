@@ -1,20 +1,29 @@
 import logging
-
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.pool import NullPool
 from app.core.config import settings
 
 logger = logging.getLogger("database")
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=False,
-    future=True,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-)
+is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
+if is_sqlite:
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=False,
+        future=True,
+        poolclass=NullPool,
+    )
+else:
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=False,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+    )
 AsyncSessionLocal = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -37,6 +46,8 @@ async def get_db():
 
 
 async def init_db():
+    # Import models to register them with Base.metadata
+    from app.models import models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     from app.core.migrations import ensure_analyzed, ensure_columns, ensure_indexes, ensure_vehicle_category_backfilled
