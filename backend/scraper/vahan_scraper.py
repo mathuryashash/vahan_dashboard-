@@ -132,47 +132,118 @@ def _parse_row_count(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-# When Y-axis=Maker and X-axis=Vehicle Class, VAHAN's own column headers are
-# ['S No', <a static "Vehicle Class" label VAHAN always shows here regardless
-# of Y-axis choice -- a UI quirk, not a real column>, 'TOTAL', <class1>,
-# <class2>, ...] -- TOTAL sits right after the row label, *before* the
-# per-class columns, unlike the month pivot where TOTAL is last. Confirmed
-# against a live response this session (2026-08-25).
-_MAKER_CATEGORY_NON_CLASS_HEADERS = {"S NO", "VEHICLE CLASS", "TOTAL"}
+# When Y-axis=Maker/Fuel and X-axis=Vehicle Class, VAHAN renders one of two
+# header shapes for the same report depending on how many vehicle classes
+# have data (confirmed live, both against the *same* RTO/year on separate
+# requests, 2026-08-26):
+#   - Flat: one <tr> with ['S No', <row-label placeholder>, 'TOTAL',
+#     <class1>, <class2>, ...] -- TOTAL sits right after the row label.
+#   - Grouped (wide class sets trigger this): two <tr>s. The first has
+#     ['S No', <row-label>, 'Vehicle Class' (colspan=N, a group caption, not
+#     a column), 'TOTAL'] with S No/row-label/TOTAL as rowspan=2; the second
+#     <tr> has the N real leaf class headers, which slot in where the
+#     colspan group sat. Body rows follow the SAME final order, so here
+#     TOTAL is *last*, after all N class values -- not third.
+# Assuming one fixed layout (as an earlier version of this parser did)
+# desyncs row-cell chunking the moment a response uses the other shape,
+# corrupting every row after the first mismatch ('invalid literal for
+# int()' on what should be a count cell).
+_TH_OPEN_RE = re.compile(r"<th\b([^>]*)>")
+
+
+def _extract_ths(row_html: str) -> list[tuple[str, int]]:
+    """[(label, colspan), ...] for each <th> in one header <tr>'s inner HTML."""
+    result = []
+    for m in _TH_OPEN_RE.finditer(row_html):
+        attrs = m.group(1)
+        label_m = re.search(r'aria-label="([^"]*)"', attrs)
+        colspan_m = re.search(r'colspan="(\d+)"', attrs)
+        label = html.unescape(label_m.group(1)).strip("\xa0 \t") if label_m else ""
+        colspan = int(colspan_m.group(1)) if colspan_m else 1
+        result.append((label, colspan))
+    return result
+
+
+def _parse_header_layout(text: str) -> tuple[list[str], bool]:
+    """Returns (class_names_in_column_order, total_before_classes). Handles
+    both the flat and grouped header shapes -- see module comment above.
+    Falls back to a flat aria-label scan (this function's original
+    behaviour) when the response has no <th> markup at all, e.g. hand-built
+    test fixtures that just string together bare aria-label attributes."""
+    head_match = re.search(r"<thead.*?</thead>", text, re.S)
+    header_text = head_match.group(0) if head_match else text
+    tr_blocks = re.findall(r"<tr[^>]*>(.*?)</tr>", header_text, re.S)
+
+    leaf_labels: list[str]
+    if tr_blocks:
+        top = _extract_ths(tr_blocks[0])
+        if len(tr_blocks) > 1 and any(colspan > 1 for _, colspan in top):
+            sub_labels = [label for label, _ in _extract_ths(tr_blocks[1])]
+            leaf_labels = []
+            sub_idx = 0
+            for label, colspan in top:
+                if colspan > 1:
+                    leaf_labels.extend(sub_labels[sub_idx : sub_idx + colspan])
+                    sub_idx += colspan
+                else:
+                    leaf_labels.append(label)
+        else:
+            leaf_labels = [label for label, _ in top]
+    else:
+        # No <th> markup (bare aria-label fixture, or a fragment that
+        # doesn't include the header row structure) -- fall back to a flat
+        # scan; every real response has real <th> tags, this path only
+        # exists for minimal test fixtures.
+        leaf_labels = [
+            html.unescape(m).strip("\xa0 \t")
+            for m in re.findall(r'aria-label="([^"]{1,40})"', header_text)
+        ]
+
+    # Position 0 is always S No, position 1 is always the Y-axis row's own
+    # (non-data) label header (text varies: "Maker", "Fuel", "Vehicle Class
+    # " for the flat layout's placeholder) -- both skipped positionally
+    # rather than by name, since the label text isn't fixed across
+    # dimensions. Whichever remaining leaf is literally "TOTAL" is excluded
+    # and its position tells us where it sits relative to the classes.
+    class_names: list[str] = []
+    total_index: int | None = None
+    for i, label in enumerate(leaf_labels):
+        if i == 0:
+            continue
+        if i == 1:
+            continue
+        if label.upper() == "TOTAL":
+            total_index = i
+            continue
+        if label:
+            class_names.append(label)
+
+    total_before_classes = total_index == 2
+    return class_names, total_before_classes
 
 
 def _parse_vehicle_class_columns(text: str) -> list[str]:
-    """Vehicle class names in column order for the Maker x Vehicle Class
-    pivot, read from aria-label headers same as _parse_month_columns reads
-    month abbreviations -- but here the values are full class names, not
-    fixed 3-letter codes, so this can't reuse the same MONTH_ABBR allowlist.
-    Excludes the fixed S No/Vehicle Class-label/TOTAL headers that appear on
-    every response regardless of which classes are actually present."""
-    # Bounded to 1-40 chars: matches the exact pattern confirmed live against
-    # a real click_refresh() response this session -- these responses are
-    # JSF partial-response fragments scoped to just the table panel, not the
-    # full page, so an unscoped aria-label scan doesn't pick up unrelated
-    # page chrome the way it would on a full-page load.
-    labels = re.findall(r'aria-label="([^"]{1,40})"', text)
-    classes = []
-    for label in labels:
-        cleaned = label.strip("\xa0 \t")
-        if not cleaned or cleaned.upper() in _MAKER_CATEGORY_NON_CLASS_HEADERS:
-            continue
-        classes.append(html.unescape(cleaned))
-    return classes
+    """Vehicle class names in column order for the Maker/Fuel x Vehicle
+    Class pivot -- see _parse_header_layout."""
+    return _parse_header_layout(text)[0]
 
 
-def _parse_maker_category_table_rows(text: str, num_class_cols: int) -> list[list[str]]:
-    """Row cell text values in order: [S No, Maker, Total, <class>...] -- same
-    cell-extraction mechanism as _parse_table_rows (same TABLE_ID-based label
-    regex), just a different column layout (Total before the per-class
-    counts, not after)."""
+def _parse_maker_category_table_rows(
+    text: str, num_class_cols: int, total_before_classes: bool = True
+) -> list[list[str]]:
+    """Row cell text values, normalized to [S No, <label>, Total, <class>...]
+    regardless of which header shape produced them (see _parse_header_layout)
+    -- same cell-extraction mechanism as _parse_table_rows (same
+    TABLE_ID-based label regex), just a different column layout."""
     cells = re.findall(rf'<label id="{TABLE_ID}:\d+:[^"]*"[^>]*>([^<]*)</label>', text)
     row_len = 2 + 1 + num_class_cols
     if row_len <= 0:
         return []
-    return [cells[i : i + row_len] for i in range(0, len(cells) - row_len + 1, row_len)]
+    rows = [cells[i : i + row_len] for i in range(0, len(cells) - row_len + 1, row_len)]
+    if total_before_classes:
+        return rows
+    # [S No, label, class..., Total] -> [S No, label, Total, class...]
+    return [[r[0], r[1], r[-1], *r[2:-1]] for r in rows]
 
 
 class _VahanSession:
@@ -391,7 +462,7 @@ async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int,
     await _configure_pivot(session, year, yaxis_value, xaxis_value="Vehicle Class")
     table_html = await session.click_refresh()
 
-    class_cols = _parse_vehicle_class_columns(table_html)
+    class_cols, total_before_classes = _parse_header_layout(table_html)
     row_count = _parse_row_count(table_html)
     if not class_cols or row_count == 0:
         return []
@@ -408,13 +479,13 @@ async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int,
                 if count:
                     records.append({label_key: label, "vehicle_class": vehicle_class, "count": count})
 
-    _rows_to_records(_parse_maker_category_table_rows(table_html, len(class_cols)))
+    _rows_to_records(_parse_maker_category_table_rows(table_html, len(class_cols), total_before_classes))
 
     first = PAGE_SIZE
     pages_fetched = 0
     while first < row_count and pages_fetched < MAX_PAGES:
         page_html = await session.fetch_table_page(first)
-        _rows_to_records(_parse_maker_category_table_rows(page_html, len(class_cols)))
+        _rows_to_records(_parse_maker_category_table_rows(page_html, len(class_cols), total_before_classes))
         first += PAGE_SIZE
         pages_fetched += 1
 
