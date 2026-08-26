@@ -336,6 +336,8 @@ class _VahanSession:
                 "Referer": REPORT_URL,
                 "Origin": "https://vahan.parivahan.gov.in",
                 "Accept": "application/xml, text/xml, */*; q=0.01",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
             },
         )
         resp.raise_for_status()
@@ -386,6 +388,8 @@ class _VahanSession:
                 "Referer": REPORT_URL,
                 "Origin": "https://vahan.parivahan.gov.in",
                 "Accept": "application/xml, text/xml, */*; q=0.01",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
             },
         )
         resp.raise_for_status()
@@ -529,7 +533,7 @@ async def _iter_table_pages(session: _VahanSession, row_count: int, parse_page, 
     prev_first_row: list[str] | None = first_page_rows[0] if first_page_rows else None
     while first < row_count and pages_fetched < MAX_PAGES:
         rows: list[list[str]] = []
-        for attempt in range(3):
+        for attempt in range(5):
             await asyncio.sleep(PAGE_FETCH_DELAY_SECONDS)
             page_html = await session.fetch_table_page(first)
             rows = parse_page(page_html)
@@ -537,9 +541,20 @@ async def _iter_table_pages(session: _VahanSession, row_count: int, parse_page, 
             if not rows or first_row != prev_first_row:
                 break
             logger.warning(
-                "Stale/duplicate page at offset %d (attempt %d/3), retrying...", first, attempt + 1
+                "Stale/duplicate page at offset %d (attempt %d/5), retrying...", first, attempt + 1
             )
-            await asyncio.sleep(2 * (attempt + 1))
+            await asyncio.sleep(3 * (attempt + 1))
+        else:
+            # All 5 attempts returned a duplicate of the previous page.
+            # Persisting this page would double-count its rows AND silently
+            # drop whichever page never arrived -- raise rather than accept,
+            # so the caller's per-RTO handler skips this RTO and a later
+            # resume pass can retry it, instead of writing corrupted rows
+            # that look exactly like real data.
+            raise RuntimeError(
+                f"Pagination stuck: offset {first} returned a duplicate of the "
+                f"previous page on all 5 attempts (row_count={row_count})"
+            )
         prev_first_row = rows[0] if rows else prev_first_row
         yield rows
         first += PAGE_SIZE
