@@ -7,7 +7,9 @@ two-<tr> header (a colspan group over the leaf class columns) with TOTAL
 last. See _parse_header_layout in vahan_scraper.py.
 """
 from scraper.vahan_scraper import (
+    PAGE_SIZE,
     TABLE_ID,
+    _iter_table_pages,
     _parse_header_layout,
     _parse_maker_category_table_rows,
     _parse_vehicle_class_columns,
@@ -106,6 +108,49 @@ def test_parse_maker_category_table_rows_reorders_when_total_is_last():
         ["1", "ACTION CONSTRUCTION EQUIPMENT LTD.", "5", "0", "0", "5"],
         ["2", "HONDA MOTORCYCLE", "1,20,000", "1,00,000", "20,000", "0"],
     ]
+
+
+class _FakeSession:
+    """Fake _VahanSession.fetch_table_page: returns each html in `responses`
+    in order, one per call. Used to simulate VAHAN serving a stale duplicate
+    of the previous page before eventually serving the real next page."""
+
+    def __init__(self, responses):
+        self._responses = iter(responses)
+        self.call_count = 0
+
+    async def fetch_table_page(self, first):
+        self.call_count += 1
+        return next(self._responses)
+
+
+async def test_iter_table_pages_retries_past_a_stale_duplicate_page():
+    # VAHAN occasionally re-serves the previous page's content when
+    # pagination requests fire back-to-back with no gap -- confirmed live
+    # against production (two different `first` offsets returning
+    # byte-identical html). This corrupted maker/fuel-category totals: the
+    # duplicated page's rows got double-counted while whichever page never
+    # actually got fetched went missing. _iter_table_pages must detect a
+    # repeat of the previous page's first row and retry instead of accepting
+    # it as new data.
+    page1_first_row = ["1", "MAKER A", "5"]
+    stale_duplicate_of_page1 = [page1_first_row, ["2", "MAKER B", "3"]]
+    real_page2 = [["3", "MAKER C", "7"], ["4", "MAKER D", "2"]]
+    session = _FakeSession([stale_duplicate_of_page1, real_page2])
+
+    responses = iter([stale_duplicate_of_page1, real_page2])
+
+    def parse_page(_html):
+        return next(responses)
+
+    collected = []
+    async for rows in _iter_table_pages(
+        session, row_count=PAGE_SIZE + 1, parse_page=parse_page, first_page_rows=[page1_first_row]
+    ):
+        collected.append(rows)
+
+    assert collected == [real_page2]
+    assert session.call_count == 2  # one stale attempt, one retry that succeeded
 
 
 def test_parse_maker_category_table_rows_extracts_maker_and_class_counts():

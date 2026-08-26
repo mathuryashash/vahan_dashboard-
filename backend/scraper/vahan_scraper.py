@@ -479,15 +479,16 @@ async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int,
                 if count:
                     records.append({label_key: label, "vehicle_class": vehicle_class, "count": count})
 
-    _rows_to_records(_parse_maker_category_table_rows(table_html, len(class_cols), total_before_classes))
+    first_page_rows = _parse_maker_category_table_rows(table_html, len(class_cols), total_before_classes)
+    _rows_to_records(first_page_rows)
 
-    first = PAGE_SIZE
-    pages_fetched = 0
-    while first < row_count and pages_fetched < MAX_PAGES:
-        page_html = await session.fetch_table_page(first)
-        _rows_to_records(_parse_maker_category_table_rows(page_html, len(class_cols), total_before_classes))
-        first += PAGE_SIZE
-        pages_fetched += 1
+    async for rows in _iter_table_pages(
+        session,
+        row_count,
+        lambda h: _parse_maker_category_table_rows(h, len(class_cols), total_before_classes),
+        first_page_rows,
+    ):
+        _rows_to_records(rows)
 
     return records
 
@@ -502,6 +503,47 @@ async def scrape_fuel_category_table(session: _VahanSession, year: int) -> list[
     'label' is a raw fuel_type string (e.g. 'CNG ONLY'), not yet grouped
     into ICE/Hybrid/EV -- that happens at persist time via fuel_group()."""
     return await scrape_yaxis_by_vehicle_class_table(session, year, DIMENSIONS["fuel"], "fuel_type")
+
+
+PAGE_FETCH_DELAY_SECONDS = 0.5
+
+
+async def _iter_table_pages(session: _VahanSession, row_count: int, parse_page, first_page_rows: list[list[str]] | None = None):
+    """Yields parsed rows for every page beyond the already-parsed first page
+    (offsets PAGE_SIZE, 2*PAGE_SIZE, ...). Pass the first page's already-
+    parsed rows as `first_page_rows` so a duplicate of *that* page can be
+    detected too, not just duplicates between later pages.
+
+    VAHAN occasionally serves a stale duplicate of the previous page when
+    successive pagination AJAX requests fire with no gap between them --
+    confirmed live: two different `first` offsets returning byte-identical
+    table content. Undetected, this both double-counts that page's rows AND
+    silently drops whichever page never actually got fetched, which is what
+    was corrupting maker/fuel-category totals in production (e.g. Bajaj
+    Auto's real per-RTO rows replaced by a duplicate of a different page).
+    Detected here by comparing each page's first parsed row to the previous
+    page's; retries with a short backoff before giving up and accepting
+    what came back."""
+    first = PAGE_SIZE
+    pages_fetched = 0
+    prev_first_row: list[str] | None = first_page_rows[0] if first_page_rows else None
+    while first < row_count and pages_fetched < MAX_PAGES:
+        rows: list[list[str]] = []
+        for attempt in range(3):
+            await asyncio.sleep(PAGE_FETCH_DELAY_SECONDS)
+            page_html = await session.fetch_table_page(first)
+            rows = parse_page(page_html)
+            first_row = rows[0] if rows else None
+            if not rows or first_row != prev_first_row:
+                break
+            logger.warning(
+                "Stale/duplicate page at offset %d (attempt %d/3), retrying...", first, attempt + 1
+            )
+            await asyncio.sleep(2 * (attempt + 1))
+        prev_first_row = rows[0] if rows else prev_first_row
+        yield rows
+        first += PAGE_SIZE
+        pages_fetched += 1
 
 
 async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) -> list[dict]:
@@ -531,15 +573,13 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
                 count = parse_count(row[2 + offset])
                 records.append({"label": label, "month": MONTH_ABBR[month_abbr], "year": year, "count": count})
 
-    _rows_to_records(_parse_table_rows(table_html, len(month_cols)))
+    first_page_rows = _parse_table_rows(table_html, len(month_cols))
+    _rows_to_records(first_page_rows)
 
-    first = PAGE_SIZE
-    pages_fetched = 0
-    while first < row_count and pages_fetched < MAX_PAGES:
-        page_html = await session.fetch_table_page(first)
-        _rows_to_records(_parse_table_rows(page_html, len(month_cols)))
-        first += PAGE_SIZE
-        pages_fetched += 1
+    async for rows in _iter_table_pages(
+        session, row_count, lambda h: _parse_table_rows(h, len(month_cols)), first_page_rows
+    ):
+        _rows_to_records(rows)
 
     return records
 
