@@ -7,7 +7,6 @@ interface AppState {
   selectedCategory: string | null;
   fuelGroup: string | null;
   selectedMaker: string | null;
-  selectedModel: string | null;
   comparisonYearA: number;
   comparisonYearB: number;
   sidebarCollapsed: boolean;
@@ -17,7 +16,6 @@ interface AppState {
   setSelectedCategory: (cat: string | null) => void;
   setFuelGroup: (group: string | null) => void;
   setSelectedMaker: (maker: string | null) => void;
-  setSelectedModel: (model: string | null) => void;
   setComparisonYears: (a: number, b: number) => void;
   toggleSidebar: () => void;
 }
@@ -29,7 +27,6 @@ export const useAppStore = create<AppState>((set) => ({
   selectedCategory: null,
   fuelGroup: null,
   selectedMaker: null,
-  selectedModel: null,
   comparisonYearA: new Date().getFullYear() - 1,
   comparisonYearB: new Date().getFullYear(),
   sidebarCollapsed: false,
@@ -38,8 +35,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSelectedState: (state) => set({ selectedState: state }),
   setSelectedCategory: (cat) => set({ selectedCategory: cat }),
   setFuelGroup: (group) => set({ fuelGroup: group }),
-  setSelectedMaker: (maker) => set({ selectedMaker: maker, selectedModel: null }),
-  setSelectedModel: (model) => set({ selectedModel: model }),
+  setSelectedMaker: (maker) => set({ selectedMaker: maker }),
   setComparisonYears: (a, b) => set({ comparisonYearA: a, comparisonYearB: b }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 }))

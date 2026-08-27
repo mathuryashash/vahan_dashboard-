@@ -7,7 +7,7 @@ import {
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getModelBreakdown, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -59,21 +59,19 @@ export function OverviewPage() {
     selectedCategory,
     fuelGroup,
     selectedMaker,
-    selectedModel,
     setSelectedYear,
     setSelectedMonth,
     setSelectedState,
     setSelectedCategory,
     setFuelGroup,
     setSelectedMaker,
-    setSelectedModel,
   } = useAppStore();
 
   const { data: statesList } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
-    queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
+    queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: () => getKPIs({
       year: selectedYear,
       month: selectedMonth,
@@ -81,24 +79,22 @@ export function OverviewPage() {
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-      vehicle_model: selectedModel
     }),
   });
 
   const { data: trend, isLoading: trendLoading } = useQuery({
-    queryKey: ['trend', selectedYear, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
+    queryKey: ['trend', selectedYear, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: () => getTrend({
       year: selectedYear,
       state: selectedState,
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-      vehicle_model: selectedModel
     }),
   });
 
   const { data: ranking, isLoading: rankingLoading } = useQuery({
-    queryKey: ['stateRanking', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
+    queryKey: ['stateRanking', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: () => getStateRanking({
       year: selectedYear,
       month: selectedMonth,
@@ -106,19 +102,17 @@ export function OverviewPage() {
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-      vehicle_model: selectedModel,
       limit: 10
     }),
   });
 
   const { data: categories, isLoading: categoriesLoading } = useQuery({
-    queryKey: ['categories', selectedYear, selectedMonth, selectedState, selectedMaker, selectedModel],
+    queryKey: ['categories', selectedYear, selectedMonth, selectedState, selectedMaker],
     queryFn: () => getCategories({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
       maker: selectedMaker,
-      vehicle_model: selectedModel
     }),
   });
 
@@ -138,18 +132,6 @@ export function OverviewPage() {
     }),
   });
 
-  const { data: models, isLoading: modelsLoading } = useQuery({
-    queryKey: ['models', selectedCategory, selectedMaker, selectedYear, selectedMonth, selectedState],
-    queryFn: () => getModelBreakdown({
-      vehicle_category: selectedCategory,
-      maker: selectedMaker,
-      year: selectedYear,
-      month: selectedMonth,
-      state: selectedState,
-      limit: 15
-    }),
-  });
-
   // The live VAHAN4 site has no day-level granularity at all -- its finest
   // X-axis option is "Month Wise" (confirmed against the live site's own
   // axis-selector options). A specific-date picker was built against that
@@ -158,7 +140,7 @@ export function OverviewPage() {
   // (and year-to-date through it) is the finest granularity this data source
   // can ever supply.
   const { data: monthDetail, isLoading: monthDetailLoading, isError: monthDetailError } = useQuery<MonthDetail>({
-    queryKey: ['monthDetail', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker, selectedModel],
+    queryKey: ['monthDetail', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: () => getMonthDetail({
       year: selectedYear,
       month: selectedMonth!,
@@ -166,7 +148,6 @@ export function OverviewPage() {
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-      vehicle_model: selectedModel,
     }),
     enabled: selectedMonth != null,
   });
@@ -204,7 +185,6 @@ export function OverviewPage() {
     selectedCategory,
     fuelGroup,
     selectedMaker,
-    selectedModel
   ].filter(Boolean).length;
 
   const handleResetFilters = () => {
@@ -213,7 +193,6 @@ export function OverviewPage() {
     setSelectedCategory(null);
     setFuelGroup(null);
     setSelectedMaker(null);
-    setSelectedModel(null);
   };
 
   const selectClass = "w-full bg-[var(--bg-sunken)] border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-all duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed";
@@ -311,16 +290,6 @@ export function OverviewPage() {
               not scoped to {selectedCategory} — VAHAN can't cross maker × category
             </p>
           )}
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Vehicle Model</label>
-          <select value={selectedModel || ''} onChange={(e) => setSelectedModel(e.target.value || null)} disabled={!selectedMaker} className={selectClass}>
-            <option value="">{selectedMaker ? 'All Models' : 'Select OEM first'}</option>
-            {selectedMaker && (models || []).map((m: { model: string }) => (
-              <option key={m.model} value={m.model}>{m.model}</option>
-            ))}
-          </select>
         </div>
       </div>
 
@@ -456,7 +425,7 @@ export function OverviewPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '300ms' }}>
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -494,54 +463,6 @@ export function OverviewPage() {
           )}
         </div>
 
-        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '350ms' }}>
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Top Vehicle Models</h3>
-              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-                {selectedMaker ? `${selectedMaker} Models Breakdown` : 'Top Models Breakdown'}
-              </p>
-            </div>
-            {selectedMaker && (
-              <button onClick={() => setSelectedMaker(null)} className="text-[9px] uppercase font-mono tracking-wider text-[var(--accent)] hover:opacity-80 transition-opacity">
-                Clear Brand
-              </button>
-            )}
-          </div>
-          {modelsLoading ? (
-            <div className="h-44 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
-          ) : (models || []).length === 0 ? (
-            <div className="h-44 flex flex-col items-center justify-center text-[var(--text-muted)] text-xs border border-dashed border-[var(--border)] rounded-xl">
-              <span>No vehicle models match the active filters</span>
-              <span className="text-[10px] mt-1">Try selecting a different OEM or category</span>
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-              {(models || []).map((m: { model: string; count: number; share_percent: number }, i: number) => {
-                const max = (models || [])[0]?.count || 1;
-                const pct = (m.count / max) * 100;
-                const color = chart.seriesColor(m.model);
-                return (
-                  <div key={m.model} className="flex items-center gap-3 group cursor-pointer" onClick={() => setSelectedModel(m.model)}>
-                    <span className="font-mono text-[11px] font-bold text-[var(--text-muted)] w-4 text-right shrink-0">#{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-semibold text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] transition-colors">{m.model}</span>
-                        <span className="font-mono text-[11px] text-[var(--text-muted)]">{m.share_percent?.toFixed(1)}%</span>
-                      </div>
-                      <div className="h-1.5 bg-[var(--bg-sunken)] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-all duration-700 ease-out" style={{ width: `${pct}%`, backgroundColor: color }} />
-                      </div>
-                    </div>
-                    <span className="font-mono text-[11px] font-bold text-[var(--text-secondary)] w-20 text-right shrink-0">
-                      {m.count?.toLocaleString('en-IN')}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
