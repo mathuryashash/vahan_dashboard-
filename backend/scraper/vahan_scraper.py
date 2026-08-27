@@ -40,9 +40,12 @@ first option matches it, rather than trusting a remembered id.
 
 import asyncio
 import html
+import io
 import logging
 import re
+import zipfile
 from datetime import datetime, timezone
+from xml.etree import ElementTree as ET
 
 import httpx
 
@@ -130,6 +133,68 @@ def _parse_table_rows(text: str, num_month_cols: int) -> list[list[str]]:
 def _parse_row_count(text: str) -> int:
     m = re.search(r"rowCount:(\d+)", text)
     return int(m.group(1)) if m else 0
+
+
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_COL_LETTERS_RE = re.compile(r"[A-Z]+")
+
+
+def _xlsx_column_index(cell_ref: str) -> int:
+    """'C4' -> 2 (0-indexed column)."""
+    letters = _COL_LETTERS_RE.match(cell_ref).group()
+    index = 0
+    for ch in letters:
+        index = index * 26 + (ord(ch) - ord("A") + 1)
+    return index - 1
+
+
+def parse_exported_xlsx(xlsx_bytes: bytes) -> list[list[str]]:
+    """Rows of cell text values (blank cells as '') from a VAHAN table
+    export -- see _VahanSession.export_xlsx. Column position is derived
+    from each cell's own reference (e.g. the 'C4' in `<c r="C4">`), not
+    from position in the XML, since blank cells are omitted from the file
+    entirely rather than emitted empty. No third-party xlsx library needed:
+    the format is just a zip of small, simple XML files."""
+    with zipfile.ZipFile(io.BytesIO(xlsx_bytes)) as z:
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            shared_strings = [
+                "".join(t.text or "" for t in si.iter(f"{_XLSX_NS}t")) for si in root.findall(f"{_XLSX_NS}si")
+            ]
+        sheet_root = ET.fromstring(z.read("xl/worksheets/sheet1.xml"))
+        rows: list[list[str]] = []
+        for row_el in sheet_root.iter(f"{_XLSX_NS}row"):
+            cells: dict[int, str] = {}
+            for c in row_el.findall(f"{_XLSX_NS}c"):
+                col = _xlsx_column_index(c.get("r"))
+                v = c.find(f"{_XLSX_NS}v")
+                value = v.text if v is not None else ""
+                if c.get("t") == "s" and value:
+                    value = shared_strings[int(value)]
+                cells[col] = value
+            rows.append([cells.get(i, "") for i in range(max(cells) + 1)] if cells else [])
+        return rows
+
+
+def _exported_data_start(rows: list[list[str]]) -> int:
+    """Index of the first real data row -- these always start with a
+    numeric S No, unlike the title/header/spacer rows above them."""
+    for i, row in enumerate(rows):
+        if row and row[0].strip().isdigit():
+            return i
+    return len(rows)
+
+
+def _exported_header_row(rows: list[list[str]], data_start: int) -> list[str] | None:
+    """The nearest non-blank row above the first data row -- this is the
+    leaf column-header row (class names / month abbreviations) regardless
+    of whether VAHAN rendered a flat or grouped header for this report;
+    the export always flattens to one row per Excel convention."""
+    for i in range(data_start - 1, -1, -1):
+        if any(cell.strip() for cell in rows[i]):
+            return rows[i]
+    return None
 
 
 # When Y-axis=Maker/Fuel and X-axis=Vehicle Class, VAHAN renders one of two
@@ -399,6 +464,37 @@ class _VahanSession:
             self._viewstate = vs
         return text
 
+    async def export_xlsx(self) -> bytes:
+        """Triggers the report table's own "Download EXCEL file" button (a
+        PrimeFaces <p:dataExporter>, found in the table markup as a plain
+        link -- `<a id="groupingTable:xls" ... onclick="PrimeFaces.
+        addSubmitParam(...).submit(...)">`) and returns the raw .xlsx bytes
+        for whatever report is currently configured.
+
+        This is a normal (non-AJAX) form POST -- no javax.faces.partial.*
+        fields -- and the response dumps the ENTIRE current table in one
+        shot, regardless of row count. That's why callers use this instead
+        of paginating through fetch_table_page: that AJAX pagination
+        occasionally re-served a stale duplicate of the previous page under
+        load (confirmed live, see _iter_table_pages/SessionExpiredError's
+        history), silently corrupting or losing data. A single response
+        with no follow-up requests can't suffer that failure mode."""
+        data = dict(self._form)
+        data["javax.faces.ViewState"] = self._viewstate
+        data["groupingTable:xls"] = "groupingTable:xls"
+        resp = await self._client.post(
+            REPORT_URL,
+            data=data,
+            headers={
+                "Referer": REPORT_URL,
+                "Origin": "https://vahan.parivahan.gov.in",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+        resp.raise_for_status()
+        return resp.content
+
 
 _STATE_SELECT_MARKER = "All Vahan4 Running States"
 
@@ -464,36 +560,27 @@ async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int,
     [{label_key: str, 'vehicle_class': str, 'count': int}, ...] for the
     whole year in one shot."""
     await _configure_pivot(session, year, yaxis_value, xaxis_value="Vehicle Class")
-    table_html = await session.click_refresh()
+    await session.click_refresh()  # renders the report server-side; export reads that state
+    rows = parse_exported_xlsx(await session.export_xlsx())
 
-    class_cols, total_before_classes = _parse_header_layout(table_html)
-    row_count = _parse_row_count(table_html)
-    if not class_cols or row_count == 0:
+    data_start = _exported_data_start(rows)
+    if data_start >= len(rows):
         return []
+    header_row = _exported_header_row(rows, data_start)
+    if header_row is None:
+        return []
+    class_names = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
 
     records: list[dict] = []
-
-    def _rows_to_records(rows: list[list[str]]) -> None:
-        for row in rows:
-            if len(row) < 2 + 1 + len(class_cols):
-                continue
-            label = html.unescape(row[1]).strip()
-            for offset, vehicle_class in enumerate(class_cols):
-                count = parse_count(row[3 + offset])
-                if count:
-                    records.append({label_key: label, "vehicle_class": vehicle_class, "count": count})
-
-    first_page_rows = _parse_maker_category_table_rows(table_html, len(class_cols), total_before_classes)
-    _rows_to_records(first_page_rows)
-
-    async for rows in _iter_table_pages(
-        session,
-        row_count,
-        lambda h: _parse_maker_category_table_rows(h, len(class_cols), total_before_classes),
-        first_page_rows,
-    ):
-        _rows_to_records(rows)
-
+    for row in rows[data_start:]:
+        if not row or not row[0].strip().isdigit():
+            continue
+        label = html.unescape(row[1]).strip() if len(row) > 1 else ""
+        for offset, vehicle_class in enumerate(class_names):
+            cell = row[2 + offset] if len(row) > 2 + offset else ""
+            count = parse_count(cell) if cell else 0
+            if count:
+                records.append({label_key: label, "vehicle_class": html.unescape(vehicle_class), "count": count})
     return records
 
 
@@ -570,32 +657,28 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
     the caller (persist_rto_batch) maps it to the right column."""
     yaxis_value = DIMENSIONS[dimension]
     await _configure_pivot(session, year, yaxis_value)
-    table_html = await session.click_refresh()
+    await session.click_refresh()  # renders the report server-side; export reads that state
+    rows = parse_exported_xlsx(await session.export_xlsx())
 
-    month_cols = _parse_month_columns(table_html)
-    row_count = _parse_row_count(table_html)
-    if not month_cols or row_count == 0:
+    data_start = _exported_data_start(rows)
+    if data_start >= len(rows):
         return []
+    header_row = _exported_header_row(rows, data_start)
+    if header_row is None:
+        return []
+    month_labels = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
 
     records: list[dict] = []
-
-    def _rows_to_records(rows: list[list[str]]) -> None:
-        for row in rows:
-            if len(row) < 2 + len(month_cols) + 1:
+    for row in rows[data_start:]:
+        if not row or not row[0].strip().isdigit():
+            continue
+        label = html.unescape(row[1]).strip() if len(row) > 1 else ""
+        for offset, month_abbr in enumerate(month_labels):
+            if month_abbr not in MONTH_ABBR:
                 continue
-            label = html.unescape(row[1]).strip()
-            for offset, month_abbr in enumerate(month_cols):
-                count = parse_count(row[2 + offset])
-                records.append({"label": label, "month": MONTH_ABBR[month_abbr], "year": year, "count": count})
-
-    first_page_rows = _parse_table_rows(table_html, len(month_cols))
-    _rows_to_records(first_page_rows)
-
-    async for rows in _iter_table_pages(
-        session, row_count, lambda h: _parse_table_rows(h, len(month_cols)), first_page_rows
-    ):
-        _rows_to_records(rows)
-
+            cell = row[2 + offset] if len(row) > 2 + offset else ""
+            count = parse_count(cell) if cell else 0
+            records.append({"label": label, "month": MONTH_ABBR[month_abbr], "year": year, "count": count})
     return records
 
 
