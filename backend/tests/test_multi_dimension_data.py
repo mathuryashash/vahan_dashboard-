@@ -89,6 +89,25 @@ async def test_kpis_filtered_by_fuel_group_reads_the_fuel_pass(client, db_sessio
     assert data["total_this_month"] == 10
 
 
+async def test_kpis_filtered_by_vehicle_category_reads_the_vehicle_class_pass(client, db_session):
+    """Same bug class as the vehicle_class/fuel_group regression tests above,
+    found by QA click-through against the live dashboard: vehicle_category is
+    DERIVED from vehicle_class (classify_vehicle), so the maker-pass rows
+    (vehicle_class='All') always classify to 'Other', never a real category.
+    apply_total_filters excluded supplementary rows whenever vehicle_class
+    itself was unset, even when vehicle_category was -- so every
+    vehicle_category-filtered total silently zeroed out, for every category,
+    including Two-Wheeler (~71% of all registrations)."""
+    await _seed_real_rto(db_session)  # Two-Wheeler: 70, Four-Wheeler (Motor Car): 30
+
+    response = await client.get(
+        "/api/v1/summary/kpis", params={"year": 2026, "month": 1, "vehicle_category": "Two-Wheeler"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_this_month"] == 70
+
+
 async def test_trend_does_not_triple_count(client, db_session):
     await _seed_real_rto(db_session)
 

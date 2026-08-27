@@ -98,16 +98,38 @@ async def get_top_makers(
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
 ):
+    # The canonical maker-pass (Registration.maker IS NOT NULL) never carries
+    # a real vehicle_class/vehicle_category/commercial_tier -- that dimension
+    # only exists on the separate vehicle_class-pass, which in turn never
+    # carries a real maker (see Registration.is_supplementary). A maker
+    # breakdown narrowed by class/category/tier is structurally impossible
+    # from the Registration table -- it silently returned zero rows for
+    # every category (found by live click-through QA). MakerCategoryTotal is
+    # the dedicated crosstab built for exactly this (year-only, no month --
+    # see docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md).
+    if vehicle_class or vehicle_category or commercial_tier:
+        cross_query = select(
+            MakerCategoryTotal.maker, func.sum(MakerCategoryTotal.count).label("total")
+        ).where(MakerCategoryTotal.year == year)
+        if state:
+            cross_query = cross_query.where(MakerCategoryTotal.state_name == state)
+        if vehicle_class:
+            cross_query = cross_query.where(MakerCategoryTotal.vehicle_class == vehicle_class)
+        if vehicle_category:
+            cross_query = cross_query.where(MakerCategoryTotal.vehicle_category == vehicle_category)
+        if commercial_tier:
+            cross_query = cross_query.where(MakerCategoryTotal.commercial_tier == commercial_tier)
+        cross_query = cross_query.group_by(MakerCategoryTotal.maker).order_by(desc("total")).limit(limit)
+        result = await db.execute(cross_query)
+        return [{"maker": r[0], "count": r[1]} for r in result.all()]
+
     query = select(
         Registration.maker, func.sum(Registration.count).label("total")
     ).where(Registration.year == year, Registration.maker.isnot(None))
 
     if month:
         query = query.where(Registration.month == month)
-    query = apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-        commercial_tier=commercial_tier, vehicle_model=vehicle_model,
-    )
+    query = apply_common_filters(query, state=state, vehicle_model=vehicle_model)
 
     query = query.group_by(Registration.maker).order_by(desc("total")).limit(limit)
 
@@ -129,18 +151,36 @@ async def get_fuel_breakdown(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(
-        Registration.fuel_type, func.sum(Registration.count).label("total")
-    ).where(Registration.year == year, Registration.fuel_type.isnot(None))
-
-    if month:
-        query = query.where(Registration.month == month)
-    query = apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-        commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
-    )
-
-    query = query.group_by(Registration.fuel_type)
+    # Same structural limitation as top-makers: the fuel-pass never carries
+    # a real class/category/tier, so a fuel breakdown narrowed by one is
+    # structurally impossible from the Registration table -- silently zero
+    # for every category (found by live click-through QA). FuelCategoryTotal
+    # is the dedicated crosstab for exactly this (year-only, no month).
+    if vehicle_class or vehicle_category or commercial_tier:
+        cross_query = select(
+            FuelCategoryTotal.fuel_type, func.sum(FuelCategoryTotal.count).label("total")
+        ).where(FuelCategoryTotal.year == year)
+        if state:
+            cross_query = cross_query.where(FuelCategoryTotal.state_name == state)
+        if vehicle_class:
+            cross_query = cross_query.where(FuelCategoryTotal.vehicle_class == vehicle_class)
+        if vehicle_category:
+            cross_query = cross_query.where(FuelCategoryTotal.vehicle_category == vehicle_category)
+        if commercial_tier:
+            cross_query = cross_query.where(FuelCategoryTotal.commercial_tier == commercial_tier)
+        cross_query = cross_query.group_by(FuelCategoryTotal.fuel_type)
+        result = await db.execute(cross_query)
+        rows = result.all()
+    else:
+        query = select(
+            Registration.fuel_type, func.sum(Registration.count).label("total")
+        ).where(Registration.year == year, Registration.fuel_type.isnot(None))
+        if month:
+            query = query.where(Registration.month == month)
+        query = apply_common_filters(query, state=state, maker=maker, vehicle_model=vehicle_model)
+        query = query.group_by(Registration.fuel_type)
+        result = await db.execute(query)
+        rows = result.all()
 
     # Grouped in Python, not SQL: VAHAN's raw fuel_type is a specific
     # powertrain/fuel-system string (e.g. "PETROL/HYBRID/CNG"), not the
@@ -149,9 +189,8 @@ async def get_fuel_breakdown(
     # Python is negligible cost next to the query itself, and keeps the
     # bucket rules in one plain-Python place instead of a SQL CASE
     # expression that has to be kept in sync with it by hand.
-    result = await db.execute(query)
     totals: dict[str, int] = {}
-    for raw_fuel_type, total in result.all():
+    for raw_fuel_type, total in rows:
         if fuel_group_filter and fuel_group(raw_fuel_type) != fuel_group_filter:
             continue
         bucket = fuel_category(raw_fuel_type)

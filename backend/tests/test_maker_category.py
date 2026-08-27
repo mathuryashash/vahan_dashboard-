@@ -71,3 +71,22 @@ async def test_maker_category_breakdown_ranks_categories_within_maker(client, db
     assert response.status_code == 200
     rows = {r["vehicle_category"]: r["count"] for r in response.json()}
     assert rows == {"Two-Wheeler": 70, "Four-Wheeler": 10}
+
+
+async def test_top_makers_with_vehicle_category_reads_the_crosstab(client, db_session):
+    """Regression test found by live click-through QA: the canonical
+    maker-pass (Registration.maker IS NOT NULL) never carries a real
+    vehicle_category either (same constraint as summary.py's KPIs bug), and
+    unlike KPIs there's no supplementary row to fall back to here -- a maker
+    breakdown narrowed by category is structurally impossible from the
+    Registration table at all. /top-makers used to silently return [] for
+    every category; it must redirect to MakerCategoryTotal instead."""
+    await _seed_maker_category(db_session)
+
+    response = await client.get(
+        "/api/v1/categories/top-makers",
+        params={"year": 2026, "vehicle_category": "Two-Wheeler"},
+    )
+    assert response.status_code == 200
+    rows = {r["maker"]: r["count"] for r in response.json()}
+    assert rows == {"HONDA": 70, "TVS": 40}

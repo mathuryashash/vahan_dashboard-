@@ -74,7 +74,19 @@ def apply_total_filters(
     would strip out the only rows that could ever match -- this exact bug
     shipped once already for vehicle_class and had to be fixed the same way.
     """
-    if (not vehicle_class or vehicle_class == "All") and not fuel_group:
+    # vehicle_category/commercial_tier are DERIVED from vehicle_class
+    # (classify_vehicle) at persist time, so the maker-pass's vehicle_class=
+    # 'All' always classifies to ('Other', None) -- never a real category or
+    # tier -- same constraint as a real vehicle_class filter. Missing these
+    # two here meant every vehicle_category-filtered total silently zeroed
+    # out, for every category value including Two-Wheeler (~71% of
+    # registrations); found by a live click-through QA pass.
+    if (
+        (not vehicle_class or vehicle_class == "All")
+        and not fuel_group
+        and not vehicle_category
+        and not commercial_tier
+    ):
         query = exclude_supplementary(query)
     return apply_common_filters(
         query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,

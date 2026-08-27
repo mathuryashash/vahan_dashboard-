@@ -71,3 +71,19 @@ async def test_fuel_category_breakdown_ranks_categories_within_fuel_group(client
     assert response.status_code == 200
     rows = {r["vehicle_category"]: r["count"] for r in response.json()}
     assert rows == {"Two-Wheeler": 30, "Four-Wheeler": 40}
+
+
+async def test_fuel_breakdown_with_vehicle_category_reads_the_crosstab(client, db_session):
+    """Regression test found by live click-through QA -- same structural
+    limitation as top-makers: the canonical fuel-pass never carries a real
+    vehicle_category, so /fuel-breakdown silently returned [] for every
+    category. Must redirect to FuelCategoryTotal instead."""
+    await _seed_fuel_category(db_session)  # Two-Wheeler: EV(ELECTRIC(BOV))=70, Petrol=30
+
+    response = await client.get(
+        "/api/v1/categories/fuel-breakdown",
+        params={"year": 2026, "vehicle_category": "Two-Wheeler"},
+    )
+    assert response.status_code == 200
+    rows = {r["fuel_type"]: r["count"] for r in response.json()}
+    assert rows == {"EV": 70, "Petrol": 30}
