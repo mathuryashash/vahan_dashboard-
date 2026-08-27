@@ -599,6 +599,20 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
     return records
 
 
+class SessionExpiredError(RuntimeError):
+    """VAHAN invalidated this session's server-side ViewState (JSF
+    ViewExpiredException) -- every request on this session will now fail the
+    same way, not just the one that surfaced it. Distinguished from a plain
+    per-RTO/per-state failure so the caller can re-authenticate and resume,
+    instead of cascading through every remaining state as individual
+    'failed scraping' log lines (which is what silently ate the last ~6
+    hours of a real cleanup run when this went undetected)."""
+
+
+def _is_session_expired(exc: Exception) -> bool:
+    return "ViewExpiredException" in str(exc)
+
+
 async def _scrape_state(
     session: _VahanSession,
     state: dict,
@@ -616,6 +630,11 @@ async def _scrape_state(
             state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
         )
     except Exception as exc:
+        if _is_session_expired(exc):
+            err = SessionExpiredError(str(exc))
+            err.partial_items = []
+            err.remaining_rtos = None  # never got the RTO list for this state
+            raise err from exc
         logger.warning("Failed selecting state %s: %s", state_name, exc)
         items.append({
             "state_complete": True, "state_name": state_name,
@@ -637,7 +656,7 @@ async def _scrape_state(
 
     succeeded = 0
     empty = 0
-    for rto in rtos:
+    for rto_index, rto in enumerate(rtos):
         try:
             await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
             records = await scrape_pivot_table(session, year, dimension)
@@ -655,6 +674,15 @@ async def _scrape_state(
             })
             succeeded += 1
         except Exception as exc:
+            if _is_session_expired(exc):
+                # Every RTO after this one would fail the same way on this
+                # session. Carry what already succeeded in `items` on the
+                # exception so the caller can still yield it before
+                # re-authenticating and resuming this state from here.
+                err = SessionExpiredError(str(exc))
+                err.partial_items = items
+                err.remaining_rtos = rtos[rto_index:]
+                raise err from exc
             logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
         finally:
             await asyncio.sleep(delay_seconds)
@@ -742,12 +770,57 @@ async def scrape_all_india(
 
         if max_concurrent_states <= 1:
             # Original serial path - reuse the discovery session (client stays open)
+            # for the whole run, across every state/RTO. A run long enough
+            # (hours, across ~1400 RTOs) eventually outlives VAHAN's own
+            # server-side ViewState lifetime: every request then fails with
+            # ViewExpiredException, and without handling it here that cascades
+            # silently through every remaining state as individual "failed
+            # scraping" lines -- confirmed live, killed the last ~6 hours of
+            # a real cleanup run. Re-authenticate and resume instead of
+            # treating it like an ordinary per-RTO failure.
+            max_session_refreshes = 5
+            refreshes_used = 0
             for state in states:
                 state_name = state["state_name"]
                 already_done = skip_rtos.get(state_name, frozenset())
-                items = await _scrape_state(session, state, state_select_id, year, dimension, delay_seconds, already_done)
-                for item in items:
-                    yield item
+                while True:
+                    try:
+                        items = await _scrape_state(
+                            session, state, state_select_id, year, dimension, delay_seconds, already_done
+                        )
+                        for item in items:
+                            yield item
+                        break
+                    except SessionExpiredError as exc:
+                        for item in exc.partial_items:
+                            yield item
+                            if "rto_code" in item:
+                                already_done = already_done | {item["rto_code"]}
+                        if refreshes_used >= max_session_refreshes:
+                            logger.error(
+                                "Session expired scraping %s and the %d-refresh budget for this "
+                                "run is used up -- giving up on %s and every state after it.",
+                                state_name, max_session_refreshes, state_name,
+                            )
+                            yield {
+                                "state_complete": True, "state_name": state_name,
+                                "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
+                            }
+                            return
+                        refreshes_used += 1
+                        logger.warning(
+                            "Session expired scraping %s (refresh %d/%d): %s -- "
+                            "re-authenticating and resuming.",
+                            state_name, refreshes_used, max_session_refreshes, exc,
+                        )
+                        # The State dropdown's JSF component id can drift
+                        # between sessions (see module docstring) -- re-derive
+                        # it from the fresh page rather than reusing the one
+                        # found at the start of this run.
+                        fresh_page_html = await session.load()
+                        rediscovered = discover_state_select_id(fresh_page_html)
+                        if rediscovered:
+                            state_select_id = rediscovered
             return
 
         # Concurrent path: partition states across workers, each with its own session

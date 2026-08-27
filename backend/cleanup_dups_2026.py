@@ -113,7 +113,13 @@ async def main(dimension: str) -> None:
         async for item in scrape_all_india(
             year=2026,
             dimension=dimension,
-            delay_seconds=REQUEST_DELAY_SECONDS,
+            # Double the normal per-RTO delay for this recovery pass: the
+            # last maker run hit stale-page-stuck on ~35% of RTOs (vs. ~3%
+            # seen testing vehicle_class in isolation) and eventually a
+            # ViewExpiredException too -- consistent with VAHAN throttling a
+            # session that's been under sustained continuous load for
+            # hours. Slower and reliable beats fast and mostly-corrupted.
+            delay_seconds=REQUEST_DELAY_SECONDS * 2,
             skip_rtos=skip_rtos,
             max_concurrent_states=1,
         ):
