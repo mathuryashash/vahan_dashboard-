@@ -72,13 +72,29 @@ export function ComparisonPage() {
           <div key={i} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
             <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">{s.label}</p>
             {i < 2 ? (
-              <select
-                value={s.value}
-                onChange={(e) => s.setter(e.target.value)}
-                className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm font-semibold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-colors"
-              >
-                {stateOptions.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-              </select>
+              stateOptions.length === 0 ? (
+                // /comparison/all-states is slow enough (seconds, not
+                // milliseconds) that a plain <select> with zero <option>s
+                // renders with no visible selection during that window --
+                // a browser can't select a value that isn't one of its
+                // options yet, even though stateA/stateB are already
+                // correctly "Maharashtra"/"Gujarat" internally. Found by
+                // live click-through QA as a blank dropdown with no cue of
+                // which states are being compared; a real loading state
+                // is honest about what's actually happening instead of
+                // silently showing an empty control.
+                <div className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-muted)] animate-pulse-soft">
+                  Loading states…
+                </div>
+              ) : (
+                <select
+                  value={s.value}
+                  onChange={(e) => s.setter(e.target.value)}
+                  className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm font-semibold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-colors"
+                >
+                  {stateOptions.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              )
             ) : (
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full" style={{ background: s.color }} />
