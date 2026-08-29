@@ -108,6 +108,41 @@ async def test_kpis_filtered_by_vehicle_category_reads_the_vehicle_class_pass(cl
     assert data["total_this_month"] == 70
 
 
+async def test_available_years_caches_across_requests(client, db_session):
+    """DISTINCT year over the full Registration table forces a full parallel
+    seq scan in production (confirmed via EXPLAIN ANALYZE: ~17.5s, 938k
+    buffer reads) since Postgres can't skip-scan for a handful of distinct
+    values -- the result changes at most a few times a day, so it's cached
+    rather than re-queried on every single page load."""
+    from app.api.v1.endpoints import summary as summary_module
+    summary_module._available_years_cache["years"] = None
+    summary_module._available_years_cache["at"] = 0.0
+
+    await _seed_real_rto(db_session)  # year 2026 only
+
+    response = await client.get("/api/v1/summary/available-years")
+    assert response.status_code == 200
+    assert response.json() == [2026]
+
+    # New data for a different year lands, but a second call within the TTL
+    # must still return the cached (now stale-looking) result, not re-query.
+    await _seed_real_rto(db_session, rto_code="DL2", rto_name="Test RTO 2")
+    db_session.add(Registration(
+        state_code="DL", state_name="Delhi", rto_code="DL3", rto_name="Test RTO 3",
+        vehicle_class="All", vehicle_category="Other", commercial_tier=None,
+        year=2025, month=1, maker="HONDA", count=5, is_supplementary=False,
+    ))
+    await db_session.commit()
+
+    response = await client.get("/api/v1/summary/available-years")
+    assert response.json() == [2026]
+
+    # Force the cache to look expired -- the next call must pick up 2025 too.
+    summary_module._available_years_cache["at"] = 0.0
+    response = await client.get("/api/v1/summary/available-years")
+    assert response.json() == [2026, 2025]
+
+
 async def test_trend_does_not_triple_count(client, db_session):
     await _seed_real_rto(db_session)
 

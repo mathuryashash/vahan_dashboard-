@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,16 @@ router = APIRouter()
 # don't need a source change every January.
 _DEFAULT_YEAR = datetime.now().year
 
+# DISTINCT year over 26M+ rows forces Postgres into a full parallel seq scan
+# (confirmed via EXPLAIN ANALYZE: ~17.5s, 938k buffer reads) since it has no
+# way to skip-scan for a handful of distinct values. The result changes at
+# most a few times a day (a new year appearing, or a backfill run) -- caching
+# it for a few minutes turns every request but the first per window from a
+# 17s+ full scan into a dict lookup, which is a far better trade than adding
+# an index Postgres won't use for this query shape anyway.
+_available_years_cache: dict = {"years": None, "at": 0.0}
+_AVAILABLE_YEARS_CACHE_TTL_SECONDS = 300
+
 
 @router.get("/available-years")
 async def get_available_years(db: AsyncSession = Depends(get_db)):
@@ -24,10 +35,17 @@ async def get_available_years(db: AsyncSession = Depends(get_db)):
     shipped alongside every scrape. Driving the filter from this instead
     means a new year becomes selectable the moment it's scraped, with no
     frontend deploy needed."""
+    now = time.monotonic()
+    if _available_years_cache["years"] is not None and now - _available_years_cache["at"] < _AVAILABLE_YEARS_CACHE_TTL_SECONDS:
+        return _available_years_cache["years"]
+
     result = await db.execute(
         exclude_supplementary(select(Registration.year).distinct()).order_by(Registration.year.desc())
     )
-    return [row[0] for row in result.all()]
+    years = [row[0] for row in result.all()]
+    _available_years_cache["years"] = years
+    _available_years_cache["at"] = now
+    return years
 
 
 @router.get("/kpis", response_model=DashboardKPIs)
