@@ -24,9 +24,16 @@ export function MakersModelsPage() {
   // instead of the all-category leaderboard.
   const { data: makers, isLoading: makersLoading } = useQuery({
     queryKey: ['makers-full', selectedYear, selectedCategory],
-    queryFn: () => selectedCategory
-      ? getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory, limit: 20 })
-      : getTopMakers({ year: selectedYear, limit: 20 }),
+    // Switching the Category filter changes queryKey, so this and the
+    // previous key's request can both be briefly in flight -- forwarding
+    // React Query's abort signal to axios lets it actually cancel the
+    // abandoned one instead of leaving it to resolve on its own time and
+    // race the current selection (found by live click-through QA: the
+    // unfiltered top-makers call is slow enough that a quick category
+    // click could still see it land after the filtered one).
+    queryFn: ({ signal }) => selectedCategory
+      ? getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory, limit: 20 }, signal)
+      : getTopMakers({ year: selectedYear, limit: 20 }, signal),
   });
 
   const { data: models, isLoading: modelsLoading } = useQuery({

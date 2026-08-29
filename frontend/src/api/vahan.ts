@@ -33,8 +33,8 @@ export const getYoYSummary = (year_a: number, year_b: number) =>
   api.get('/yoy/summary', { params: { year_a, year_b } }).then(r => r.data);
 export const getCategories = (params?: FilterParams) =>
   api.get('/categories/', { params }).then(r => r.data);
-export const getTopMakers = (params?: FilterParams & { limit?: number }) =>
-  api.get('/categories/top-makers', { params }).then(r => r.data);
+export const getTopMakers = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>
+  api.get('/categories/top-makers', { params, signal }).then(r => r.data);
 export const getFuelBreakdown = (params?: FilterParams) =>
   api.get('/categories/fuel-breakdown', { params }).then(r => r.data);
 export const getModelBreakdown = (params?: FilterParams & { limit?: number }) =>
@@ -53,8 +53,8 @@ export const getOemMonthly = (params: { category: string; year: number; month?: 
 export const getOemTrend = (params: { maker: string; category: string }) =>
   api.get('/oem-sales/trend', { params }).then(r => r.data);
 
-export const getMakerCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; limit?: number }) =>
-  api.get('/categories/maker-category-breakdown', { params }).then(r => r.data);
+export const getMakerCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; limit?: number }, signal?: AbortSignal) =>
+  api.get('/categories/maker-category-breakdown', { params, signal }).then(r => r.data);
 
 export const getFuelCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; fuel_group?: string | null }) =>
   api.get('/categories/fuel-category-breakdown', { params }).then(r => r.data);
