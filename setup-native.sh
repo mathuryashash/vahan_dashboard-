@@ -24,6 +24,19 @@ command -v node >/dev/null 2>&1 || { echo "Node not found on PATH. Install Node 
 command -v psql >/dev/null 2>&1 || { echo "psql not found on PATH. Install PostgreSQL first."; exit 1; }
 
 echo "[1/5] Checking PostgreSQL role/database..."
+# SUPERPASSWORD's default ("postgres") is just a common guess -- most real
+# installs (especially the Windows installer, which prompts you to choose
+# one) use something else. Rather than dying on a wrong guess, retry once
+# interactively: this is the setup path every future install/buyer machine
+# goes through, and "password authentication failed" with no recovery path
+# is a bad first impression on a machine that's otherwise fine.
+if ! PGPASSWORD="$SUPERPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$SUPERUSER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+  if [ -t 0 ]; then
+    echo "  Default superuser password didn't work for '$SUPERUSER'."
+    read -r -s -p "  Enter the PostgreSQL superuser password for '$SUPERUSER': " SUPERPASSWORD
+    echo ""
+  fi
+fi
 role_exists=$(PGPASSWORD="$SUPERPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$SUPERUSER" -d postgres -tAc \
   "SELECT 1 FROM pg_roles WHERE rolname='$APP_USER'" 2>/dev/null || echo "")
 if [ "$role_exists" != "1" ]; then
@@ -33,6 +46,7 @@ if [ "$role_exists" != "1" ]; then
     echo "  Could not connect as superuser '$SUPERUSER'. Create the role/database yourself, then re-run:"
     echo "    createuser -h $PGHOST -p $PGPORT -U <your-superuser> -P $APP_USER"
     echo "    createdb   -h $PGHOST -p $PGPORT -U <your-superuser> -O $APP_USER $APP_DB"
+    echo "  Or re-run with the right password: PGSUPERPASSWORD=<password> ./setup-native.sh"
     exit 1
   }
 fi
