@@ -7,7 +7,7 @@ import {
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -178,6 +178,12 @@ export function OverviewPage() {
   // Registration rows either. FuelCategoryPanel below is sourced from the
   // separate Fuel x Vehicle Class cross-tab (see FuelCategoryTotal).
   const impossibleFuelCategoryFilter = !!(selectedCategory && fuelGroup);
+  // Third pairing of {Maker, Vehicle Class, Fuel}: a maker name and a real
+  // fuel_type never coexist on the same Registration row either, so
+  // selecting a Brand/OEM together with the Powertrain filter always
+  // zeroed out. MakerFuelPanel below is sourced from the separate Maker x
+  // Fuel cross-tab (see MakerFuelTotal).
+  const impossibleMakerFuelFilter = !!(selectedMaker && fuelGroup);
 
   const activeFiltersCount = [
     selectedState,
@@ -290,6 +296,11 @@ export function OverviewPage() {
               not scoped to {selectedCategory} — VAHAN can't cross maker × category
             </p>
           )}
+          {fuelGroup && (
+            <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight">
+              not scoped to {fuelGroup} — VAHAN can't cross maker × fuel here, see panel below
+            </p>
+          )}
         </div>
       </div>
 
@@ -307,6 +318,16 @@ export function OverviewPage() {
         <FuelCategoryPanel
           year={selectedYear}
           category={selectedCategory!}
+          fuelGroup={fuelGroup!}
+          month={selectedMonth}
+          state={selectedState}
+        />
+      )}
+
+      {impossibleMakerFuelFilter && (
+        <MakerFuelPanel
+          year={selectedYear}
+          maker={selectedMaker!}
           fuelGroup={fuelGroup!}
           month={selectedMonth}
           state={selectedState}
@@ -536,6 +557,40 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state }: { year: 
       <div className="flex items-center justify-between flex-wrap gap-2">
         <span>
           <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span> {category}, FY {year}
+          {state && <> · {state}</>}:
+        </span>
+        {isLoading ? (
+          <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
+        ) : (
+          <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
+        )}
+      </div>
+      {month && (
+        <p className="text-[10px] text-[var(--text-muted)] mt-1">
+          This is a year total — the underlying data has no month breakdown, so the Month filter doesn't apply here.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Same shape as MakerCategoryPanel/FuelCategoryPanel, sourced from the
+ * separate Maker x Fuel cross-tab (see MakerFuelTotal /
+ * maker-fuel-breakdown). Rendered only when both selectedMaker and
+ * fuelGroup are set. */
+function MakerFuelPanel({ year, maker, fuelGroup, month, state }: { year: number; maker: string; fuelGroup: string; month: number | null; state: string | null }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['makerFuelBreakdown', year, maker, fuelGroup, state],
+    queryFn: () => getMakerFuelBreakdown({ year, maker, fuel_group: fuelGroup, state }),
+  });
+
+  const count = (data || []).find((r: { fuel_group: string; count: number }) => r.fuel_group === fuelGroup)?.count ?? 0;
+
+  return (
+    <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span>
+          <span className="font-semibold text-[var(--accent)]">{maker}</span> — <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span>, FY {year}
           {state && <> · {state}</>}:
         </span>
         {isLoading ? (

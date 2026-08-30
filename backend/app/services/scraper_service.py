@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.query_filters import classify_vehicle
-from app.models.models import FuelCategoryTotal, MakerCategoryTotal, Registration, State
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State
 from scraper.vahan_scraper import DIMENSIONS
 
 logger = logging.getLogger("scraper_service")
@@ -136,6 +136,32 @@ async def persist_fuel_category_batch(db: AsyncSession, batch: dict, state_code:
             vehicle_class=record["vehicle_class"],
             vehicle_category=category,
             commercial_tier=tier,
+            count=record["count"],
+        ))
+
+
+async def persist_maker_fuel_batch(db: AsyncSession, batch: dict, state_code: str, year: int) -> None:
+    """Same shape and same reason as persist_maker_category_batch/
+    persist_fuel_category_batch -- see MakerFuelTotal's docstring. No
+    classify_vehicle() call here: this pivot doesn't carry vehicle-class
+    info at all (X-axis is Fuel, not Vehicle Class), so there's no category/
+    tier to derive."""
+    rto_code = batch["rto_code"]
+    await db.execute(
+        delete(MakerFuelTotal).where(
+            MakerFuelTotal.rto_code == rto_code,
+            MakerFuelTotal.year == year,
+        )
+    )
+    for record in batch["records"]:
+        db.add(MakerFuelTotal(
+            state_code=state_code,
+            state_name=batch["state_name"],
+            rto_code=rto_code,
+            rto_name=batch["rto_name"],
+            year=year,
+            maker=record["maker"],
+            fuel_type=record["fuel_type"],
             count=record["count"],
         ))
 

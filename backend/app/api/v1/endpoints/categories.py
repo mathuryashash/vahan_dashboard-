@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
-from app.models.models import FuelCategoryTotal, MakerCategoryTotal, Registration
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration
 
 router = APIRouter()
 
@@ -317,3 +317,47 @@ async def get_fuel_category_breakdown(
         [{key_name: k, "count": v} for k, v in totals.items()],
         key=lambda item: item["count"], reverse=True,
     )
+
+
+@router.get("/maker-fuel-breakdown")
+async def get_maker_fuel_breakdown(
+    year: int = _DEFAULT_YEAR,
+    state: str | None = None,
+    maker: str | None = None,
+    fuel_group_filter: str | None = Query(None, alias="fuel_group"),
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    """Real Maker x Fuel totals -- year-only, same limitation and same fix
+    shape as maker-category-breakdown/fuel-category-breakdown (see
+    MakerFuelTotal's docstring): a maker name and a real fuel_type never
+    coexist on the same Registration row, so selecting a Maker/OEM together
+    with the ICE/Hybrid/EV filter always zeroed out. Groups by whichever of
+    maker/fuel_group is left unfixed: pass fuel_group to rank makers within
+    ICE/Hybrid/EV, or pass maker to rank its fuel-group split. Grouped in
+    Python when ranking by maker, since fuel_group is computed from the raw
+    fuel_type column (same reason fuel-category-breakdown does this).
+    """
+    query = select(MakerFuelTotal.maker, MakerFuelTotal.fuel_type, MakerFuelTotal.count).where(
+        MakerFuelTotal.year == year
+    )
+    if state:
+        query = query.where(MakerFuelTotal.state_name == state)
+    if maker:
+        query = query.where(MakerFuelTotal.maker == maker)
+
+    result = await db.execute(query)
+    totals: dict[str, int] = {}
+    for row_maker, raw_fuel_type, count in result.all():
+        group = fuel_group(raw_fuel_type)
+        if fuel_group_filter and group != fuel_group_filter:
+            continue
+        key = row_maker if fuel_group_filter else group
+        totals[key] = totals.get(key, 0) + count
+
+    key_name = "maker" if fuel_group_filter else "fuel_group"
+    rows = sorted(
+        [{key_name: k, "count": v} for k, v in totals.items()],
+        key=lambda item: item["count"], reverse=True,
+    )
+    return rows[:limit] if fuel_group_filter else rows

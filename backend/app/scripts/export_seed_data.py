@@ -40,6 +40,13 @@ TABLE_ORDER = (
     "registrations",
     "dashboard_summary",
     "oem_monthly_sales",
+    # These crosstabs were never added here, so every seed export to date
+    # shipped them empty -- a freshly-seeded machine had working Registration
+    # data but a blank Maker/Fuel x Category panel until it ran its own
+    # scrape. Year-only (no month column), much smaller than registrations.
+    "maker_category_totals",
+    "fuel_category_totals",
+    "maker_fuel_totals",
 )
 
 

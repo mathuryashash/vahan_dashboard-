@@ -59,6 +59,9 @@ export const getMakerCategoryBreakdown = (params: { year: number; state?: string
 export const getFuelCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; fuel_group?: string | null }) =>
   api.get('/categories/fuel-category-breakdown', { params }).then(r => r.data);
 
+export const getMakerFuelBreakdown = (params: { year: number; state?: string | null; maker?: string | null; fuel_group?: string | null }) =>
+  api.get('/categories/maker-fuel-breakdown', { params }).then(r => r.data);
+
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
 export const getRtoAnalysis = (rtoCode: string, year: number) =>

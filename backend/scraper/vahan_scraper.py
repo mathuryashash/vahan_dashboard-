@@ -546,20 +546,29 @@ async def _configure_pivot(session: _VahanSession, year: int, yaxis_value: str, 
         await session.select(YEAR_SELECT_ID, str(year), YEAR_SELECT_ID, YEAR_SELECT_ID)
 
 
-async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int, yaxis_value: str, label_key: str) -> list[dict]:
+async def scrape_yaxis_by_vehicle_class_table(
+    session: _VahanSession,
+    year: int,
+    yaxis_value: str,
+    label_key: str,
+    xaxis_value: str = "Vehicle Class",
+    column_key: str = "vehicle_class",
+) -> list[dict]:
     """Assumes state + RTO are already selected. Configures <yaxis_value> x
-    Vehicle Class (X-axis=Vehicle Class instead of Month Wise -- the only
-    way to get a second real dimension alongside vehicle class, discovered
-    live against VAHAN this session; see docs/superpowers/specs/
-    2026-08-25-maker-category-crosstab-design.md). Works identically for
-    yaxis_value='Maker' or 'Fuel' -- VAHAN's table layout is the same
-    regardless of which Y-axis dimension is selected, only the row label's
-    meaning differs (a maker name vs. a raw fuel_type string), which is why
-    this takes `label_key` rather than hardcoding "maker" in the record
-    dict. No month breakdown exists in this response at all -- returns
-    [{label_key: str, 'vehicle_class': str, 'count': int}, ...] for the
-    whole year in one shot."""
-    await _configure_pivot(session, year, yaxis_value, xaxis_value="Vehicle Class")
+    <xaxis_value> (X-axis=Vehicle Class or Fuel instead of Month Wise -- the
+    only way to get a second real dimension alongside the Y-axis one,
+    discovered live against VAHAN this session; see docs/superpowers/specs/
+    2026-08-25-maker-category-crosstab-design.md). Works identically for any
+    yaxis_value/xaxis_value pairing VAHAN's own X-axis dropdown actually
+    offers for that Y-axis (confirmed live: Y=Maker offers X=Fuel; Y=Fuel
+    does NOT offer X=Maker, so Maker x Fuel can only be scraped this one
+    direction) -- VAHAN's table layout is the same regardless, only the row
+    label's meaning differs (a maker name vs. a raw fuel_type string), which
+    is why this takes `label_key`/`column_key` rather than hardcoding
+    "maker"/"vehicle_class" in the record dict. No month breakdown exists in
+    this response at all -- returns [{label_key: str, column_key: str,
+    'count': int}, ...] for the whole year in one shot."""
+    await _configure_pivot(session, year, yaxis_value, xaxis_value=xaxis_value)
     await session.click_refresh()  # renders the report server-side; export reads that state
     rows = parse_exported_xlsx(await session.export_xlsx())
 
@@ -569,18 +578,18 @@ async def scrape_yaxis_by_vehicle_class_table(session: _VahanSession, year: int,
     header_row = _exported_header_row(rows, data_start)
     if header_row is None:
         return []
-    class_names = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
+    column_names = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
 
     records: list[dict] = []
     for row in rows[data_start:]:
         if not row or not row[0].strip().isdigit():
             continue
         label = html.unescape(row[1]).strip() if len(row) > 1 else ""
-        for offset, vehicle_class in enumerate(class_names):
+        for offset, column_name in enumerate(column_names):
             cell = row[2 + offset] if len(row) > 2 + offset else ""
             count = parse_count(cell) if cell else 0
             if count:
-                records.append({label_key: label, "vehicle_class": html.unescape(vehicle_class), "count": count})
+                records.append({label_key: label, column_key: html.unescape(column_name), "count": count})
     return records
 
 
@@ -594,6 +603,21 @@ async def scrape_fuel_category_table(session: _VahanSession, year: int) -> list[
     'label' is a raw fuel_type string (e.g. 'CNG ONLY'), not yet grouped
     into ICE/Hybrid/EV -- that happens at persist time via fuel_group()."""
     return await scrape_yaxis_by_vehicle_class_table(session, year, DIMENSIONS["fuel"], "fuel_type")
+
+
+async def scrape_maker_fuel_table(session: _VahanSession, year: int) -> list[dict]:
+    """Maker x Fuel -- the third pairing of {Maker, Vehicle Class, Fuel},
+    same structural need as Maker x Category and Fuel x Category (a maker
+    name and a real fuel_type never coexist on the same Registration row --
+    see Registration.is_supplementary). VAHAN only offers this one direction
+    (Y=Maker, X=Fuel; Y=Fuel's X-axis dropdown has no Maker option), which is
+    fine since maker+fuel_group is exactly the combination that was zeroing
+    out for users. 'fuel_type' is raw (e.g. 'CNG ONLY'), grouped into
+    ICE/Hybrid/EV at persist time via fuel_group(), same as
+    scrape_fuel_category_table."""
+    return await scrape_yaxis_by_vehicle_class_table(
+        session, year, DIMENSIONS["maker"], "maker", xaxis_value="Fuel", column_key="fuel_type"
+    )
 
 
 PAGE_FETCH_DELAY_SECONDS = 0.5
@@ -1023,6 +1047,11 @@ def scrape_all_india_maker_category(year: int, delay_seconds: float = REQUEST_DE
 def scrape_all_india_fuel_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
     """Fuel x Vehicle Class -- see scrape_all_india_crosstab."""
     return scrape_all_india_crosstab(year, scrape_fuel_category_table, "fuel_category", delay_seconds, skip_rtos)
+
+
+def scrape_all_india_maker_fuel(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
+    """Maker x Fuel -- see scrape_all_india_crosstab."""
+    return scrape_all_india_crosstab(year, scrape_maker_fuel_table, "maker_fuel", delay_seconds, skip_rtos)
 
 
 if __name__ == "__main__":

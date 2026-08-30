@@ -150,6 +150,36 @@ class FuelCategoryTotal(Base):
     )
 
 
+class MakerFuelTotal(Base):
+    """Real Maker x Fuel totals -- the third pairing of {Maker, Vehicle
+    Class, Fuel}, same reason as MakerCategoryTotal/FuelCategoryTotal: a
+    maker name and a real fuel_type never coexist on the same Registration
+    row (see Registration.is_supplementary), so selecting a Maker/OEM
+    together with the ICE/Hybrid/EV filter always zeroed out. VAHAN only
+    offers this one direction (Y-axis=Maker, X-axis=Fuel -- Y=Fuel's X-axis
+    dropdown has no Maker option), which is fine since that's exactly the
+    combination users need. Year-only, no month column, same reason as the
+    other two crosstabs (X-axis holds either Month Wise or the second
+    dimension, never both). fuel_type is raw (e.g. 'CNG ONLY'); grouped into
+    ICE/Hybrid/EV at query time via fuel_group(), same as FuelCategoryTotal."""
+    __tablename__ = "maker_fuel_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_code = Column(String(5), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    rto_code = Column(String(10), nullable=True)
+    rto_name = Column(String(200), nullable=True)
+    year = Column(Integer, nullable=False, index=True)
+    maker = Column(String(200), nullable=False, index=True)
+    fuel_type = Column(String(100), nullable=False, index=True)
+    count = Column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_mft_year_maker", "year", "maker"),
+        Index("idx_mft_year_fuel", "year", "fuel_type"),
+    )
+
+
 class DashboardSummary(Base):
     __tablename__ = "dashboard_summary"
 

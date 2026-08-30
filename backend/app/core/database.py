@@ -21,8 +21,17 @@ else:
         echo=False,
         future=True,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        # Several summary/category endpoints aggregate over the full
+        # Registration table and can take single-digit seconds each; the
+        # Overview page alone fires ~8 of them on one load. At pool_size=10 +
+        # max_overflow=20, that was enough to exhaust the pool under normal
+        # use and 500 every request for 30s at a time (confirmed live: a
+        # QueuePool TimeoutError storm). The real fix is making those queries
+        # fast (see the VACUUM ANALYZE note in that incident, and
+        # /summary/available-years' caching) -- this is headroom on top of
+        # that, not a replacement for it.
+        pool_size=20,
+        max_overflow=40,
     )
 AsyncSessionLocal = async_sessionmaker(
     engine,
