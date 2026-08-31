@@ -55,6 +55,15 @@ def _tables_sql() -> str:
     statements = []
     for table_name in TABLE_ORDER:
         table = Base.metadata.tables[table_name]
+        # DROP first: this file previously assumed a truly empty database
+        # (true only on someone's very first run). Reloading a seed the
+        # obvious way -- TRUNCATE the tables, then re-run setup -- leaves
+        # the tables themselves in place, so a bare CREATE TABLE fails with
+        # "relation already exists" (hit live: a user following exactly
+        # that reload path). CASCADE handles FK dependents regardless of
+        # drop order; whatever it cascades away, this same loop recreates
+        # later in TABLE_ORDER anyway.
+        statements.append(f"DROP TABLE IF EXISTS {table_name} CASCADE;")
         statements.append(str(CreateTable(table).compile(dialect=dialect)).strip() + ";")
     return "\n".join(statements)
 
