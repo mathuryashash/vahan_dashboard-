@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select, func, distinct
@@ -9,6 +10,16 @@ from app.services.scraper_service import run_scraper
 from app.core.config import settings
 
 router = APIRouter()
+
+# Mounted in the root App component, so this fires on every single page
+# load and then polls every 15s (see frontend useScrapeProgress) until
+# fully done -- but the two DISTINCT queries below scan millions of
+# matching rows each time (confirmed live: up to 35s on a fresh install).
+# Cached briefly rather than left to recompute on every mount/poll; the TTL
+# is short enough that live progress during an actual scrape still updates
+# roughly on the same cadence the frontend polls at.
+_scrape_progress_cache: dict = {"value": None, "at": 0.0}
+_SCRAPE_PROGRESS_CACHE_TTL_SECONDS = 20
 
 
 @router.post("/", response_model=RefreshResponse)
@@ -63,6 +74,10 @@ async def get_scrape_progress(db: AsyncSession = Depends(get_db)):
     yet). Real rows are always vehicle_class='All' (see persist_rto_batch);
     a state only counts as done once ALL its synthetic rows are purged,
     which only happens once every RTO in it scraped successfully."""
+    now = time.monotonic()
+    if _scrape_progress_cache["value"] is not None and now - _scrape_progress_cache["at"] < _SCRAPE_PROGRESS_CACHE_TTL_SECONDS:
+        return _scrape_progress_cache["value"]
+
     states_total = (await db.execute(select(func.count()).select_from(State))).scalar() or 36
 
     states_done = (
@@ -79,9 +94,12 @@ async def get_scrape_progress(db: AsyncSession = Depends(get_db)):
     )
     rtos_done = (await db.execute(select(func.count()).select_from(rto_subq))).scalar() or 0
 
-    return {
+    result = {
         "states_done": states_done,
         "states_total": states_total,
         "rtos_done": rtos_done,
         "percent": round(states_done / states_total * 100, 1) if states_total else 0.0,
     }
+    _scrape_progress_cache["value"] = result
+    _scrape_progress_cache["at"] = now
+    return result
