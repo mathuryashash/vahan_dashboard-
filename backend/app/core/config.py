@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # Default 1 preserves original serial behavior. Increase to 2-4 for higher throughput.
     SCRAPER_CONCURRENT_STATES: int = 1
 
+    # Auth (hierarchy/role system). The dev default here is fine for local
+    # work but MUST be overridden via .env in any real deployment -- anyone
+    # who knows this string can forge a valid admin token. Not validated at
+    # startup (no hard fail) to keep local dev frictionless; that tradeoff
+    # only holds because this app isn't internet-facing yet.
+    JWT_SECRET_KEY: str = "dev-only-change-me-in-production"
+    JWT_EXPIRE_MINUTES: int = 60 * 24  # 24h
+
     class Config:
         env_file = ".env"
         case_sensitive = True

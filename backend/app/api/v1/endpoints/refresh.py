@@ -3,8 +3,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.auth import require_role
 from app.core.database import get_db
-from app.models.models import Registration, State
+from app.models.models import Registration, State, User, UserRole
 from app.schemas.schemas import RefreshResponse
 from app.services.scraper_service import run_scraper
 from app.core.config import settings
@@ -23,17 +24,21 @@ _SCRAPE_PROGRESS_CACHE_TTL_SECONDS = 20
 
 
 @router.post("/", response_model=RefreshResponse)
-async def trigger_refresh(background_tasks: BackgroundTasks):
+async def trigger_refresh(
+    background_tasks: BackgroundTasks,
+    _admin: User = Depends(require_role(UserRole.ADMIN)),
+):
     if settings.REFRESH_STATUS == "running":
         return RefreshResponse(
             status="running",
             message="A scrape is already in progress.",
         )
 
-    # This endpoint has no auth (it's a public dashboard button), so without a
-    # cooldown anyone could keep re-triggering a fresh ~1-1.5h scrape
-    # back-to-back forever -- hammering this app's own DB and the government
-    # site the scraper hits.
+    # Admin-only (see require_role above) -- was previously wide open (any
+    # unauthenticated caller could trigger a ~1-1.5h scrape), with a cooldown
+    # as the only defense against someone hammering it repeatedly. The
+    # cooldown still matters even authenticated: an admin fat-fingering the
+    # button twice shouldn't launch two concurrent scrapes either.
     if settings.LAST_REFRESH_STARTED_AT is not None:
         cooldown = timedelta(minutes=settings.REFRESH_COOLDOWN_MINUTES)
         elapsed = datetime.now(timezone.utc) - settings.LAST_REFRESH_STARTED_AT

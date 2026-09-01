@@ -219,3 +219,32 @@ class OEMMonthlySales(Base):
     __table_args__ = (
         Index("idx_oem_sales_period", "source", "year", "month", "category"),
     )
+
+
+class UserRole:
+    """String constants, not a DB enum -- adding/renaming a tier later is a
+    code change, not a migration. Three tiers: admin (full access, manages
+    users, can trigger scrapes), analyst (full dashboard access, no admin
+    actions), viewer (read-only dashboard access -- same data visibility as
+    analyst for now; per-state/per-page data scoping isn't built, add if a
+    buyer actually needs it)."""
+    ADMIN = "admin"
+    ANALYST = "analyst"
+    VIEWER = "viewer"
+    ALL = (ADMIN, ANALYST, VIEWER)
+
+
+class User(Base):
+    """Login + role for the access-hierarchy system. Lives in the same
+    Postgres database as everything else -- there's no separate "auth
+    database" to host or provision."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(200), nullable=True)
+    role = Column(String(20), nullable=False, default=UserRole.VIEWER)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=func.now())
+    last_login_at = Column(DateTime, nullable=True)

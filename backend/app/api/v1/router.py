@@ -10,10 +10,14 @@ from app.api.v1.endpoints import (
     geo,
     oem_sales,
     rto,
+    auth,
+    users,
 )
 
 api_router = APIRouter()
 
+api_router.include_router(auth.router, prefix="/auth", tags=["Auth"])
+api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(summary.router, prefix="/summary", tags=["Summary"])
 api_router.include_router(states.router, prefix="/states", tags=["States"])
 api_router.include_router(
