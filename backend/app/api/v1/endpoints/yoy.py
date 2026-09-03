@@ -4,7 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.query_filters import exclude_supplementary, latest_month_with_data
-from app.models.models import Registration
+from app.core.auth import get_current_user
+from app.core.scope import get_effective_state
+from app.models.models import Registration, User
 
 router = APIRouter()
 
@@ -15,7 +17,7 @@ _DEFAULT_YEAR = datetime.now().year
 async def get_yoy_monthly(
     year_a: int = Query(default=_DEFAULT_YEAR - 1),
     year_b: int = Query(default=_DEFAULT_YEAR),
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     db: AsyncSession = Depends(get_db),
 ):
     query_a = exclude_supplementary(
@@ -66,7 +68,11 @@ async def get_yoy_summary(
     year_a: int = Query(default=_DEFAULT_YEAR - 1),
     year_b: int = Query(default=_DEFAULT_YEAR),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
+    # National-only endpoint (no state breakdown exists here) -- still
+    # requires login like every other dashboard read, but there's nothing to
+    # geo-clamp.
     # Cap both years at whichever has less data so far: comparing a full
     # calendar year against an in-progress one (e.g. 12 months of 2025 vs
     # 7 months of 2026) produces a nonsensical, deeply negative "growth"

@@ -33,9 +33,24 @@ async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = 
         "role": user.role,
         "email": user.email,
         "full_name": user.full_name,
+        "scope_type": user.scope_type,
+        "scope_state_code": user.scope_state_code,
+        "scope_state_name": user.scope_state_name,
+        "scope_rto_code": user.scope_rto_code,
+        "scope_rto_name": user.scope_rto_name,
     }
 
 
 @router.get("/me")
 async def me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "scope_type": user.scope_type,
+        "scope_state_code": user.scope_state_code,
+        "scope_state_name": user.scope_state_name,
+        "scope_rto_code": user.scope_rto_code,
+        "scope_rto_name": user.scope_rto_name,
+    }

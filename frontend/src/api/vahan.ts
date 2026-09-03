@@ -1,9 +1,32 @@
 import axios from 'axios';
+import { getStoredAuth, setStoredAuth } from './auth';
 
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
 });
+
+api.interceptors.request.use((config) => {
+  const auth = getStoredAuth();
+  if (auth) {
+    config.headers.Authorization = `Bearer ${auth.access_token}`;
+  }
+  return config;
+});
+
+// A rejected/expired token means every subsequent call would also 401 --
+// clear it and reload so App.tsx's auth check falls back to the login page,
+// instead of every widget on the page silently failing one by one.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      setStoredAuth(null);
+      window.location.reload();
+    }
+    return Promise.reject(error);
+  }
+);
 
 export interface FilterParams {
   year?: number;
@@ -37,8 +60,6 @@ export const getTopMakers = (params?: FilterParams & { limit?: number }, signal?
   api.get('/categories/top-makers', { params, signal }).then(r => r.data);
 export const getFuelBreakdown = (params?: FilterParams) =>
   api.get('/categories/fuel-breakdown', { params }).then(r => r.data);
-export const getModelBreakdown = (params?: FilterParams & { limit?: number }) =>
-  api.get('/categories/model-breakdown', { params }).then(r => r.data);
 export const triggerRefresh = () => api.post('/refresh/').then(r => r.data);
 export const getRefreshStatus = () => api.get('/refresh/status').then(r => r.data);
 export const getMonthDetail = (params: { year: number; month: number } & Omit<FilterParams, 'year' | 'month'>) =>

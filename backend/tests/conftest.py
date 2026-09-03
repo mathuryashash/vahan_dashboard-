@@ -7,7 +7,7 @@ import app.models.models  # noqa: F401 - ensures models are registered on Base.m
 from app.core.auth import get_current_user
 from app.main import app
 from app.core.database import get_db
-from app.models.models import User, UserRole
+from app.models.models import User, UserRole, UserScope
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -42,7 +42,14 @@ async def client(db_session):
     # the auth system itself (login, role enforcement) override this back
     # via app.dependency_overrides directly -- see test_auth.py.
     async def override_get_current_user():
-        return User(id=0, email="test-admin@example.com", role=UserRole.ADMIN, is_active=True)
+        # scope_type must be set explicitly here -- this object is never
+        # inserted via the ORM, so the Column(default=...) never applies;
+        # without it scope_type is None, which get_effective_state treats as
+        # "not national" and silently forces every state filter to None.
+        return User(
+            id=0, email="test-admin@example.com", role=UserRole.ADMIN, is_active=True,
+            scope_type=UserScope.NATIONAL,
+        )
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user

@@ -9,7 +9,7 @@ const navItems = [
   { to: '/comparison', icon: Map, label: 'State Comparison' },
   { to: '/yoy', icon: TrendingUp, label: 'Year over Year' },
   { to: '/categories', icon: BarChart3, label: 'Categories & Fuel' },
-  { to: '/makers', icon: Car, label: 'Makers & Models' },
+  { to: '/makers', icon: Car, label: 'Makers' },
   { to: '/industry-sales', icon: Award, label: 'Industry Sales' },
   { to: '/rto-analysis', icon: Building, label: 'RTO Analysis' },
 ];

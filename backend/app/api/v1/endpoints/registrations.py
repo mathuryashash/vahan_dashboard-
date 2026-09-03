@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
+from app.core.scope import get_effective_state
 from app.models.models import Registration
 
 router = APIRouter()
@@ -9,7 +10,7 @@ router = APIRouter()
 
 @router.get("/")
 async def get_registrations(
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     year: int | None = None,
     month: int | None = None,
     day: int | None = None,
@@ -69,7 +70,7 @@ async def get_registrations(
 
 @router.get("/aggregate/by-month")
 async def get_aggregate_by_month(
-    year: int, state: str | None = None, db: AsyncSession = Depends(get_db)
+    year: int, state: str | None = Depends(get_effective_state), db: AsyncSession = Depends(get_db)
 ):
     query = (
         select(Registration.month, func.sum(Registration.count).label("total"))

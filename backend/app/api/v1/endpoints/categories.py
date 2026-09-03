@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
+from app.core.scope import get_effective_state
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration
 
 router = APIRouter()
@@ -15,7 +16,7 @@ _DEFAULT_YEAR = datetime.now().year
 async def get_categories(
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     vehicle_model: str | None = None,
     raw: bool = False,
@@ -93,7 +94,7 @@ async def get_top_makers(
     commercial_tier: str | None = None,
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_model: str | None = None,
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
@@ -146,7 +147,7 @@ async def get_fuel_breakdown(
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -201,53 +202,10 @@ async def get_fuel_breakdown(
     ]
 
 
-@router.get("/model-breakdown")
-async def get_model_breakdown(
-    vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
-    commercial_tier: str | None = None,
-    maker: str | None = None,
-    year: int = _DEFAULT_YEAR,
-    month: int | None = None,
-    state: str | None = None,
-    limit: int = 15,
-    db: AsyncSession = Depends(get_db),
-):
-    query = select(
-        Registration.vehicle_model, func.sum(Registration.count).label("total")
-    ).where(
-        Registration.year == year,
-        Registration.vehicle_model.isnot(None),
-        Registration.vehicle_model != ""
-    )
-
-    if month:
-        query = query.where(Registration.month == month)
-    query = apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-        commercial_tier=commercial_tier, maker=maker,
-    )
-
-    query = query.group_by(Registration.vehicle_model).order_by(desc("total")).limit(limit)
-
-    result = await db.execute(query)
-    rows = result.all()
-
-    total = sum(r[1] for r in rows)
-    return [
-        {
-            "model": r[0],
-            "count": r[1],
-            "share_percent": round((r[1] / total * 100) if total > 0 else 0, 2),
-        }
-        for r in rows
-    ]
-
-
 @router.get("/maker-category-breakdown")
 async def get_maker_category_breakdown(
     year: int = _DEFAULT_YEAR,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = None,
     maker: str | None = None,
     limit: int = 20,
@@ -282,7 +240,7 @@ async def get_maker_category_breakdown(
 @router.get("/fuel-category-breakdown")
 async def get_fuel_category_breakdown(
     year: int = _DEFAULT_YEAR,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     db: AsyncSession = Depends(get_db),
@@ -322,7 +280,7 @@ async def get_fuel_category_breakdown(
 @router.get("/maker-fuel-breakdown")
 async def get_maker_fuel_breakdown(
     year: int = _DEFAULT_YEAR,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     limit: int = 20,

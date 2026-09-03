@@ -4,6 +4,7 @@ import { triggerRefresh } from '../api/vahan';
 import { useEffect, useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import type { RefreshStatus, ScrapeProgress } from '../types';
+import type { AuthUser } from '../api/auth';
 
 interface HeaderProps {
   refreshStatus: RefreshStatus | null;
@@ -15,9 +16,17 @@ interface HeaderProps {
    * be observed by an effect keyed on the data reference or its status value. */
   statusUpdatedAt: number;
   scrapeProgress: ScrapeProgress | null;
+  auth: AuthUser;
+  onLogout: () => void;
 }
 
-export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress }: HeaderProps) {
+const SCOPE_LABEL: Record<AuthUser['scope_type'], (auth: AuthUser) => string> = {
+  national: () => 'All India',
+  state: (auth) => auth.scope_state_name ?? 'State-scoped',
+  rto: (auth) => `${auth.scope_rto_name ?? 'RTO'} (${auth.scope_state_name ?? ''})`,
+};
+
+export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, onLogout }: HeaderProps) {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
 
@@ -102,18 +111,40 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress }: Heade
           </div>
         )}
 
-        <button
-          onClick={handleRefresh}
-          disabled={isRunning}
-          title="Pulls fresh data from the live source. A full India refresh can take over an hour."
-          className="px-3 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border)] text-[var(--text-secondary)] text-xs font-semibold rounded-lg transition-all duration-200 disabled:opacity-50"
-        >
-          {isRunning ? 'SYNCING...' : 'REFRESH'}
-        </button>
+        {auth.role === 'admin' && (
+          <button
+            onClick={handleRefresh}
+            disabled={isRunning}
+            title="Pulls fresh data from the live source. A full India refresh can take over an hour."
+            className="px-3 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border)] text-[var(--text-secondary)] text-xs font-semibold rounded-lg transition-all duration-200 disabled:opacity-50"
+          >
+            {isRunning ? 'SYNCING...' : 'REFRESH'}
+          </button>
+        )}
 
         <div className="w-px h-5 bg-[var(--border)]" />
 
         <ThemeToggle />
+
+        <div className="w-px h-5 bg-[var(--border)]" />
+
+        <div className="flex items-center gap-2" title={`${auth.email} · ${auth.role}`}>
+          <div className="text-right leading-tight">
+            <div className="text-[11px] font-semibold text-[var(--text-primary)]">
+              {auth.full_name ?? auth.email}
+            </div>
+            <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">
+              {auth.role} · {SCOPE_LABEL[auth.scope_type](auth)}
+            </div>
+          </div>
+          <button
+            onClick={onLogout}
+            title="Log out"
+            className="px-2 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border)] rounded-lg"
+          >
+            Log out
+          </button>
+        </div>
       </div>
     </header>
   );

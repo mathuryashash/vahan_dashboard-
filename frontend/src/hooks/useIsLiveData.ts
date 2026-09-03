@@ -7,11 +7,12 @@ import { getScrapeProgress } from '../api/vahan';
  * App.tsx (feeds the header's migration progress bar) and useIsLiveData
  * (below) so there's one query definition, not two. Stops polling once
  * fully done. */
-export function useScrapeProgress() {
+export function useScrapeProgress(enabled: boolean = true) {
   return useQuery({
     queryKey: ['scrapeProgress'],
     queryFn: getScrapeProgress,
     refetchInterval: (query) => (query.state.data && query.state.data.states_done >= query.state.data.states_total ? false : 15000),
+    enabled,
   });
 }
 

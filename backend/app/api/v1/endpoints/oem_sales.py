@@ -2,13 +2,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from app.core.database import get_db
-from app.models.models import OEMMonthlySales
+from app.core.auth import get_current_user
+from app.models.models import OEMMonthlySales, User
 
 router = APIRouter()
 
 
 @router.get("/categories")
-async def get_oem_categories(year: int | None = None, db: AsyncSession = Depends(get_db)):
+async def get_oem_categories(
+    year: int | None = None, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)
+):
     """Categories with real FADA data. Filtered to `year` when given, so the
     dropdown doesn't offer a category (e.g. one FADA only started breaking
     out in 2024) that has zero rows for whatever year is currently selected
@@ -28,6 +31,7 @@ async def get_oem_monthly(
     year: int,
     month: int | None = None,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     if month is not None:
         query = (
@@ -72,6 +76,7 @@ async def get_oem_trend(
     maker: str,
     category: str,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ):
     query = (
         select(OEMMonthlySales)

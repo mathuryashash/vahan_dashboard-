@@ -225,13 +225,25 @@ class UserRole:
     """String constants, not a DB enum -- adding/renaming a tier later is a
     code change, not a migration. Three tiers: admin (full access, manages
     users, can trigger scrapes), analyst (full dashboard access, no admin
-    actions), viewer (read-only dashboard access -- same data visibility as
-    analyst for now; per-state/per-page data scoping isn't built, add if a
-    buyer actually needs it)."""
+    actions), viewer (read-only dashboard access). Orthogonal to UserScope
+    below -- role is "what actions", scope is "what data"."""
     ADMIN = "admin"
     ANALYST = "analyst"
     VIEWER = "viewer"
     ALL = (ADMIN, ANALYST, VIEWER)
+
+
+class UserScope:
+    """Geographic data-visibility tier, independent of role. NATIONAL sees
+    every state and can drill into any RTO (the "India head" case). STATE is
+    clamped to one state_code/state_name (a "state head"). RTO is clamped to
+    one rto_code/rto_name within that state (an RTO-level user). Enforced
+    server-side in app.core.scope -- a scoped user cannot broaden results by
+    passing a different `state`/`state_code`/`rto_code` themselves."""
+    NATIONAL = "national"
+    STATE = "state"
+    RTO = "rto"
+    ALL = (NATIONAL, STATE, RTO)
 
 
 class User(Base):
@@ -248,3 +260,14 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=func.now())
     last_login_at = Column(DateTime, nullable=True)
+
+    # Denormalized (code + name stored together, set once at user creation)
+    # rather than a foreign key + join: every dashboard filter already
+    # matches on Registration.state_name (a plain string, see
+    # query_filters.py), so storing the name alongside the code lets scope
+    # enforcement clamp either kind of query param with zero extra joins.
+    scope_type = Column(String(20), nullable=False, default=UserScope.NATIONAL)
+    scope_state_code = Column(String(5), nullable=True)
+    scope_state_name = Column(String(100), nullable=True)
+    scope_rto_code = Column(String(10), nullable=True)
+    scope_rto_name = Column(String(200), nullable=True)

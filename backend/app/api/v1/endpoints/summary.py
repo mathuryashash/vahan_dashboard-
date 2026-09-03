@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, exclude_supplementary, latest_month_with_data
+from app.core.scope import get_effective_state
 from app.models.models import Registration
 from app.schemas.schemas import DashboardKPIs
 from app.core.config import settings
@@ -52,7 +53,7 @@ async def get_available_years(db: AsyncSession = Depends(get_db)):
 async def get_dashboard_kpis(
     year: int | None = None,
     month: int | None = None,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
@@ -144,7 +145,7 @@ async def get_dashboard_kpis(
 @router.get("/trend")
 async def get_trend(
     year: int = _DEFAULT_YEAR,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
@@ -178,7 +179,7 @@ async def get_trend(
 async def get_state_ranking(
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
@@ -257,7 +258,7 @@ def _growth_percent(current: float, previous: float | None) -> float | None:
 async def get_month_detail(
     year: int,
     month: int,
-    state: str | None = None,
+    state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,

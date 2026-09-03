@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
 from app.core.query_filters import exclude_supplementary
+from app.core.scope import require_rto_code, require_state_code
 from app.models.models import Registration
 
 router = APIRouter()
@@ -21,7 +22,7 @@ def fy_filter(fy_year: int):
 
 @router.get("/{state_code}/list")
 async def get_rtos_for_state(
-    state_code: str,
+    state_code: str = Depends(require_state_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -47,7 +48,7 @@ async def get_rtos_for_state(
 
 @router.get("/{rto_code}/analysis")
 async def get_rto_analysis(
-    rto_code: str,
+    rto_code: str = Depends(require_rto_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
     db: AsyncSession = Depends(get_db),
 ):

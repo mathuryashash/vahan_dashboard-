@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
+from app.core.auth import get_current_user
 from app.core.query_filters import exclude_supplementary
-from app.models.models import Registration
+from app.core.scope import enforce_state
+from app.models.models import Registration, User, UserScope
 
 router = APIRouter()
 
@@ -17,7 +19,10 @@ async def compare_states(
     state_b: str | None = None,
     year: int = _DEFAULT_YEAR,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    state_a = enforce_state(user, state_a)
+    state_b = enforce_state(user, state_b)
     result_a = await db.execute(
         exclude_supplementary(
             select(Registration.month, func.sum(Registration.count).label("count"))
@@ -55,26 +60,33 @@ async def compare_states(
 
 @router.get("/all-states")
 async def get_all_states_comparison(
-    year: int = _DEFAULT_YEAR, limit: int = 36, db: AsyncSession = Depends(get_db)
+    year: int = _DEFAULT_YEAR,
+    limit: int = 36,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    base_query = exclude_supplementary(
+        select(Registration.state_name, func.sum(Registration.count).label("total"))
+        .where(Registration.year == year)
+    )
+    total_query = exclude_supplementary(
+        select(func.sum(Registration.count)).where(Registration.year == year)
+    )
+    # A state/RTO-scoped user comparing "all states" only has one state to
+    # see -- clamp both the ranking and its denominator to it, rather than
+    # 403ing an endpoint the frontend calls unconditionally.
+    if user.scope_type != UserScope.NATIONAL:
+        base_query = base_query.where(Registration.state_name == user.scope_state_name)
+        total_query = total_query.where(Registration.state_name == user.scope_state_name)
+
     result = await db.execute(
-        exclude_supplementary(
-            select(Registration.state_name, func.sum(Registration.count).label("total"))
-            .where(Registration.year == year)
-        )
-        .group_by(Registration.state_name)
-        .order_by(func.sum(Registration.count).desc())
-        .limit(limit)
+        base_query.group_by(Registration.state_name).order_by(func.sum(Registration.count).desc()).limit(limit)
     )
     rows = result.all()
     # A state's share must be calculated against the whole country, not just
     # the top-N rows returned to the chart. The previous denominator made the
     # top five states always add up to 100%, which is misleading.
-    total_result = await db.execute(
-        exclude_supplementary(
-            select(func.sum(Registration.count)).where(Registration.year == year)
-        )
-    )
+    total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
     return [
         {
