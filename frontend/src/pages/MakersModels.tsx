@@ -6,6 +6,7 @@ import { getTopMakers, getCategories, getMakerCategoryBreakdown, getAvailableYea
 import { useChartTheme } from '../hooks/useChartTheme';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
+import { EmptyState } from '../components/EmptyState';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const CURRENT_YEAR = new Date().getFullYear();
@@ -67,7 +68,15 @@ export function MakersModelsPage() {
         </select>
         <select
           value={selectedCategory || ''}
-          onChange={(e) => setSelectedCategory(e.target.value || null)}
+          onChange={(e) => {
+            const value = e.target.value || null;
+            setSelectedCategory(value);
+            // The month control goes disabled the moment a category is
+            // picked (the crosstab it switches to is year-only) -- clearing
+            // it too means a disabled "Feb" left over from before doesn't
+            // sit there implying it's still in effect.
+            if (value) setMonth(null);
+          }}
           className={selectClass}
         >
           <option value="">All Categories</option>
@@ -91,6 +100,14 @@ export function MakersModelsPage() {
         </div>
         {makersLoading ? (
           <div className="h-[420px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+        ) : makerChartData.length === 0 ? (
+          <EmptyState
+            variant="no-data"
+            title={`No maker data for FY ${year}${selectedCategory ? ` / ${selectedCategory}` : ''}`}
+            description={selectedCategory
+              ? `The Maker × Category breakdown has only ever been scraped for the current year -- try clearing the category filter, or switch to FY ${new Date().getFullYear()}.`
+              : `Try a different year.`}
+          />
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(280, makerChartData.length * 30)}>
             <BarChart data={makerChartData} layout="vertical">

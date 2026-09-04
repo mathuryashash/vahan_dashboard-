@@ -615,6 +615,13 @@ function MakerCategoryPanel({ year, category, maker, month, state }: { year: num
     queryFn: () => getMakerCategoryBreakdown({ year, vehicle_category: category, maker, state }),
   });
 
+  // An empty array means this crosstab has no rows for `year` at all (it's
+  // only ever been scraped for the current year -- see MakerCategoryTotal's
+  // docstring) -- distinct from a found-but-zero row for this specific
+  // maker, which would be a real (if unusual) count. Conflating the two as
+  // `?? 0` reads as "zero registrations" when the honest answer is "not
+  // scraped for this year yet".
+  const noDataForYear = (data || []).length === 0;
   const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
 
   return (
@@ -627,6 +634,8 @@ function MakerCategoryPanel({ year, category, maker, month, state }: { year: num
         </span>
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
+        ) : noDataForYear ? (
+          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for FY {year}</span>
         ) : (
           <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
         )}
@@ -649,6 +658,9 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state }: { year: 
     queryFn: () => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }),
   });
 
+  // See MakerCategoryPanel's comment above -- empty array means not
+  // scraped for this year at all, distinct from a real zero.
+  const noDataForYear = (data || []).length === 0;
   const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
 
   return (
@@ -660,6 +672,8 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state }: { year: 
         </span>
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
+        ) : noDataForYear ? (
+          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for FY {year}</span>
         ) : (
           <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
         )}
@@ -691,6 +705,9 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state }: { year: number
   // "fuel_group") a few lines up. Searching for r.fuel_group here (a field
   // this response shape never has) always returned undefined -- silently
   // showing 0 for every maker+fuel combination regardless of real data.
+  // See MakerCategoryPanel's comment above -- empty array means not
+  // scraped for this year at all, distinct from a real zero.
+  const noDataForYear = (data || []).length === 0;
   const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
 
   return (
@@ -702,6 +719,8 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state }: { year: number
         </span>
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
+        ) : noDataForYear ? (
+          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for FY {year}</span>
         ) : (
           <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
         )}
