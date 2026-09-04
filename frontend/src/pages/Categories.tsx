@@ -11,6 +11,7 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { useSettledLayout } from '../hooks/useSettledLayout';
+import { ExportCsvButton } from '../components/ExportCsvButton';
 
 export function CategoriesPage() {
   const navigate = useNavigate();
@@ -160,11 +161,11 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
       {isLoading ? (
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
-        <ResponsiveContainer width="100%" height={220}>
+        <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 30)}>
           <BarChart data={chartData} layout="vertical">
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-            <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={150} />
+            <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={190} />
             <Tooltip
               formatter={(val: number) => [val.toLocaleString('en-IN'), 'Count']}
               contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
@@ -191,15 +192,18 @@ function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: str
 
   return (
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: `${250 + index * 80}ms` }}>
-      <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">{title}</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{title}</h3>
+        <ExportCsvButton filename={`${title.toLowerCase().replace(/\s+/g, '-')}-fy${year}`} rows={data as Record<string, unknown>[] | undefined} />
+      </div>
       {isLoading ? (
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
-        <ResponsiveContainer width="100%" height={220}>
+        <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 30)}>
           <BarChart data={chartData} layout="vertical">
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-            <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={150} />
+            <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={190} />
             <Tooltip
               formatter={(val: number) => [val.toLocaleString('en-IN'), 'Count']}
               contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}

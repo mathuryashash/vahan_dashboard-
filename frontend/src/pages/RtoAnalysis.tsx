@@ -7,6 +7,8 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
+import { ExportCsvButton } from '../components/ExportCsvButton';
+import { useAuth } from '../contexts/AuthContext';
 import type { RTOListItem, RTOAnalysis } from '../types';
 
 // Indian financial year: April `fyYear` through March `fyYear + 1`.
@@ -16,9 +18,14 @@ const fyMonthsElapsed = (fyYear: number) => (fyYear === CURRENT_FY ? now.getMont
 
 export function RtoAnalysisPage() {
   const chart = useChartTheme();
+  const auth = useAuth();
+  // RTO-scoped: only one RTO exists to show -- skip both pickers and the
+  // ranked-RTO-list panel entirely, go straight to that RTO's own breakdown.
+  // State-scoped: only the State dropdown is locked; they can still drill
+  // into any RTO within their own state via the ranked list below.
   const [fyYear, setFyYear] = useState<number>(CURRENT_FY);
-  const [stateCode, setStateCode] = useState<string>('');
-  const [rtoCode, setRtoCode] = useState<string | null>(null);
+  const [stateCode, setStateCode] = useState<string>(auth.scope_state_code ?? '');
+  const [rtoCode, setRtoCode] = useState<string | null>(auth.scope_type === 'rto' ? auth.scope_rto_code : null);
 
   const { data: states } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
@@ -54,19 +61,30 @@ export function RtoAnalysisPage() {
       </div>
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance flex flex-wrap gap-4">
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
-          <select
-            value={stateCode}
-            onChange={(e) => { setStateCode(e.target.value); setRtoCode(null); }}
-            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs"
-          >
-            <option value="">Select a state...</option>
-            {(states || []).map((s: { state_code: string; state_name: string }) => (
-              <option key={s.state_code} value={s.state_code}>{s.state_name}</option>
-            ))}
-          </select>
-        </div>
+        {auth.scope_type === 'national' ? (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
+            <select
+              value={stateCode}
+              onChange={(e) => { setStateCode(e.target.value); setRtoCode(null); }}
+              className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs"
+            >
+              <option value="">Select a state...</option>
+              {(states || []).map((s: { state_code: string; state_name: string }) => (
+                <option key={s.state_code} value={s.state_code}>{s.state_name}</option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">
+              {auth.scope_type === 'rto' ? 'RTO' : 'State'}
+            </label>
+            <div className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold w-full max-w-xs">
+              {auth.scope_type === 'rto' ? auth.scope_rto_name : auth.scope_state_name}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1.5">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Financial Year</label>
@@ -82,7 +100,7 @@ export function RtoAnalysisPage() {
         </div>
       </div>
 
-      {!stateCode ? (
+      {auth.scope_type === 'rto' ? null : !stateCode ? (
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)]">
           <EmptyState variant="no-selection" title="Pick a state" description="Select a state above to see its RTOs, ranked by registration volume." />
         </div>
@@ -93,22 +111,25 @@ export function RtoAnalysisPage() {
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">RTOs</h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">click an RTO to see its company breakdown below</p>
             </div>
-            {rtoCode && (
-              <button onClick={() => setRtoCode(null)} className="text-[9px] uppercase font-mono tracking-wider text-[var(--accent)] hover:opacity-80 transition-opacity">
-                Clear Selection
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              <ExportCsvButton filename={`rtos-${stateCode}-fy${fyYear}`} rows={rtos} />
+              {rtoCode && (
+                <button onClick={() => setRtoCode(null)} className="text-[9px] uppercase font-mono tracking-wider text-[var(--accent)] hover:opacity-80 transition-opacity">
+                  Clear Selection
+                </button>
+              )}
+            </div>
           </div>
           {rtosLoading ? (
             <div className="h-[300px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
           ) : rtoChartData.length === 0 ? (
             <EmptyState variant="no-data" title="No data for this state/year" description="Try a different year or state." />
           ) : (
-            <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 22)}>
+            <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 30)}>
               <BarChart data={rtoChartData} layout="vertical">
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={180} />
+                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={200} />
                 <Tooltip formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']} contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle} />
                 <Bar
                   dataKey="count"
@@ -136,7 +157,10 @@ export function RtoAnalysisPage() {
                 <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
                   {analysis?.rto_name || rtoCode} — Overview
                 </h3>
-                <span className="text-[10px] text-[var(--text-muted)] font-mono">{analysis?.state_name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">{analysis?.state_name}</span>
+                  <ExportCsvButton filename={`${analysis?.rto_name || rtoCode}-companies-fy${fyYear}`} rows={analysis?.makers} />
+                </div>
               </div>
               <div className="grid grid-cols-3 gap-3 mb-6">
                 <div className="rounded-xl p-4 border border-[var(--border)]" style={{ background: 'var(--bg-sunken)' }}>

@@ -1,4 +1,5 @@
 // frontend/src/pages/Overview.tsx
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -7,11 +8,13 @@ import {
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
+import { ExportCsvButton } from '../components/ExportCsvButton';
 import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
+import { useAuth } from '../contexts/AuthContext';
 import type { MonthDetail } from '../types';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -52,6 +55,7 @@ function CustomTooltip({ active, payload, label, chart }: TooltipProps<number, s
 
 export function OverviewPage() {
   const chart = useChartTheme();
+  const auth = useAuth();
   const {
     selectedYear,
     selectedMonth,
@@ -67,8 +71,31 @@ export function OverviewPage() {
     setSelectedMaker,
   } = useAppStore();
 
+  // State/RTO-scoped users are clamped server-side regardless, but showing
+  // them a dropdown for a choice they don't actually have reads as broken --
+  // force the shared filter store to their own state and never let it drift,
+  // so every existing state-filtered query on this page (and the "click a
+  // state to filter" row below) already reflects the lock with no other
+  // changes needed.
+  const isStateLocked = auth.scope_type !== 'national';
+  useEffect(() => {
+    if (isStateLocked && selectedState !== auth.scope_state_name) {
+      setSelectedState(auth.scope_state_name);
+    }
+  }, [isStateLocked, auth.scope_state_name, selectedState, setSelectedState]);
+
   const { data: statesList } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
+
+  // Any two of {Maker, Vehicle Category, Fuel} together are structurally
+  // unanswerable from the raw Registration table (see the impossible*Filter
+  // comments below) -- kpis/trend/ranking/monthDetail all sum Registration
+  // directly, so all four would silently return a hard 0 for these combos
+  // rather than "not available". Computed here (ahead of the flags'
+  // declarations further down, which is fine -- these are just booleans)
+  // so the queries below can gate on it directly instead of firing a
+  // request guaranteed to come back zero.
+  const kpiComboImpossible = !!((selectedCategory && selectedMaker) || (selectedCategory && fuelGroup) || (selectedMaker && fuelGroup));
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
@@ -80,6 +107,7 @@ export function OverviewPage() {
       fuel_group: fuelGroup,
       maker: selectedMaker,
     }),
+    enabled: !kpiComboImpossible,
   });
 
   const { data: trend, isLoading: trendLoading } = useQuery({
@@ -91,6 +119,7 @@ export function OverviewPage() {
       fuel_group: fuelGroup,
       maker: selectedMaker,
     }),
+    enabled: !kpiComboImpossible,
   });
 
   const { data: ranking, isLoading: rankingLoading } = useQuery({
@@ -104,6 +133,7 @@ export function OverviewPage() {
       maker: selectedMaker,
       limit: 10
     }),
+    enabled: !kpiComboImpossible,
   });
 
   const { data: categories, isLoading: categoriesLoading } = useQuery({
@@ -149,7 +179,7 @@ export function OverviewPage() {
       fuel_group: fuelGroup,
       maker: selectedMaker,
     }),
-    enabled: selectedMonth != null,
+    enabled: selectedMonth != null && !kpiComboImpossible,
   });
 
   const chartData = (trend || []).map((d: { month?: number; count: number }) => ({
@@ -229,12 +259,16 @@ export function OverviewPage() {
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance">
         <div className="flex flex-col gap-1.5">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
-          <select value={selectedState || ''} onChange={(e) => setSelectedState(e.target.value || null)} className={selectClass}>
-            <option value="">All States</option>
-            {(statesList || []).map((s: { state_name: string }) => (
-              <option key={s.state_name} value={s.state_name}>{s.state_name}</option>
-            ))}
-          </select>
+          {isStateLocked ? (
+            <div className={`${selectClass} cursor-default hover:border-[var(--border)]`}>{auth.scope_state_name}</div>
+          ) : (
+            <select value={selectedState || ''} onChange={(e) => setSelectedState(e.target.value || null)} className={selectClass}>
+              <option value="">All States</option>
+              {(statesList || []).map((s: { state_name: string }) => (
+                <option key={s.state_name} value={s.state_name}>{s.state_name}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -334,11 +368,17 @@ export function OverviewPage() {
         />
       )}
 
+      {kpiComboImpossible && (
+        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          Totals below aren't available for this filter combination — VAHAN's scraper can only pivot one of Category / Brand / Powertrain at a time, so no table has all of them together. See the cross-tab panel below instead, which does have this combination.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard label="Total Registrations" value={kpis?.total_this_month ?? 0} change={kpis?.yoy_growth_percent} icon={<Car className="w-4 h-4" />} loading={kpisLoading} index={0} />
-        <KPICard label="YoY Growth" value={kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—'} change={kpis?.yoy_growth_percent} icon={<TrendingUp className="w-4 h-4" />} loading={kpisLoading} index={1} />
-        <KPICard label="Avg Daily Registrations" value={kpis?.total_registrations_today ?? 0} icon={<Bike className="w-4 h-4" />} loading={kpisLoading} index={2} />
-        <KPICard label="Top State" value={kpis?.top_state ?? '—'} icon={<Award className="w-4 h-4" />} loading={kpisLoading} index={3} />
+        <KPICard label="Total Registrations" value={kpiComboImpossible ? '—' : (kpis?.total_this_month ?? 0)} change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent} icon={<Car className="w-4 h-4" />} loading={kpisLoading} index={0} />
+        <KPICard label="YoY Growth" value={kpiComboImpossible ? '—' : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')} change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent} icon={<TrendingUp className="w-4 h-4" />} loading={kpisLoading} index={1} />
+        <KPICard label="Avg Daily Registrations" value={kpiComboImpossible ? '—' : (kpis?.total_registrations_today ?? 0)} icon={<Bike className="w-4 h-4" />} loading={kpisLoading} index={2} />
+        <KPICard label="Top State" value={kpiComboImpossible ? '—' : (kpis?.top_state ?? '—')} icon={<Award className="w-4 h-4" />} loading={kpisLoading} index={3} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -453,6 +493,7 @@ export function OverviewPage() {
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">State Ranking</h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">Top 10 by registrations</p>
             </div>
+            <ExportCsvButton filename={`state-ranking-fy${selectedYear}`} rows={ranking} />
           </div>
           {rankingLoading ? (
             <div className="h-44 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
@@ -584,7 +625,15 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state }: { year: number
     queryFn: () => getMakerFuelBreakdown({ year, maker, fuel_group: fuelGroup, state }),
   });
 
-  const count = (data || []).find((r: { fuel_group: string; count: number }) => r.fuel_group === fuelGroup)?.count ?? 0;
+  // /maker-fuel-breakdown returns one row keyed by "maker" (not "fuel_group")
+  // when both maker and fuel_group are passed together -- both are always
+  // set here, since this panel only renders when they both are (see
+  // impossibleMakerFuelFilter). Matches how FuelCategoryPanel reads its own
+  // sibling endpoint's "both given" shape (keyed by "vehicle_category", not
+  // "fuel_group") a few lines up. Searching for r.fuel_group here (a field
+  // this response shape never has) always returned undefined -- silently
+  // showing 0 for every maker+fuel combination regardless of real data.
+  const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
 
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">

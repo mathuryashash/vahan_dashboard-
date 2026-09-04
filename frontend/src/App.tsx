@@ -16,6 +16,7 @@ import { getRefreshStatus } from './api/vahan';
 import { useScrapeProgress } from './hooks/useIsLiveData';
 import { getStoredAuth, logout } from './api/auth';
 import type { AuthUser } from './api/auth';
+import { AuthContext } from './contexts/AuthContext';
 
 export default function App() {
   const [auth, setAuth] = useState<AuthUser | null>(getStoredAuth());
@@ -43,29 +44,31 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--bg-app)]">
-      <Sidebar />
-      <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-surface)]">
-        <Header
-          refreshStatus={data ?? null}
-          statusUpdatedAt={dataUpdatedAt}
-          scrapeProgress={scrapeProgress ?? null}
-          auth={auth}
-          onLogout={handleLogout}
-        />
-        <main className="flex-1 overflow-y-auto">
-          <Routes>
-            <Route path="/" element={<OverviewPage />} />
-            <Route path="/comparison" element={<ComparisonPage />} />
-            <Route path="/yoy" element={<YoYPage />} />
-            <Route path="/categories" element={<CategoriesPage />} />
-            <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
-            <Route path="/makers" element={<MakersModelsPage />} />
-            <Route path="/industry-sales" element={<IndustrySalesPage />} />
-            <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
-          </Routes>
-        </main>
+    <AuthContext.Provider value={auth}>
+      <div className="flex h-screen overflow-hidden bg-[var(--bg-app)]">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-surface)]">
+          <Header
+            refreshStatus={data ?? null}
+            statusUpdatedAt={dataUpdatedAt}
+            scrapeProgress={scrapeProgress ?? null}
+            auth={auth}
+            onLogout={handleLogout}
+          />
+          <main className="flex-1 overflow-y-auto">
+            <Routes>
+              <Route path="/" element={<OverviewPage />} />
+              <Route path="/comparison" element={<ComparisonPage />} />
+              <Route path="/yoy" element={<YoYPage />} />
+              <Route path="/categories" element={<CategoriesPage />} />
+              <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
+              <Route path="/makers" element={<MakersModelsPage />} />
+              <Route path="/industry-sales" element={<IndustrySalesPage />} />
+              <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
+            </Routes>
+          </main>
+        </div>
       </div>
-    </div>
+    </AuthContext.Provider>
   );
 }

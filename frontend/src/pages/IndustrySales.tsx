@@ -78,7 +78,7 @@ export function IndustrySalesPage() {
         ) : barData.length === 0 ? (
           <EmptyState variant="no-data" title="No FADA data for this category/year" description="Try a different category or year." />
         ) : (
-          <ResponsiveContainer width="100%" height={Math.max(280, barData.length * 26)}>
+          <ResponsiveContainer width="100%" height={Math.max(280, barData.length * 30)}>
             <BarChart data={barData} layout="vertical">
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
