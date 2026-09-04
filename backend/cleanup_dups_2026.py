@@ -1,4 +1,9 @@
-"""Targeted re-scrape of RTOs whose 2026 rows contain stale-page duplicates.
+"""Targeted re-scrape of RTOs whose rows for a given year contain
+stale-page duplicates -- despite the filename (kept for continuity with
+existing usage/history), this now takes --year and works for any year, not
+just 2026. Originally written to clean up 2026 specifically; generalized
+after the same duplicate-row pattern was confirmed present in 2024 (84
+dirty RTOs) and 2025 (70 dirty RTOs) too, via the same detection query.
 
 Reuses scrape_all_india's own resume machinery, inverted: skip_rtos normally
 means "don't redo these"; here we build it as "every KNOWN rto for this
@@ -6,11 +11,13 @@ dimension EXCEPT the dirty ones", so only dirty RTOs get scraped. Each
 scraped batch goes through persist_rto_batch's scoped delete-then-insert,
 so dirty rows are fully replaced, not appended to.
 
-Usage: python cleanup_dups_2026.py <dimension>   # maker | vehicle_class | fuel
+Usage: python cleanup_dups_2026.py <dimension> [--year YYYY]
+       dimension: maker | vehicle_class | fuel
+       --year: defaults to 2026
 """
+import argparse
 import asyncio
 import logging
-import sys
 
 import asyncpg
 from sqlalchemy import text
@@ -24,9 +31,8 @@ logger = logging.getLogger("cleanup_dups")
 
 PG_DSN = "postgresql://vahan:vahan@localhost:5432/vahan"
 
-# Same dimension filters used by run_full_scrape._already_done_rtos /
-# verify_2026.py -- keeps "which rows belong to this dimension" consistent
-# everywhere.
+# Same dimension filters used by run_full_scrape._already_done_rtos --
+# keeps "which rows belong to this dimension" consistent everywhere.
 DIM_FILTERS = {
     "maker": "is_supplementary=false AND vehicle_class='All'",
     "vehicle_class": "is_supplementary=true AND fuel_type IS NULL",
@@ -35,7 +41,7 @@ DIM_FILTERS = {
 DIM_LABEL_COL = {"maker": "maker", "vehicle_class": "vehicle_class", "fuel": "fuel_type"}
 
 
-async def fetch_dirty_and_known(dsn: str, dimension: str):
+async def fetch_dirty_and_known(dsn: str, dimension: str, year: int):
     """Returns ({state_name: frozenset(dirty_rto_codes)},
                 {state_name: frozenset(all_known_rto_codes)})."""
     dim_filter = DIM_FILTERS[dimension]
@@ -45,19 +51,21 @@ async def fetch_dirty_and_known(dsn: str, dimension: str):
         dirty_rows = await conn.fetch(
             f"""
             SELECT DISTINCT rto_code, state_name FROM registrations
-            WHERE year=2026 AND {dim_filter} AND rto_code IN (
+            WHERE year=$1 AND {dim_filter} AND rto_code IN (
                 SELECT rto_code FROM registrations
-                WHERE year=2026 AND {dim_filter}
+                WHERE year=$1 AND {dim_filter}
                 GROUP BY rto_code, year, month, {label_col}
                 HAVING COUNT(*) > 1
             )
-            """
+            """,
+            year,
         )
         known_rows = await conn.fetch(
             f"""
             SELECT DISTINCT rto_code, state_name FROM registrations
-            WHERE year=2026 AND {dim_filter}
-            """
+            WHERE year=$1 AND {dim_filter}
+            """,
+            year,
         )
     finally:
         await conn.close()
@@ -74,10 +82,10 @@ async def fetch_dirty_and_known(dsn: str, dimension: str):
     )
 
 
-async def main(dimension: str) -> None:
-    dirty, known = await fetch_dirty_and_known(PG_DSN, dimension)
+async def main(dimension: str, year: int) -> None:
+    dirty, known = await fetch_dirty_and_known(PG_DSN, dimension, year)
     total_dirty = sum(len(v) for v in dirty.values())
-    logger.info("Dirty RTOs for %s: %d across %d states", dimension, total_dirty, len(dirty))
+    logger.info("Dirty RTOs for %s/%d: %d across %d states", dimension, year, total_dirty, len(dirty))
     if not dirty:
         logger.info("Nothing to do.")
         return
@@ -111,7 +119,7 @@ async def main(dimension: str) -> None:
         scraped = 0
         rejected = 0
         async for item in scrape_all_india(
-            year=2026,
+            year=year,
             dimension=dimension,
             # Double the normal per-RTO delay for this recovery pass: the
             # last maker run hit stale-page-stuck on ~35% of RTOs (vs. ~3%
@@ -155,19 +163,19 @@ async def main(dimension: str) -> None:
             rows_result = await db.execute(
                 text(
                     "SELECT COUNT(*) FROM registrations WHERE rto_code=:r "
-                    "AND year=2026 AND " + DIM_FILTERS[dimension]
+                    "AND year=:y AND " + DIM_FILTERS[dimension]
                 ),
-                {"r": item["rto_code"]},
+                {"r": item["rto_code"], "y": year},
             )
             n_rows = rows_result.scalar()
             label_col = DIM_LABEL_COL[dimension]
             pairs_result = await db.execute(
                 text(
                     f"SELECT COUNT(*) FROM (SELECT {label_col}, month FROM registrations "
-                    "WHERE rto_code=:r AND year=2026 AND " + DIM_FILTERS[dimension] +
+                    "WHERE rto_code=:r AND year=:y AND " + DIM_FILTERS[dimension] +
                     " GROUP BY " + label_col + ", month) x"
                 ),
-                {"r": item["rto_code"]},
+                {"r": item["rto_code"], "y": year},
             )
             n_pairs = pairs_result.scalar()
             logger.info(
@@ -182,12 +190,17 @@ async def main(dimension: str) -> None:
             if scraped % 25 == 0:
                 logger.info("Re-scraped %d/%d dirty RTOs...", scraped, total_dirty)
         logger.info(
-            "Cleanup done: %d RTOs re-scraped, %d batches REJECTED for %s",
+            "Cleanup done: %d RTOs re-scraped, %d batches REJECTED for %s/%d",
             scraped,
             rejected,
             dimension,
+            year,
         )
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1]))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dimension", choices=sorted(DIM_FILTERS))
+    parser.add_argument("--year", type=int, default=2026)
+    args = parser.parse_args()
+    asyncio.run(main(args.dimension, args.year))

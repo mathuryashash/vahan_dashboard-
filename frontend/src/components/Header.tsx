@@ -1,10 +1,44 @@
 // frontend/src/components/Header.tsx
-import { useQueryClient } from '@tanstack/react-query';
-import { triggerRefresh } from '../api/vahan';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { triggerRefresh, getDataQuality } from '../api/vahan';
 import { useEffect, useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import type { RefreshStatus, ScrapeProgress } from '../types';
 import type { AuthUser } from '../api/auth';
+
+const INTEGRITY_COLOR: Record<'green' | 'amber' | 'red', string> = {
+  green: 'var(--success)',
+  amber: 'var(--accent)',
+  red: 'var(--danger)',
+};
+const INTEGRITY_LABEL: Record<'green' | 'amber' | 'red', string> = {
+  green: 'Data integrity: clean',
+  amber: 'Data integrity: check needed',
+  red: 'Data integrity: FADA has no data',
+};
+
+function DataIntegrityBadge() {
+  const { data } = useQuery({
+    queryKey: ['dataQuality'],
+    queryFn: getDataQuality,
+    refetchInterval: 5 * 60 * 1000,
+  });
+  if (!data) return null;
+  const pct = data.quality_check.pct_clean;
+  const tooltip = [
+    INTEGRITY_LABEL[data.level],
+    pct !== null ? `${pct}% of ${data.quality_check.cells_checked} RTO/month cells verified clean` : 'No quality check run yet',
+    data.scrape_fresh ? 'Last scrape <24h old' : 'Last scrape >24h old',
+  ].join(' — ');
+  return (
+    <div className="flex items-center gap-1.5" title={tooltip}>
+      <div className="w-2 h-2 rounded-full" style={{ background: INTEGRITY_COLOR[data.level] }} />
+      <span className="text-[10px] text-[var(--text-muted)] font-mono uppercase tracking-widest hidden lg:inline">
+        {data.level}
+      </span>
+    </div>
+  );
+}
 
 interface HeaderProps {
   refreshStatus: RefreshStatus | null;
@@ -68,6 +102,9 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, o
       </div>
 
       <div className="flex items-center gap-3">
+        <DataIntegrityBadge />
+        <div className="w-px h-5 bg-[var(--border)]" />
+
         {scrapeProgress && scrapeProgress.states_done < scrapeProgress.states_total && (
           <div
             className="flex items-center gap-2"

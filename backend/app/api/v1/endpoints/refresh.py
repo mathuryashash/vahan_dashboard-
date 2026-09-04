@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.auth import require_role
+from app.core.auth import require_role, get_current_user
 from app.core.database import get_db
-from app.models.models import Registration, State, User, UserRole
+from app.models.models import OEMMonthlySales, Registration, ScrapeQualityLog, State, User, UserRole
 from app.schemas.schemas import RefreshResponse
 from app.services.scraper_service import run_scraper
 from app.core.config import settings
@@ -108,3 +108,61 @@ async def get_scrape_progress(db: AsyncSession = Depends(get_db)):
     _scrape_progress_cache["value"] = result
     _scrape_progress_cache["at"] = now
     return result
+
+
+_CLEAN_THRESHOLD_PCT = 98.0
+
+
+@router.get("/data-quality")
+async def get_data_quality(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+    """Combined health signal for the frontend's data-integrity indicator
+    (see Header.tsx): how fresh the last VAHAN scrape was, whether the
+    cross-dimension consistency check (app.services.scrape_quality) passed,
+    and whether FADA has any data at all. green/amber/red per the spec:
+    green = last scrape <24h old AND per-cell check passed; amber = a scrape
+    happened but is stale or the check found issues; red = FADA has never
+    ingested anything (a harder failure than mere staleness -- see
+    /oem-sales/status for the staleness threshold used on that page).
+    """
+    current_year = datetime.now(timezone.utc).year
+    # One conditional-aggregation query instead of three round trips (an
+    # existence check plus two separate counts) -- this endpoint is polled
+    # every 5 minutes by the header's integrity badge.
+    checked, clean = (await db.execute(
+        select(
+            func.count(),
+            func.count().filter(ScrapeQualityLog.is_clean.is_(True)),
+        ).select_from(ScrapeQualityLog).where(ScrapeQualityLog.year == current_year)
+    )).one()
+    checked, clean = checked or 0, clean or 0
+    pct_clean = round(clean / checked * 100, 1) if checked else None
+
+    scrape_fresh = False
+    if settings.LAST_UPDATED:
+        try:
+            last_updated_dt = datetime.strptime(settings.LAST_UPDATED, "%Y-%m-%d %H:%M UTC").replace(tzinfo=timezone.utc)
+            scrape_fresh = (datetime.now(timezone.utc) - last_updated_dt) < timedelta(hours=24)
+        except ValueError:
+            scrape_fresh = False
+
+    fada_last = (await db.execute(select(func.max(OEMMonthlySales.scraped_at)))).scalar()
+
+    if fada_last is None:
+        level = "red"
+    elif scrape_fresh and pct_clean is not None and pct_clean >= _CLEAN_THRESHOLD_PCT:
+        level = "green"
+    else:
+        level = "amber"
+
+    return {
+        "level": level,
+        "scrape_fresh": scrape_fresh,
+        "last_updated": settings.LAST_UPDATED,
+        "quality_check": {
+            "year": current_year,
+            "cells_checked": checked,
+            "cells_clean": clean,
+            "pct_clean": pct_clean,
+        },
+        "fada_last_ingested_at": fada_last.isoformat() if fada_last else None,
+    }

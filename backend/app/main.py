@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.database import init_db, AsyncSessionLocal
 from app.api.v1.router import api_router
 from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
-from scraper.scheduler import run_scheduler_loop, run_fada_scheduler_loop
+from scraper.scheduler import run_scheduler_loop, run_fada_scheduler_loop, run_previous_year_revalidation_loop
 
 logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -20,9 +20,14 @@ async def lifespan(app: FastAPI):
         await seed_geo_hierarchy(session)
     scheduler_task = asyncio.create_task(run_scheduler_loop())
     fada_scheduler_task = asyncio.create_task(run_fada_scheduler_loop())
+    # Off by default -- see ENABLE_PREVIOUS_YEAR_REVALIDATION's own comment
+    # in config.py for why this isn't just always on.
+    revalidation_task = asyncio.create_task(run_previous_year_revalidation_loop()) if settings.ENABLE_PREVIOUS_YEAR_REVALIDATION else None
     yield
     scheduler_task.cancel()
     fada_scheduler_task.cancel()
+    if revalidation_task:
+        revalidation_task.cancel()
 
 
 app = FastAPI(

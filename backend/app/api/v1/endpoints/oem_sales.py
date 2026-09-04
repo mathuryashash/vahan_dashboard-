@@ -7,6 +7,44 @@ from app.models.models import OEMMonthlySales, User
 
 router = APIRouter()
 
+STALE_AFTER_DAYS = 14
+
+
+@router.get("/status")
+async def get_oem_status(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+    """When FADA data was last actually ingested, so the frontend can warn
+    "this is N days old" instead of silently presenting old numbers as
+    current -- FADA publishes monthly, so some staleness is normal, but the
+    page shouldn't imply data is fresher than it is.
+
+    The age is computed by Postgres itself (func.now() - max(scraped_at)),
+    not by comparing the DB value against Python's datetime.now(timezone.utc)
+    -- scraped_at is written via the DB-side func.now() default, and this
+    Postgres instance's session timezone is Asia/Calcutta (confirmed via
+    `SHOW timezone`), so it stores IST wall-clock time into a timezone-naive
+    column, not UTC like the rest of this app's own Python-side datetimes
+    do. Comparing that against a true-UTC Python `now` was off by the
+    UTC+5:30 gap (days_stale came back negative for data ingested minutes
+    earlier). Subtracting entirely within Postgres cancels the ambiguity
+    out: both sides of the subtraction use the same (mis)interpretation, so
+    the difference is correct regardless of what timezone the server
+    actually thinks it's in.
+    """
+    row = (await db.execute(
+        select(
+            func.max(OEMMonthlySales.scraped_at).label("last"),
+            (func.now() - func.max(OEMMonthlySales.scraped_at)).label("age"),
+        )
+    )).first()
+    if row is None or row.last is None:
+        return {"last_ingested_at": None, "days_stale": None, "is_stale": True}
+    days_stale = row.age.days
+    return {
+        "last_ingested_at": row.last.isoformat(),
+        "days_stale": days_stale,
+        "is_stale": days_stale > STALE_AFTER_DAYS,
+    }
+
 
 @router.get("/categories")
 async def get_oem_categories(

@@ -30,6 +30,45 @@ async def test_persist_rto_batch_inserts_records(db_session):
     assert rows[0].is_supplementary is False
 
 
+async def test_persist_rto_batch_drops_zero_count_rows(db_session):
+    batch = {
+        "state_name": "Delhi",
+        "rto_code": "DL1",
+        "rto_name": "OLD DELHI (MALL ROAD)",
+        "records": [
+            {"label": "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD", "month": 1, "year": 2026, "count": 91},
+            {"label": "TATA MOTORS LTD", "month": 1, "year": 2026, "count": 0},
+        ],
+    }
+    await persist_rto_batch(db_session, batch, state_code="DL")
+    await db_session.commit()
+
+    rows = (await db_session.execute(select(Registration).where(Registration.rto_code == "DL1"))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].count == 91
+
+
+async def test_persist_rto_batch_keeps_rows_when_entire_batch_is_zero(db_session):
+    # A real all-zero RTO (rare -- a tiny territory with no registrations
+    # that month) must still write *something*, or run_full_scrape's
+    # _already_done_rtos would never see it as scraped and retry it every
+    # resume, forever.
+    batch = {
+        "state_name": "Lakshadweep",
+        "rto_code": "LD1",
+        "rto_name": "Test RTO",
+        "records": [
+            {"label": "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD", "month": 1, "year": 2026, "count": 0},
+        ],
+    }
+    await persist_rto_batch(db_session, batch, state_code="LD")
+    await db_session.commit()
+
+    rows = (await db_session.execute(select(Registration).where(Registration.rto_code == "LD1"))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].count == 0
+
+
 async def test_persist_rto_batch_replaces_prior_year_data(db_session):
     batch = {
         "state_name": "Delhi",
@@ -135,13 +174,19 @@ async def test_run_scraper_runs_dimensions_concurrently_not_sequentially(monkeyp
     would silently 3x the wall-clock time of every refresh."""
     calls = []
 
-    def fake_dimension_sync(dimension, concurrent_states=1, force=True):
+    def fake_dimension_sync(dimension, concurrent_states=1, force=True, year=None):
         calls.append((dimension, "start", time.monotonic()))
         time.sleep(0.2)
         calls.append((dimension, "end", time.monotonic()))
         return 0
 
     monkeypatch.setattr("app.services.scraper_service._run_dimension_sync", fake_dimension_sync)
+    # Quality check hits a real DB session -- irrelevant to this test's own
+    # concern (concurrent dimension launch) and slow enough to blow the
+    # timing assertion below.
+    async def fake_check_quality(db, year):
+        return {}
+    monkeypatch.setattr("app.services.scrape_quality.check_scrape_quality", fake_check_quality)
 
     start = time.monotonic()
     await run_scraper()
@@ -154,7 +199,7 @@ async def test_run_scraper_runs_dimensions_concurrently_not_sequentially(monkeyp
 
 
 async def test_run_scraper_marks_network_failure_for_retry(monkeypatch):
-    monkeypatch.setattr("app.services.scraper_service._run_dimension_sync", lambda dimension, concurrent_states=1, force=True: 1)
+    monkeypatch.setattr("app.services.scraper_service._run_dimension_sync", lambda dimension, concurrent_states=1, force=True, year=None: 1)
     settings.REFRESH_STATUS = "idle"
     settings.REFRESH_ERROR = None
 

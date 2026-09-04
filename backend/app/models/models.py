@@ -221,6 +221,53 @@ class OEMMonthlySales(Base):
     )
 
 
+class FadaScrapeAttempt(Base):
+    """One row per FADA release title the scheduler has ever looked at,
+    success or failure -- distinct from OEMMonthlySales.source_document,
+    which only ever has rows for releases that actually parsed. Without
+    this, a release whose PDF layout defeats extraction (0 rows returned)
+    never gets a source_document row, so the scheduler's "already ingested"
+    check never sees it as done and re-fetches + re-parses it every single
+    24h cycle forever -- confirmed live: the same ~15 pre-2022 releases
+    were being re-parsed on every scheduler run. This table makes "already
+    attempted" independent of "successfully ingested"."""
+    __tablename__ = "fada_scrape_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_document = Column(String(300), nullable=False, unique=True, index=True)
+    status = Column(String(20), nullable=False)  # "ingested" | "failed_extraction"
+    row_count = Column(Integer, nullable=False, default=0)
+    attempted_at = Column(DateTime, default=func.now())
+
+
+class ScrapeQualityLog(Base):
+    """Per (rto, year, month) cross-dimension consistency check: the maker,
+    vehicle_class, and fuel passes are three independent scrapes of the
+    SAME underlying registrations (see Registration.is_supplementary), so
+    their totals for a given RTO/month should agree. A large disagreement
+    means one of the three passes scraped stale or corrupted data for that
+    cell. Computed by app.services.scrape_quality.check_scrape_quality,
+    called after each full scrape cycle (see scraper_service.run_scraper)."""
+    __tablename__ = "scrape_quality_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rto_code = Column(String(10), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    year = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False)
+    maker_total = Column(Integer, nullable=False)
+    vehicle_class_total = Column(Integer, nullable=False)
+    fuel_total = Column(Integer, nullable=False)
+    max_pct_diff = Column(Float, nullable=False)
+    is_clean = Column(Boolean, nullable=False)
+    checked_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (
+        Index("idx_sql_rto_year_month", "rto_code", "year", "month", unique=True),
+        Index("idx_sql_year_clean", "year", "is_clean"),
+    )
+
+
 class UserRole:
     """String constants, not a DB enum -- adding/renaming a tier later is a
     code change, not a migration. Three tiers: admin (full access, manages

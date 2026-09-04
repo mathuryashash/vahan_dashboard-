@@ -66,7 +66,16 @@ export const getMonthDetail = (params: { year: number; month: number } & Omit<Fi
   api.get('/summary/month-detail', { params }).then(r => r.data);
 export const getAvailableYears = (): Promise<number[]> => api.get('/summary/available-years').then(r => r.data);
 export const getScrapeProgress = () => api.get('/refresh/scrape-progress').then(r => r.data);
+export const getDataQuality = (): Promise<{
+  level: 'green' | 'amber' | 'red';
+  scrape_fresh: boolean;
+  last_updated: string | null;
+  quality_check: { year: number; cells_checked: number; cells_clean: number; pct_clean: number | null };
+  fada_last_ingested_at: string | null;
+}> => api.get('/refresh/data-quality').then(r => r.data);
 
+export const getOemStatus = (): Promise<{ last_ingested_at: string | null; days_stale: number | null; is_stale: boolean }> =>
+  api.get('/oem-sales/status').then(r => r.data);
 export const getOemCategories = (year?: number): Promise<string[]> =>
   api.get('/oem-sales/categories', { params: { year } }).then(r => r.data);
 export const getOemMonthly = (params: { category: string; year: number; month?: number | null }) =>

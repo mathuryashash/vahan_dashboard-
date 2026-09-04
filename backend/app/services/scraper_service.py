@@ -57,7 +57,22 @@ async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dime
             delete_query = delete_query.where(Registration.fuel_type.isnot(None))
         await db.execute(delete_query)
 
-    for record in batch["records"]:
+    # Zero-count cells are the majority of rows scraped (a maker/class/fuel
+    # simply had no registrations at an RTO that month) and every existing
+    # query already treats "no row" the same as "a row with count=0" (SUM
+    # ignores absent rows identically) -- so dropping them is free storage
+    # savings, ~1.4M rows/year down to ~500k for the maker pass. The one
+    # thing that can't regress: _already_done_rtos (run_full_scrape.py) and
+    # its siblings detect "already scraped" purely by row *presence* for
+    # this (rto_code, year, dimension) -- an RTO whose entire result set is
+    # legitimately all-zero would insert nothing and look "never scraped"
+    # forever, looping on every resume. Falling back to the unfiltered
+    # batch in that (rare -- a handful of tiny-territory RTOs) case keeps
+    # the resume signal intact without a bigger tracking-table change.
+    non_zero_records = [r for r in batch["records"] if r["count"] > 0]
+    records_to_persist = non_zero_records if non_zero_records else batch["records"]
+
+    for record in records_to_persist:
         fields = dict(
             state_code=state_code,
             state_name=batch["state_name"],
@@ -171,12 +186,14 @@ async def _state_code_lookup(db: AsyncSession) -> dict[str, str]:
     return {name: code for name, code in result.all()}
 
 
-def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool = True) -> int:
+def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool = True, year: int | None = None) -> int:
     import subprocess
     cmd = [sys.executable, "-m", "scraper.run_full_scrape", "--dimension", dimension, "--concurrent-states", str(concurrent_states)]
     if force:
         cmd.append("--force")
-    logger.info("Starting scraper subprocess for dimension: %s (concurrent_states=%s, force=%s)", dimension, concurrent_states, force)
+    if year is not None:
+        cmd.extend(["--year", str(year)])
+    logger.info("Starting scraper subprocess for dimension: %s (concurrent_states=%s, force=%s, year=%s)", dimension, concurrent_states, force, year or "current")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -194,7 +211,7 @@ def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool 
     return proc.wait()
 
 
-async def run_scraper(concurrent_states: int = 1, force: bool = True) -> None:
+async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int | None = None) -> None:
     """Launch the full-India live scrape as separate OS processes and await completion.
 
     Playwright's Chromium subprocess was observed (during manual verification) to crash
@@ -218,22 +235,33 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True) -> None:
     own pacing (1.5s between RTO requests), so N concurrent states means
     N requests every ~1.5s instead of 1.
 
-    `force` (default True): re-scrape every RTO for the current year even if
-    it already has data. run_full_scrape.py's --year always defaults to the
-    current calendar year, so this never touches historical years -- but
-    without it, VAHAN's own late/backfilled registrations for recent months
-    never get picked up: any RTO that already has *a* row for this year gets
-    silently skipped, so the same stale numbers persist run after run no
-    matter how often the scheduler fires.
+    `force` (default True): re-scrape every RTO for the target year even if
+    it already has data -- without it, VAHAN's own late/backfilled
+    registrations never get picked up: any RTO that already has *a* row
+    gets silently skipped, so the same stale numbers persist run after run
+    no matter how often the scheduler fires.
+
+    `year` (default None): the calendar year to scrape, passed straight
+    through as run_full_scrape.py's --year. None means that script's own
+    default (the current calendar year) -- the normal 5h scheduler loop.
+    Passed explicitly by run_previous_year_revalidation_loop (scheduler.py)
+    to re-validate last year's data instead, so that year isn't frozen the
+    moment the calendar rolls over. settings.LAST_UPDATED / REFRESH_STATUS
+    are still updated either way (this and a manual Refresh share the same
+    "is a scrape running" guard, so they can't overlap), but LAST_UPDATED
+    only advances for a *current-year* run -- see below -- since a
+    previous-year revalidation completing doesn't mean this year's numbers
+    are fresh, which is what that timestamp is meant to answer for the
+    frontend's data-integrity indicator.
     """
     settings.REFRESH_STATUS = "running"
     settings.REFRESH_ERROR = None
     settings.LAST_REFRESH_STARTED_AT = datetime.now(timezone.utc)
-    logger.info("Starting live VAHAN4 scrape at %s (concurrent_states=%s, force=%s)", settings.LAST_REFRESH_STARTED_AT, concurrent_states, force)
+    logger.info("Starting live VAHAN4 scrape at %s (concurrent_states=%s, force=%s, year=%s)", settings.LAST_REFRESH_STARTED_AT, concurrent_states, force, year or "current")
 
     try:
         results = await asyncio.gather(
-            *(asyncio.to_thread(_run_dimension_sync, dimension, concurrent_states, force) for dimension in DIMENSIONS),
+            *(asyncio.to_thread(_run_dimension_sync, dimension, concurrent_states, force, year) for dimension in DIMENSIONS),
             return_exceptions=True,
         )
     except asyncio.CancelledError:
@@ -259,6 +287,20 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True) -> None:
             logger.error(message)
             raise ScrapeFailedError(message)
 
-    settings.LAST_UPDATED = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    scraped_year = year or datetime.now(timezone.utc).year
+    if scraped_year == datetime.now(timezone.utc).year:
+        settings.LAST_UPDATED = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     settings.REFRESH_STATUS = "success"
-    logger.info("Live VAHAN4 scrape complete.")
+    logger.info("Live VAHAN4 scrape complete (year=%s).", scraped_year)
+
+    # All 3 dimensions just finished for `scraped_year` -- this is the one
+    # point where it's cheap to check whether they agree with each other.
+    # A failure here shouldn't fail the whole refresh (the scrape itself
+    # succeeded); log and move on.
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.scrape_quality import check_scrape_quality
+        async with AsyncSessionLocal() as db:
+            await check_scrape_quality(db, scraped_year)
+    except Exception as exc:
+        logger.error("Scrape quality check failed (scrape itself succeeded): %s", exc)

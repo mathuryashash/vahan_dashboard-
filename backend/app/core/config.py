@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     # RTO requests), so N concurrent states means N requests every ~1.5s instead of 1.
     # Default 1 preserves original serial behavior. Increase to 2-4 for higher throughput.
     SCRAPER_CONCURRENT_STATES: int = 1
+    # Off by default: enabling this adds a full extra all-India, all-3-
+    # dimension scrape (the same weight as a manual Refresh) once a day, on
+    # top of the normal 5h current-year loop -- a real, standing increase in
+    # load against the live government site, not a cheap check. See
+    # scraper.scheduler.run_previous_year_revalidation_loop. Turn on via
+    # .env once you've decided that tradeoff is worth it.
+    ENABLE_PREVIOUS_YEAR_REVALIDATION: bool = False
 
     # Auth (hierarchy/role system). The dev default here is fine for local
     # work but MUST be overridden via .env in any real deployment -- anyone

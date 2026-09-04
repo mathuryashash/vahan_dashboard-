@@ -2,11 +2,12 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { getOemCategories, getOemMonthly, getOemTrend } from '../api/vahan';
+import { getOemCategories, getOemMonthly, getOemTrend, getOemStatus } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
+import { ExportCsvButton } from '../components/ExportCsvButton';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -27,11 +28,15 @@ export function IndustrySalesPage() {
   });
   // selectedCategory can point at a category that had data for a previously
   // selected year but not this one (categories are now filtered per-year) --
-  // fall back to the first category the current year actually has instead of
-  // holding onto a choice that no longer applies.
+  // fall back to no selection rather than silently picking a different
+  // category out from under the user (was categories?.[0], defaulting to
+  // whichever category happened to sort first -- confusing when the page
+  // loads pre-filtered to something the user didn't choose).
   const category = (selectedCategory && categories?.includes(selectedCategory))
     ? selectedCategory
-    : categories?.[0] ?? null;
+    : null;
+
+  const { data: oemStatus } = useQuery({ queryKey: ['oemStatus'], queryFn: getOemStatus });
 
   const { data: monthly, isLoading: monthlyLoading } = useQuery({
     queryKey: ['oemMonthly', category, selectedYear, selectedMonth],
@@ -60,6 +65,14 @@ export function IndustrySalesPage() {
         </p>
       </div>
 
+      {oemStatus?.is_stale && (
+        <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          {oemStatus.last_ingested_at
+            ? <>FADA data was last updated <span className="font-semibold text-[var(--accent)]">{oemStatus.days_stale} days ago</span> — this may not reflect the current month yet. FADA publishes monthly, so some lag is normal.</>
+            : <>No FADA data has been ingested yet.</>}
+        </div>
+      )}
+
       <div className="flex flex-col gap-1.5 max-w-xs">
         <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
         <select
@@ -67,13 +80,19 @@ export function IndustrySalesPage() {
           onChange={(e) => { setSelectedCategory(e.target.value); setSelectedMaker(null); }}
           className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
         >
+          <option value="">Please select a category</option>
           {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
-        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">Maker Leaderboard</h3>
-        {monthlyLoading ? (
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Maker Leaderboard</h3>
+          <ExportCsvButton filename={`fada-${category}-fy${selectedYear}`} rows={monthly} />
+        </div>
+        {!category ? (
+          <EmptyState variant="no-selection" title="Please select a category" description="Pick a category above to see its maker leaderboard." />
+        ) : monthlyLoading ? (
           <div className="h-[400px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
         ) : barData.length === 0 ? (
           <EmptyState variant="no-data" title="No FADA data for this category/year" description="Try a different category or year." />
