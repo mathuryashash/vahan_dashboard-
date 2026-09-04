@@ -96,6 +96,49 @@ export function OverviewPage() {
   // so the queries below can gate on it directly instead of firing a
   // request guaranteed to come back zero.
   const kpiComboImpossible = !!((selectedCategory && selectedMaker) || (selectedCategory && fuelGroup) || (selectedMaker && fuelGroup));
+  // Exactly one of the three pairs active (not all three at once) means one
+  // of the cross-tab panels below already has the real total -- pull it up
+  // here too instead of leaving "Total Registrations" as an unexplained
+  // dash when the exact number is visible one panel down. All three filters
+  // set at once has no cross-tab that answers it (none of the three pivots
+  // cover all of Maker + Category + Fuel together), so that case still
+  // falls back to '--'. Same queryKey/queryFn as the matching panel further
+  // down -- react-query dedupes this into the same cache entry, so this
+  // isn't a second network request.
+  const exactlyOnePairActive = [!!selectedCategory, !!selectedMaker, !!fuelGroup].filter(Boolean).length === 2;
+
+  const { data: crosstabMakerCategory, isLoading: crosstabMakerCategoryLoading } = useQuery({
+    queryKey: ['makerCategoryBreakdown', selectedYear, selectedCategory, selectedMaker, selectedState],
+    queryFn: () => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, maker: selectedMaker!, state: selectedState }),
+    enabled: exactlyOnePairActive && !!selectedCategory && !!selectedMaker,
+  });
+  const { data: crosstabFuelCategory, isLoading: crosstabFuelCategoryLoading } = useQuery({
+    queryKey: ['fuelCategoryBreakdown', selectedYear, selectedCategory, fuelGroup, selectedState],
+    queryFn: () => getFuelCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }),
+    enabled: exactlyOnePairActive && !!selectedCategory && !!fuelGroup,
+  });
+  const { data: crosstabMakerFuel, isLoading: crosstabMakerFuelLoading } = useQuery({
+    queryKey: ['makerFuelBreakdown', selectedYear, selectedMaker, fuelGroup, selectedState],
+    queryFn: () => getMakerFuelBreakdown({ year: selectedYear, maker: selectedMaker!, fuel_group: fuelGroup!, state: selectedState }),
+    enabled: exactlyOnePairActive && !!selectedMaker && !!fuelGroup,
+  });
+
+  let crosstabTotal: number | undefined;
+  let crosstabLoading = false;
+  if (exactlyOnePairActive && selectedCategory && selectedMaker) {
+    crosstabTotal = (crosstabMakerCategory || []).find((r: { maker: string; count: number }) => r.maker === selectedMaker)?.count;
+    crosstabLoading = crosstabMakerCategoryLoading;
+  } else if (exactlyOnePairActive && selectedCategory && fuelGroup) {
+    crosstabTotal = (crosstabFuelCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+    crosstabLoading = crosstabFuelCategoryLoading;
+  } else if (exactlyOnePairActive && selectedMaker && fuelGroup) {
+    crosstabTotal = (crosstabMakerFuel || []).find((r: { maker: string; count: number }) => r.maker === selectedMaker)?.count;
+    crosstabLoading = crosstabMakerFuelLoading;
+  }
+  // Cross-tabs are year totals, no day-level granularity to divide by the
+  // actual elapsed days -- 365 is the same coarse approximation the rest of
+  // this page already uses elsewhere for a full-year average.
+  const crosstabAvgDaily = crosstabTotal !== undefined ? Math.round(crosstabTotal / 365) : undefined;
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
@@ -370,14 +413,29 @@ export function OverviewPage() {
 
       {kpiComboImpossible && (
         <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
-          Totals below aren't available for this filter combination — VAHAN's scraper can only pivot one of Category / Brand / Powertrain at a time, so no table has all of them together. See the cross-tab panel below instead, which does have this combination.
+          {exactlyOnePairActive
+            ? <>Total Registrations and Avg Daily below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination. YoY Growth and Top State genuinely aren't computable from a year-only total.</>
+            : <>Totals below aren't available with all three of Category, Brand, and Powertrain selected together — no VAHAN table pivots on all three at once. Drop one of them, or see the cross-tab panels below for any two together.</>}
         </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard label="Total Registrations" value={kpiComboImpossible ? '—' : (kpis?.total_this_month ?? 0)} change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent} icon={<Car className="w-4 h-4" />} loading={kpisLoading} index={0} />
+        <KPICard
+          label="Total Registrations"
+          value={kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
+          change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent}
+          icon={<Car className="w-4 h-4" />}
+          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+          index={0}
+        />
         <KPICard label="YoY Growth" value={kpiComboImpossible ? '—' : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')} change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent} icon={<TrendingUp className="w-4 h-4" />} loading={kpisLoading} index={1} />
-        <KPICard label="Avg Daily Registrations" value={kpiComboImpossible ? '—' : (kpis?.total_registrations_today ?? 0)} icon={<Bike className="w-4 h-4" />} loading={kpisLoading} index={2} />
+        <KPICard
+          label="Avg Daily Registrations"
+          value={kpiComboImpossible ? (crosstabAvgDaily ?? '—') : (kpis?.total_registrations_today ?? 0)}
+          icon={<Bike className="w-4 h-4" />}
+          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+          index={2}
+        />
         <KPICard label="Top State" value={kpiComboImpossible ? '—' : (kpis?.top_state ?? '—')} icon={<Award className="w-4 h-4" />} loading={kpisLoading} index={3} />
       </div>
 
