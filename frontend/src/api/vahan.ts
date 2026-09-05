@@ -97,5 +97,9 @@ export const getMakerFuelBreakdown = (params: { year: number; state?: string | n
 
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
+export const getDistrictsForState = (stateCode: string) =>
+  api.get(`/geo/states/${stateCode}/districts`).then(r => r.data);
+export const getRtosForDistrict = (districtCode: string) =>
+  api.get(`/geo/districts/${districtCode}/rtos`).then(r => r.data);
 export const getRtoAnalysis = (rtoCode: string, year: number) =>
   api.get(`/rto/${rtoCode}/analysis`, { params: { year } }).then(r => r.data);

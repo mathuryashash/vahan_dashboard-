@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears } from '../api/vahan';
+import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistrictsForState, getRtosForDistrict } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -25,10 +25,27 @@ export function RtoAnalysisPage() {
   // into any RTO within their own state via the ranked list below.
   const [fyYear, setFyYear] = useState<number>(CURRENT_FY);
   const [stateCode, setStateCode] = useState<string>(auth.scope_state_code ?? '');
+  const [districtCode, setDistrictCode] = useState<string>('');
   const [rtoCode, setRtoCode] = useState<string | null>(auth.scope_type === 'rto' ? auth.scope_rto_code : null);
 
   const { data: states } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
+
+  // District is a pure narrowing filter on top of the state's RTO list --
+  // there's no per-district registration data of its own, so this doesn't
+  // need its own analysis endpoint, just the district's RTO codes to
+  // intersect against the state's already-ranked RTO list below.
+  const { data: districts } = useQuery<{ district_code: string; district_name: string }[]>({
+    queryKey: ['districts', stateCode],
+    queryFn: () => getDistrictsForState(stateCode),
+    enabled: !!stateCode && auth.scope_type !== 'rto',
+  });
+
+  const { data: districtRtos } = useQuery<{ rto_code: string }[]>({
+    queryKey: ['districtRtos', districtCode],
+    queryFn: () => getRtosForDistrict(districtCode),
+    enabled: !!districtCode,
+  });
 
   const { data: rtos, isLoading: rtosLoading } = useQuery<RTOListItem[]>({
     queryKey: ['rtoList', stateCode, fyYear],
@@ -42,7 +59,9 @@ export function RtoAnalysisPage() {
     enabled: !!rtoCode,
   });
 
-  const rtoChartData = (rtos || []).map((r) => ({ name: r.rto_name || r.rto_code, code: r.rto_code, count: r.total }));
+  const districtRtoCodes = districtCode ? new Set((districtRtos || []).map((r) => r.rto_code)) : null;
+  const rtosInScope = districtRtoCodes ? (rtos || []).filter((r) => districtRtoCodes.has(r.rto_code)) : (rtos || []);
+  const rtoChartData = rtosInScope.map((r) => ({ name: r.rto_name || r.rto_code, code: r.rto_code, count: r.total }));
 
   const total = analysis?.total || 0;
   const makerPieData = capForDonut(
@@ -56,7 +75,7 @@ export function RtoAnalysisPage() {
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">RTO Analysis</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-          State → RTO → company share breakdown — FY {fyYear}-{String((fyYear + 1) % 100).padStart(2, '0')}
+          State → District → RTO → company share breakdown — FY {fyYear}-{String((fyYear + 1) % 100).padStart(2, '0')}
         </p>
       </div>
 
@@ -66,7 +85,7 @@ export function RtoAnalysisPage() {
             <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
             <select
               value={stateCode}
-              onChange={(e) => { setStateCode(e.target.value); setRtoCode(null); }}
+              onChange={(e) => { setStateCode(e.target.value); setDistrictCode(''); setRtoCode(null); }}
               className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs"
             >
               <option value="">Select a state...</option>
@@ -83,6 +102,23 @@ export function RtoAnalysisPage() {
             <div className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold w-full max-w-xs">
               {auth.scope_type === 'rto' ? auth.scope_rto_name : auth.scope_state_name}
             </div>
+          </div>
+        )}
+
+        {auth.scope_type !== 'rto' && (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">District</label>
+            <select
+              value={districtCode}
+              onChange={(e) => { setDistrictCode(e.target.value); setRtoCode(null); }}
+              disabled={!stateCode}
+              className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <option value="">All Districts</option>
+              {(districts || []).map((d) => (
+                <option key={d.district_code} value={d.district_code}>{d.district_name}</option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -108,7 +144,9 @@ export function RtoAnalysisPage() {
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">RTOs</h3>
+              <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
+                {districtCode ? `RTOs — ${districts?.find((d) => d.district_code === districtCode)?.district_name ?? 'District'}` : 'RTOs — All Districts'}
+              </h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">click an RTO to see its company breakdown below</p>
             </div>
             <div className="flex items-center gap-2">
@@ -123,7 +161,11 @@ export function RtoAnalysisPage() {
           {rtosLoading ? (
             <div className="h-[300px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
           ) : rtoChartData.length === 0 ? (
-            <EmptyState variant="no-data" title="No data for this state/year" description="Try a different year or state." />
+            <EmptyState
+              variant="no-data"
+              title={districtCode ? "No RTOs with data in this district/year" : "No data for this state/year"}
+              description={districtCode ? "Try a different district, year, or clear the district filter." : "Try a different year or state."}
+            />
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 30)}>
               <BarChart data={rtoChartData} layout="vertical">
