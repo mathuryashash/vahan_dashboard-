@@ -9,7 +9,7 @@ import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
 import { ExportCsvButton } from '../components/ExportCsvButton';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -86,6 +86,12 @@ export function OverviewPage() {
 
   const { data: statesList } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
+  // Which years each cross-tab actually has ANY data for -- fetched once
+  // here and passed to the three panels below so they can tell "not
+  // scraped this year" apart from "scraped, this specific maker/state/fuel
+  // combination is a real zero" (a filtered query returns empty for both
+  // reasons; only this unfiltered per-year signal disambiguates them).
+  const { data: crosstabCoverage } = useQuery({ queryKey: ['crosstabCoverage'], queryFn: getCrosstabCoverage });
 
   // Any two of {Maker, Vehicle Category, Fuel} together are structurally
   // unanswerable from the raw Registration table (see the impossible*Filter
@@ -388,6 +394,7 @@ export function OverviewPage() {
           maker={selectedMaker!}
           month={selectedMonth}
           state={selectedState}
+          hasYearData={crosstabCoverage ? crosstabCoverage.maker_category.includes(selectedYear) : true}
         />
       )}
 
@@ -398,6 +405,7 @@ export function OverviewPage() {
           fuelGroup={fuelGroup!}
           month={selectedMonth}
           state={selectedState}
+          hasYearData={crosstabCoverage ? crosstabCoverage.fuel_category.includes(selectedYear) : true}
         />
       )}
 
@@ -407,6 +415,7 @@ export function OverviewPage() {
           maker={selectedMaker!}
           fuelGroup={fuelGroup!}
           month={selectedMonth}
+          hasYearData={crosstabCoverage ? crosstabCoverage.maker_fuel.includes(selectedYear) : true}
           state={selectedState}
         />
       )}
@@ -609,19 +618,22 @@ export function OverviewPage() {
  * Class cross-tab (year-only, no month breakdown -- see
  * docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md).
  * Rendered only when both selectedCategory and selectedMaker are set. */
-function MakerCategoryPanel({ year, category, maker, month, state }: { year: number; category: string; maker: string; month: number | null; state: string | null }) {
+function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }: { year: number; category: string; maker: string; month: number | null; state: string | null; hasYearData: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['makerCategoryBreakdown', year, category, maker, state],
     queryFn: () => getMakerCategoryBreakdown({ year, vehicle_category: category, maker, state }),
   });
 
-  // An empty array means this crosstab has no rows for `year` at all (it's
-  // only ever been scraped for the current year -- see MakerCategoryTotal's
-  // docstring) -- distinct from a found-but-zero row for this specific
-  // maker, which would be a real (if unusual) count. Conflating the two as
+  // hasYearData (from /categories/crosstab-coverage, fetched once by the
+  // parent) says whether this crosstab has ANY rows for `year` -- an empty
+  // *filtered* response here is ambiguous between "not scraped this year"
+  // and "this exact maker/state/category combo is a real zero" (confirmed
+  // live: TVS Motor Company has real 2025 data but legitimately zero
+  // Four-Wheeler rows in some states). Only the unfiltered per-year signal
+  // can tell those apart -- a plain `data.length === 0` check can't.
   // `?? 0` reads as "zero registrations" when the honest answer is "not
   // scraped for this year yet".
-  const noDataForYear = (data || []).length === 0;
+  const noDataForYear = !hasYearData;
   const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
 
   return (
@@ -652,15 +664,15 @@ function MakerCategoryPanel({ year, category, maker, month, state }: { year: num
 /** Same shape as MakerCategoryPanel, sourced from the separate Fuel x
  * Vehicle Class cross-tab (see FuelCategoryTotal / fuel-category-breakdown).
  * Rendered only when both selectedCategory and fuelGroup are set. */
-function FuelCategoryPanel({ year, category, fuelGroup, month, state }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null }) {
+function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearData }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', year, category, fuelGroup, state],
     queryFn: () => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }),
   });
 
-  // See MakerCategoryPanel's comment above -- empty array means not
-  // scraped for this year at all, distinct from a real zero.
-  const noDataForYear = (data || []).length === 0;
+  // See MakerCategoryPanel's comment above -- hasYearData (not an empty
+  // filtered response) tells "not scraped this year" apart from a real zero.
+  const noDataForYear = !hasYearData;
   const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
 
   return (
@@ -691,7 +703,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state }: { year: 
  * separate Maker x Fuel cross-tab (see MakerFuelTotal /
  * maker-fuel-breakdown). Rendered only when both selectedMaker and
  * fuelGroup are set. */
-function MakerFuelPanel({ year, maker, fuelGroup, month, state }: { year: number; maker: string; fuelGroup: string; month: number | null; state: string | null }) {
+function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData }: { year: number; maker: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['makerFuelBreakdown', year, maker, fuelGroup, state],
     queryFn: () => getMakerFuelBreakdown({ year, maker, fuel_group: fuelGroup, state }),
@@ -705,9 +717,11 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state }: { year: number
   // "fuel_group") a few lines up. Searching for r.fuel_group here (a field
   // this response shape never has) always returned undefined -- silently
   // showing 0 for every maker+fuel combination regardless of real data.
-  // See MakerCategoryPanel's comment above -- empty array means not
-  // scraped for this year at all, distinct from a real zero.
-  const noDataForYear = (data || []).length === 0;
+  // See MakerCategoryPanel's comment above -- hasYearData (not an empty
+  // filtered response) tells "not scraped this year" apart from a real
+  // zero (confirmed live: TVS Motor Company has real 2025 maker-fuel data
+  // but legitimately zero Hybrid-bucket rows in Bihar specifically).
+  const noDataForYear = !hasYearData;
   const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
 
   return (

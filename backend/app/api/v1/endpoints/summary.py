@@ -6,6 +6,7 @@ from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, exclude_supplementary, latest_month_with_data
 from app.core.scope import get_effective_state
+from app.core.cache import TTLCache
 from app.models.models import Registration
 from app.schemas.schemas import DashboardKPIs
 from app.core.config import settings
@@ -49,6 +50,21 @@ async def get_available_years(db: AsyncSession = Depends(get_db)):
     return years
 
 
+# kpis/trend/state-ranking are fired unconditionally on every Overview page
+# load (Overview.tsx has no "don't refetch" gate), and each is a SUM over a
+# 26M+ row table -- 1.6-2.3s apiece even with fresh table statistics (see
+# the VACUUM ANALYZE incidents in git history), noticeably more before this
+# session's autovacuum tuning. The vast majority of page loads share the
+# exact same default filters (no state/category/maker picked yet), so a
+# short TTL turns nearly every request after the first per window into a
+# dict lookup. Keyed on the resolved filter params only, never the DB
+# session -- state is already scope-clamped by the time it reaches here
+# (see get_effective_state), so a state/RTO-scoped user's cache entries
+# naturally stay separate from a national user's.
+_KPIS_CACHE_TTL_SECONDS = 90
+_kpis_cache = TTLCache(_KPIS_CACHE_TTL_SECONDS)
+
+
 @router.get("/kpis", response_model=DashboardKPIs)
 async def get_dashboard_kpis(
     year: int | None = None,
@@ -62,6 +78,11 @@ async def get_dashboard_kpis(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = (year, month, state, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model)
+    cached = _kpis_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     current_year = year or _DEFAULT_YEAR
     prev_year = current_year - 1
 
@@ -132,7 +153,7 @@ async def get_dashboard_kpis(
 
     last_updated = settings.LAST_UPDATED
 
-    return DashboardKPIs(
+    kpis = DashboardKPIs(
         total_registrations_today=total_today,
         total_this_month=total_this_period,
         yoy_growth_percent=yoy_growth,
@@ -140,6 +161,12 @@ async def get_dashboard_kpis(
         top_state_count=top_state_count,
         last_updated=last_updated,
     )
+    _kpis_cache.set(cache_key, kpis)
+    return kpis
+
+
+_TREND_CACHE_TTL_SECONDS = 90
+_trend_cache = TTLCache(_TREND_CACHE_TTL_SECONDS)
 
 
 @router.get("/trend")
@@ -154,6 +181,10 @@ async def get_trend(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = (year, state, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model)
+    cached = _trend_cache.get(cache_key)
+    if cached is not None:
+        return cached
     """Month-wise registration trend for the year. There is no day-level
     breakdown to fall back to when a specific month is selected elsewhere on
     the page (see get_month_detail's docstring) -- the trend chart always
@@ -172,7 +203,13 @@ async def get_trend(
     query = query.group_by(Registration.month).order_by(Registration.month)
     result = await db.execute(query)
     rows = result.all()
-    return [{"month": r[0], "count": r[1]} for r in rows]
+    trend = [{"month": r[0], "count": r[1]} for r in rows]
+    _trend_cache.set(cache_key, trend)
+    return trend
+
+
+_STATE_RANKING_CACHE_TTL_SECONDS = 90
+_state_ranking_cache = TTLCache(_STATE_RANKING_CACHE_TTL_SECONDS)
 
 
 @router.get("/state-ranking")
@@ -189,6 +226,11 @@ async def get_state_ranking(
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = (year, month, state, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model, limit)
+    cached = _state_ranking_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     query = select(
         Registration.state_name, func.sum(Registration.count).label("total")
     ).where(Registration.year == year)
@@ -208,7 +250,7 @@ async def get_state_ranking(
     rows = result.all()
 
     total_all = sum(r[1] for r in rows)
-    return [
+    ranking = [
         {
             "state_name": r[0],
             "total_count": r[1],
@@ -216,6 +258,8 @@ async def get_state_ranking(
         }
         for r in rows
     ]
+    _state_ranking_cache.set(cache_key, ranking)
+    return ranking
 
 
 async def _period_sum(

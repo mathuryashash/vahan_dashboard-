@@ -2,14 +2,40 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
 from app.core.scope import get_effective_state
-from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 
 router = APIRouter()
 
 _DEFAULT_YEAR = datetime.now().year
+
+
+@router.get("/crosstab-coverage")
+async def get_crosstab_coverage(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+    """Which years each of the 3 crosstabs (Maker x Category, Fuel x
+    Category, Maker x Fuel) actually has ANY data for -- distinct from
+    whether one specific maker/state/fuel-group combination happens to
+    have rows. A crosstab query filtered down to one maker in one small
+    state returns an empty list both when that year was never scraped AND
+    when that maker genuinely sold zero of that fuel/category there (a
+    normal, common case -- confirmed live: TVS Motor Company has real
+    2025 data but zero Hybrid rows in Bihar specifically, a real zero, not
+    a missing year). The frontend needs this separate, unfiltered signal
+    to tell "not scraped for this year" apart from "scraped, real zero"
+    instead of guessing from an empty filtered response.
+    """
+    async def years_for(model) -> list[int]:
+        result = await db.execute(select(model.year).distinct().order_by(model.year.desc()))
+        return [row[0] for row in result.all()]
+
+    return {
+        "maker_category": await years_for(MakerCategoryTotal),
+        "fuel_category": await years_for(FuelCategoryTotal),
+        "maker_fuel": await years_for(MakerFuelTotal),
+    }
 
 
 @router.get("/")

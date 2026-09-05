@@ -8,11 +8,25 @@ from app.core.auth import get_current_user
 from app.main import app
 from app.core.database import get_db
 from app.models.models import User, UserRole, UserScope
+from app.core.cache import TTLCache
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://vahan:vahan@127.0.0.1:5432/vahan_test",
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_ttl_caches():
+    """The kpis/trend/state-ranking/all-states endpoints cache by filter
+    params at module scope (see app/core/cache.py) -- real caching in
+    production, but without this, two tests calling the same endpoint with
+    the same params (e.g. both default to the current year) would have the
+    second test silently served the first test's cached response instead
+    of querying its own freshly-seeded database."""
+    TTLCache.clear_all()
+    yield
+    TTLCache.clear_all()
 
 
 @pytest.fixture
