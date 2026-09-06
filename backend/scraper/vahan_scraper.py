@@ -978,65 +978,115 @@ async def scrape_all_india_crosstab(
         states = await get_states(session, page_html, state_select_id)
         logger.info("Discovered %d states", len(states))
 
+        # Same ViewExpiredException handling as scrape_all_india (see its
+        # comment) -- without it, a mid-run session expiry here silently ate
+        # every remaining state as individual "failed selecting state" lines
+        # (confirmed live: 2009's maker/fuel/category crosstab all stalled at
+        # 12/36 states this way). Re-authenticate and resume instead.
+        max_session_refreshes = 5
+        refreshes_used = 0
+
         for state in states:
             state_name = state["state_name"]
             already_done = skip_rtos.get(state_name, frozenset())
-            try:
-                rto_resp = await session.select(
-                    state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
-                )
-            except Exception as exc:
-                logger.warning("Failed selecting state %s: %s", state_name, exc)
-                yield {
-                    "state_complete": True, "state_name": state_name,
-                    "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
-                }
-                continue
-
-            all_rtos = [
-                {**parsed, "rto_value": value}
-                for value, text in _parse_options(rto_resp, RTO_SELECT_ID)
-                if value != "-1"
-                for parsed in [parse_rto_option(text)]
-                if parsed
-            ]
-            rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
-            skipped_count = len(all_rtos) - len(rtos)
-            if skipped_count:
-                logger.info("%s: skipping %d already-scraped RTOs, %d remaining", state_name, skipped_count, len(rtos))
-
-            succeeded = 0
-            empty = 0
-            for rto in rtos:
+            while True:
                 try:
-                    await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
-                    records = await table_scraper(session, year)
-                    if not records:
-                        empty += 1
-                        logger.warning(
-                            "%s / %s: zero records (dimension=%s, year=%d)",
-                            state_name, rto["rto_code"], dimension_label, year,
-                        )
-                    yield {
-                        "state_name": state_name,
-                        "rto_code": rto["rto_code"],
-                        "rto_name": rto["rto_name"],
-                        "records": records,
-                    }
-                    succeeded += 1
+                    rto_resp = await session.select(
+                        state_select_id, state["state_code"], state_select_id, f"{RTO_SELECT_ID} {YAXIS_SELECT_ID}"
+                    )
                 except Exception as exc:
-                    logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
-                finally:
-                    await asyncio.sleep(delay_seconds)
+                    if _is_session_expired(exc) and refreshes_used < max_session_refreshes:
+                        refreshes_used += 1
+                        logger.warning(
+                            "Session expired selecting state %s (refresh %d/%d): %s -- re-authenticating and resuming.",
+                            state_name, refreshes_used, max_session_refreshes, exc,
+                        )
+                        fresh_page_html = await session.load()
+                        rediscovered = discover_state_select_id(fresh_page_html)
+                        if rediscovered:
+                            state_select_id = rediscovered
+                        continue
+                    logger.warning("Failed selecting state %s: %s", state_name, exc)
+                    yield {
+                        "state_complete": True, "state_name": state_name,
+                        "rto_total": 0, "rto_skipped": 0, "rto_succeeded": 0, "rto_empty": 0,
+                    }
+                    break
 
-            yield {
-                "state_complete": True,
-                "state_name": state_name,
-                "rto_total": len(all_rtos),
-                "rto_skipped": skipped_count,
-                "rto_succeeded": succeeded,
-                "rto_empty": empty,
-            }
+                all_rtos = [
+                    {**parsed, "rto_value": value}
+                    for value, text in _parse_options(rto_resp, RTO_SELECT_ID)
+                    if value != "-1"
+                    for parsed in [parse_rto_option(text)]
+                    if parsed
+                ]
+                rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
+                skipped_count = len(all_rtos) - len(rtos)
+                if skipped_count:
+                    logger.info("%s: skipping %d already-scraped RTOs, %d remaining", state_name, skipped_count, len(rtos))
+
+                succeeded = 0
+                empty = 0
+                session_expired_mid_state = False
+                for rto in rtos:
+                    try:
+                        await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
+                        records = await table_scraper(session, year)
+                        if not records:
+                            empty += 1
+                            logger.warning(
+                                "%s / %s: zero records (dimension=%s, year=%d)",
+                                state_name, rto["rto_code"], dimension_label, year,
+                            )
+                        yield {
+                            "state_name": state_name,
+                            "rto_code": rto["rto_code"],
+                            "rto_name": rto["rto_name"],
+                            "records": records,
+                        }
+                        succeeded += 1
+                        already_done = already_done | {rto["rto_code"]}
+                    except Exception as exc:
+                        if _is_session_expired(exc):
+                            session_expired_mid_state = True
+                            break
+                        logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
+                    finally:
+                        await asyncio.sleep(delay_seconds)
+
+                if session_expired_mid_state:
+                    if refreshes_used >= max_session_refreshes:
+                        logger.error(
+                            "Session expired scraping %s and the %d-refresh budget for this "
+                            "run is used up -- giving up on %s and every state after it.",
+                            state_name, max_session_refreshes, state_name,
+                        )
+                        yield {
+                            "state_complete": True, "state_name": state_name,
+                            "rto_total": len(all_rtos), "rto_skipped": skipped_count,
+                            "rto_succeeded": succeeded, "rto_empty": empty,
+                        }
+                        return
+                    refreshes_used += 1
+                    logger.warning(
+                        "Session expired scraping %s (refresh %d/%d) -- re-authenticating and resuming.",
+                        state_name, refreshes_used, max_session_refreshes,
+                    )
+                    fresh_page_html = await session.load()
+                    rediscovered = discover_state_select_id(fresh_page_html)
+                    if rediscovered:
+                        state_select_id = rediscovered
+                    continue
+
+                yield {
+                    "state_complete": True,
+                    "state_name": state_name,
+                    "rto_total": len(all_rtos),
+                    "rto_skipped": skipped_count,
+                    "rto_succeeded": succeeded,
+                    "rto_empty": empty,
+                }
+                break
 
 
 def scrape_all_india_maker_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
