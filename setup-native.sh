@@ -79,6 +79,12 @@ pip install --quiet -r requirements.txt
 cat > .env <<ENV
 DATABASE_URL=postgresql+asyncpg://$APP_USER:$APP_PASSWORD@$PGHOST:$PGPORT/$APP_DB
 ENV
+# The seed dump above has no `users` table (auth data is deliberately not
+# shipped in it) -- without this, the 3 demo accounts in pass.txt
+# (india.head/state.head/rto.head@vahan.demo) don't exist on a fresh
+# install, so anyone but whichever one happened to get created some other
+# way can't log in. Upsert-based, safe to re-run.
+python -m app.scripts.seed_demo_hierarchy_users
 cd ..
 
 echo "[4/5] Installing frontend dependencies..."
