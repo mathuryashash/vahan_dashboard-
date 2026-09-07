@@ -17,17 +17,22 @@ _DEFAULT_YEAR = datetime.now().year
 async def get_yoy_monthly(
     year_a: int = Query(default=_DEFAULT_YEAR - 1),
     year_b: int = Query(default=_DEFAULT_YEAR),
+    start_month: int = Query(default=1, ge=1, le=12),
+    end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),
     db: AsyncSession = Depends(get_db),
 ):
+    # start_month/end_month default to the full year (unchanged behavior) --
+    # passing e.g. 4/7 restricts both years to Apr-Jul, the same "same
+    # timeline, different years" custom-range comparison as /summary below.
     query_a = exclude_supplementary(
         select(Registration.month, func.sum(Registration.count).label("count"))
-        .where(Registration.year == year_a)
+        .where(Registration.year == year_a, Registration.month >= start_month, Registration.month <= end_month)
     ).group_by(Registration.month)
 
     query_b = exclude_supplementary(
         select(Registration.month, func.sum(Registration.count).label("count"))
-        .where(Registration.year == year_b)
+        .where(Registration.year == year_b, Registration.month >= start_month, Registration.month <= end_month)
     ).group_by(Registration.month)
 
     if state:
@@ -67,26 +72,34 @@ async def get_yoy_monthly(
 async def get_yoy_summary(
     year_a: int = Query(default=_DEFAULT_YEAR - 1),
     year_b: int = Query(default=_DEFAULT_YEAR),
+    start_month: int = Query(default=1, ge=1, le=12),
+    end_month: int = Query(default=12, ge=1, le=12),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
     # National-only endpoint (no state breakdown exists here) -- still
     # requires login like every other dashboard read, but there's nothing to
     # geo-clamp.
-    # Cap both years at whichever has less data so far: comparing a full
-    # calendar year against an in-progress one (e.g. 12 months of 2025 vs
-    # 7 months of 2026) produces a nonsensical, deeply negative "growth"
-    # number. Same fix already applied to summary.get_dashboard_kpis.
+    # start_month/end_month default to the full year, giving the same
+    # Jan-through-latest-month total as before. A custom range (e.g. 4/7 for
+    # Apr-Jul) compares that exact window across both years instead --
+    # "same timeline, different years", generalizing the YTD-only comparison
+    # this endpoint used to be limited to.
     max_month_a = await latest_month_with_data(db, year_a)
     max_month_b = await latest_month_with_data(db, year_b)
     candidates = [m for m in (max_month_a, max_month_b) if m is not None]
-    compare_month = min(candidates) if candidates else None
+    # Cap at whichever year has less data so far within the requested range:
+    # comparing a full Apr-Jul against a partial Apr-Jun (year still in
+    # progress) produces a nonsensical, deeply negative "growth" number.
+    # Same fix already applied to summary.get_dashboard_kpis.
+    effective_end = min([end_month, *candidates]) if candidates else end_month
 
-    q_a = exclude_supplementary(select(func.sum(Registration.count)).where(Registration.year == year_a))
-    q_b = exclude_supplementary(select(func.sum(Registration.count)).where(Registration.year == year_b))
-    if compare_month is not None:
-        q_a = q_a.where(Registration.month <= compare_month)
-        q_b = q_b.where(Registration.month <= compare_month)
+    q_a = exclude_supplementary(select(func.sum(Registration.count)).where(
+        Registration.year == year_a, Registration.month >= start_month, Registration.month <= effective_end
+    ))
+    q_b = exclude_supplementary(select(func.sum(Registration.count)).where(
+        Registration.year == year_b, Registration.month >= start_month, Registration.month <= effective_end
+    ))
 
     result_a = await db.execute(q_a)
     result_b = await db.execute(q_b)
@@ -98,6 +111,7 @@ async def get_yoy_summary(
     return {
         f"total_{year_a}": total_a,
         f"total_{year_b}": total_b,
-        "compare_through_month": compare_month,
+        "compare_through_month": effective_end,
+        "start_month": start_month,
         "growth_percent": growth,
     }

@@ -50,10 +50,10 @@ export const getStatesComparison = (year: number, limit?: number) =>
   api.get('/comparison/all-states', { params: { year, limit } }).then(r => r.data);
 export const compareStates = (state_a: string, state_b?: string, year?: number) =>
   api.get('/comparison/states', { params: { state_a, state_b, year } }).then(r => r.data);
-export const getYoYMonthly = (year_a: number, year_b: number, state?: string) =>
-  api.get('/yoy/monthly', { params: { year_a, year_b, state } }).then(r => r.data);
-export const getYoYSummary = (year_a: number, year_b: number) =>
-  api.get('/yoy/summary', { params: { year_a, year_b } }).then(r => r.data);
+export const getYoYMonthly = (year_a: number, year_b: number, state?: string, start_month?: number, end_month?: number) =>
+  api.get('/yoy/monthly', { params: { year_a, year_b, state, start_month, end_month } }).then(r => r.data);
+export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number) =>
+  api.get('/yoy/summary', { params: { year_a, year_b, start_month, end_month } }).then(r => r.data);
 export const getCategories = (params?: FilterParams) =>
   api.get('/categories/', { params }).then(r => r.data);
 export const getTopMakers = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>

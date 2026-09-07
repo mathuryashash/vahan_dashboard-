@@ -1,4 +1,5 @@
 // frontend/src/pages/YoY.tsx
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, TooltipProps
@@ -35,15 +36,21 @@ const SELECTABLE_YEARS = Array.from({ length: CURRENT_YEAR - 2002 }, (_, i) => C
 export function YoYPage() {
   const chart = useChartTheme();
   const { comparisonYearA, comparisonYearB, setComparisonYears } = useAppStore();
+  // Full year (1-12) by default -- same behavior as before this range picker
+  // existed. A custom range (e.g. Apr-Jul) compares that exact window across
+  // both selected years instead of the whole year.
+  const [startMonth, setStartMonth] = useState(1);
+  const [endMonth, setEndMonth] = useState(12);
+  const isCustomRange = startMonth !== 1 || endMonth !== 12;
 
   const { data: monthly, isLoading } = useQuery({
-    queryKey: ['yoy', comparisonYearA, comparisonYearB],
-    queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB),
+    queryKey: ['yoy', comparisonYearA, comparisonYearB, startMonth, endMonth],
+    queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB, undefined, startMonth, endMonth),
   });
 
   const { data: summary } = useQuery({
-    queryKey: ['yoySummary', comparisonYearA, comparisonYearB],
-    queryFn: () => getYoYSummary(comparisonYearA, comparisonYearB),
+    queryKey: ['yoySummary', comparisonYearA, comparisonYearB, startMonth, endMonth],
+    queryFn: () => getYoYSummary(comparisonYearA, comparisonYearB, startMonth, endMonth),
   });
 
   // growth_percent is null for months comparisonYearB hasn't reached yet
@@ -74,10 +81,36 @@ export function YoYPage() {
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Year-over-Year Analysis</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-            Temporal comparison — {comparisonYearA} vs {comparisonYearB}
+            {isCustomRange ? `${MONTH_NAMES[startMonth - 1]}-${MONTH_NAMES[endMonth - 1]}` : 'Full Year'} comparison — {comparisonYearA} vs {comparisonYearB}
           </p>
         </div>
         <div className="flex items-center gap-3 animate-entrance" style={{ animationDelay: '50ms' }}>
+          <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
+            <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">Range</span>
+            <select
+              value={startMonth}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setStartMonth(v);
+                if (v > endMonth) setEndMonth(v);
+              }}
+              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold focus:outline-none cursor-pointer rounded px-1"
+            >
+              {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+            </select>
+            <span className="text-[var(--text-muted)]">→</span>
+            <select
+              value={endMonth}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setEndMonth(v);
+                if (v < startMonth) setStartMonth(v);
+              }}
+              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold focus:outline-none cursor-pointer rounded px-1"
+            >
+              {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+            </select>
+          </div>
           <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
             <select
               value={comparisonYearA}

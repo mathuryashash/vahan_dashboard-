@@ -36,6 +36,27 @@ async def test_yoy_summary_caps_partial_current_year(client, db_session):
     assert data["growth_percent"] == 10.0
 
 
+async def test_yoy_summary_custom_month_range(client, db_session):
+    # 2025: Apr-Jul = 4*1000 = 4000. Other months present too, must be excluded.
+    for m in range(1, 13):
+        await _seed_month(db_session, 2025, m, 1000)
+    # 2026: Apr-Jul = 4*1200 = 4800 (a real 20% gain), full year present.
+    for m in range(1, 13):
+        await _seed_month(db_session, 2026, m, 1200)
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/v1/yoy/summary",
+        params={"year_a": 2025, "year_b": 2026, "start_month": 4, "end_month": 7},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_2025"] == 4000
+    assert data["total_2026"] == 4800
+    assert data["compare_through_month"] == 7
+    assert data["growth_percent"] == 20.0
+
+
 async def test_yoy_monthly_reports_null_growth_for_unreached_months(client, db_session):
     for m in range(1, 13):
         await _seed_month(db_session, 2025, m, 1000)
