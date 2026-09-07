@@ -1,7 +1,7 @@
 // frontend/src/pages/RtoAnalysis.tsx
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistrictsForState, getRtosForDistrict } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
@@ -189,7 +189,7 @@ export function RtoAnalysisPage() {
             />
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 30)}>
-              <BarChart data={rtoChartData} layout="vertical">
+              <BarChart data={rtoChartData} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
                 <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={200} />
@@ -203,6 +203,7 @@ export function RtoAnalysisPage() {
                   {rtoChartData.map((d, i: number) => (
                     <Cell key={i} fill={chart.seriesColor(d.name)} fillOpacity={rtoCode && rtoCode !== d.code ? 0.35 : 1} />
                   ))}
+                  <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
