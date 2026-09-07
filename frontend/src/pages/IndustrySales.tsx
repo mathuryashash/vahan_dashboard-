@@ -1,5 +1,4 @@
 // frontend/src/pages/IndustrySales.tsx
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { getOemCategories, getOemMonthly, getOemTrend, getOemStatus } from '../api/vahan';
@@ -13,14 +12,17 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 export function IndustrySalesPage() {
   const chart = useChartTheme();
-  const { selectedYear } = useAppStore();
+  // Year/Category/Maker are shared across every tab (see useAppStore) --
+  // FADA's own category/maker names rarely match VAHAN's exactly, so the
+  // fallback-to-null guard below (category/`selectedMaker` below) means a
+  // mismatched shared value just leaves this page unfiltered instead of
+  // erroring or showing nothing.
+  const { selectedYear, selectedCategory, setSelectedCategory, selectedMaker, setSelectedMaker } = useAppStore();
   // FADA data has no reason to share Overview's month filter -- a month
   // picked there would silently make this page's leaderboard query a
   // single (likely empty) month instead of the intended year-to-date view.
   // Always a year-to-date leaderboard here, independent of that filter.
   const selectedMonth = null;
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [selectedMaker, setSelectedMaker] = useState<string | null>(null);
 
   const { data: categories } = useQuery({
     queryKey: ['oemCategories', selectedYear],

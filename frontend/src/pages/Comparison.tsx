@@ -1,7 +1,7 @@
 // frontend/src/pages/Comparison.tsx
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { getStatesComparison, compareStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -25,10 +25,23 @@ function StateTooltip({ active, payload, label, chart }: TooltipProps<number, st
 
 export function ComparisonPage() {
   const chart = useChartTheme();
-  const { selectedYear } = useAppStore();
-  const [stateA, setStateA] = useState('Maharashtra');
+  const { selectedYear, selectedState, setSelectedState } = useAppStore();
+  // State A mirrors the shared selection (see useAppStore) -- picking Bihar
+  // on Overview shows Bihar here as one side of the comparison too. State B
+  // has no cross-tab equivalent, always a locally-picked second state.
+  const [stateA, setStateALocal] = useState(selectedState || 'Maharashtra');
   const [stateB, setStateB] = useState('Gujarat');
   const [focusState, setFocusState] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedState && selectedState !== stateA) setStateALocal(selectedState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to external (Overview) changes, not stateA's own local edits
+  }, [selectedState]);
+
+  const setStateA = (value: string) => {
+    setStateALocal(value);
+    setSelectedState(value);
+  };
 
   const { data: allStates } = useQuery({
     queryKey: ['states', selectedYear],

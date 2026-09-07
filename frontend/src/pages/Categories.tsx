@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  PieChart, Pie, Cell, BarChart, Bar, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip
+  PieChart, Pie, Cell, BarChart, Bar, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, LabelList
 } from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import { getCategories, getTopMakers, getFuelBreakdown } from '../api/vahan';
@@ -162,7 +162,7 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 30)}>
-          <BarChart data={chartData} layout="vertical">
+          <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
             <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={190} />
@@ -174,6 +174,7 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
               {chartData.map((d: { name: string }, i: number) => (
                 <Cell key={i} fill={chart.seriesColor(d.name)} />
               ))}
+              <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
@@ -200,7 +201,7 @@ function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: str
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 30)}>
-          <BarChart data={chartData} layout="vertical">
+          <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
             <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={190} />
@@ -212,6 +213,7 @@ function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: str
               {chartData.map((d: { name: string }, i: number) => (
                 <Cell key={i} fill={chart.seriesColor(d.name)} />
               ))}
+              <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
             </Bar>
           </BarChart>
         </ResponsiveContainer>

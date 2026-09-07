@@ -1,9 +1,10 @@
 // frontend/src/pages/RtoAnalysis.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistrictsForState, getRtosForDistrict } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
+import { useAppStore } from '../hooks/useAppStore';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
@@ -19,17 +20,37 @@ const fyMonthsElapsed = (fyYear: number) => (fyYear === CURRENT_FY ? now.getMont
 export function RtoAnalysisPage() {
   const chart = useChartTheme();
   const auth = useAuth();
+  // Year and State are shared across every tab (see useAppStore) -- picking
+  // a state/year on Overview should carry over here too, and vice versa.
+  const { selectedYear: fyYear, setSelectedYear: setFyYear, selectedState, setSelectedState } = useAppStore();
   // RTO-scoped: only one RTO exists to show -- skip both pickers and the
   // ranked-RTO-list panel entirely, go straight to that RTO's own breakdown.
   // State-scoped: only the State dropdown is locked; they can still drill
   // into any RTO within their own state via the ranked list below.
-  const [fyYear, setFyYear] = useState<number>(CURRENT_FY);
-  const [stateCode, setStateCode] = useState<string>(auth.scope_state_code ?? '');
+  const [stateCode, setStateCodeLocal] = useState<string>(auth.scope_state_code ?? '');
   const [districtCode, setDistrictCode] = useState<string>('');
   const [rtoCode, setRtoCode] = useState<string | null>(auth.scope_type === 'rto' ? auth.scope_rto_code : null);
 
   const { data: states } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
+
+  // The shared store keeps a state NAME (e.g. "Uttar Pradesh", set from
+  // Overview's dropdown); this page's queries need a state CODE ("UP"). Map
+  // one direction on external change, the other direction when this page's
+  // own dropdown is used (setStateCode below), so both stay in sync without
+  // fighting each other.
+  useEffect(() => {
+    if (auth.scope_type !== 'national') return;
+    if (!selectedState) { setStateCodeLocal(''); return; }
+    const match = states?.find((s: { state_code: string; state_name: string }) => s.state_name === selectedState);
+    if (match) setStateCodeLocal(match.state_code);
+  }, [selectedState, states, auth.scope_type]);
+
+  const setStateCode = (code: string) => {
+    setStateCodeLocal(code);
+    const match = states?.find((s: { state_code: string; state_name: string }) => s.state_code === code);
+    setSelectedState(match?.state_name ?? null);
+  };
 
   // District is a pure narrowing filter on top of the state's RTO list --
   // there's no per-district registration data of its own, so this doesn't

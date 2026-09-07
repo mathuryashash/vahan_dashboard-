@@ -1,24 +1,26 @@
 // frontend/src/pages/MakersModels.tsx
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { getTopMakers, getCategories, getMakerCategoryBreakdown, getAvailableYears } from '../api/vahan';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
+import { getTopMakers, getCategories, getMakerCategoryBreakdown, getMakerFuelBreakdown, getAvailableYears } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
+import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { EmptyState } from '../components/EmptyState';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const CURRENT_YEAR = new Date().getFullYear();
 
 export function MakersModelsPage() {
   const chart = useChartTheme();
-  // Deliberately its own year/month, not useAppStore's shared selectedYear --
-  // this page's filters shouldn't move the Overview page's filters and vice
-  // versa.
-  const [year, setYear] = useState<number>(CURRENT_YEAR);
-  const [month, setMonth] = useState<number | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  // Year/Month/Category/Powertrain/State are shared across every tab (see
+  // useAppStore) -- picking Two-Wheeler here or on Overview shows up on both.
+  const {
+    selectedYear: year, setSelectedYear: setYear,
+    selectedMonth: month, setSelectedMonth: setMonth,
+    selectedCategory, setSelectedCategory,
+    fuelGroup, setFuelGroup,
+    selectedState,
+  } = useAppStore();
 
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
   const { data: categories } = useQuery({
@@ -26,16 +28,22 @@ export function MakersModelsPage() {
     queryFn: () => getCategories({ year, month }),
   });
 
-  // When a category is selected, this ranks real makers within it -- the
-  // Maker x Vehicle Category cross-tab (year-only, no month breakdown, see
-  // docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md) --
-  // instead of the all-category leaderboard. The crosstab has no month
-  // column, so `month` only applies to the un-categorized leaderboard.
+  // Category and Powertrain each have a real Maker cross-tab (Maker x
+  // Vehicle Category, Maker x Fuel -- both year-only, no month column, see
+  // docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md),
+  // but there's no third cross-tab for all of Maker + Category + Fuel
+  // together -- picking both at once is a genuinely unanswerable combo, same
+  // structural limit as the Overview page's combined filters. `month` only
+  // applies to the plain (no category, no fuel) leaderboard.
+  const comboImpossible = !!(selectedCategory && fuelGroup);
   const { data: makers, isLoading: makersLoading } = useQuery({
-    queryKey: ['makers-full', year, month, selectedCategory],
-    queryFn: ({ signal }) => selectedCategory
-      ? getMakerCategoryBreakdown({ year, vehicle_category: selectedCategory, limit: 20 }, signal)
-      : getTopMakers({ year, month, limit: 20 }, signal),
+    queryKey: ['makers-full', year, month, selectedCategory, fuelGroup, selectedState],
+    queryFn: ({ signal }) => {
+      if (selectedCategory) return getMakerCategoryBreakdown({ year, vehicle_category: selectedCategory, state: selectedState, limit: 20 }, signal);
+      if (fuelGroup) return getMakerFuelBreakdown({ year, fuel_group: fuelGroup, state: selectedState, limit: 20 }, signal);
+      return getTopMakers({ year, month, state: selectedState, limit: 20 }, signal);
+    },
+    enabled: !comboImpossible,
   });
 
   const makerChartData = (makers || []).map((m: { maker: string; count: number }) => ({ name: m.maker, count: m.count }));
@@ -46,7 +54,7 @@ export function MakersModelsPage() {
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Makers</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-          Manufacturer leaderboard — FY {year}
+          Manufacturer leaderboard — FY {year}{selectedState ? ` · ${selectedState}` : ''}
         </p>
       </div>
 
@@ -57,8 +65,8 @@ export function MakersModelsPage() {
         <select
           value={month || ''}
           onChange={(e) => setMonth(e.target.value ? Number(e.target.value) : null)}
-          disabled={!!selectedCategory}
-          title={selectedCategory ? "Category ranking is a year total -- month doesn't apply" : undefined}
+          disabled={!!selectedCategory || !!fuelGroup}
+          title={(selectedCategory || fuelGroup) ? "Category/Powertrain ranking is a year total -- month doesn't apply" : undefined}
           className={`${selectClass} disabled:opacity-40 disabled:cursor-not-allowed`}
         >
           <option value="">All Months</option>
@@ -71,10 +79,9 @@ export function MakersModelsPage() {
           onChange={(e) => {
             const value = e.target.value || null;
             setSelectedCategory(value);
-            // The month control goes disabled the moment a category is
-            // picked (the crosstab it switches to is year-only) -- clearing
-            // it too means a disabled "Feb" left over from before doesn't
-            // sit there implying it's still in effect.
+            // Neither cross-tab this switches between has a month column --
+            // clearing it too means a disabled "Feb" left over from before
+            // doesn't sit there implying it's still in effect.
             if (value) setMonth(null);
           }}
           className={selectClass}
@@ -84,33 +91,56 @@ export function MakersModelsPage() {
             <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
           ))}
         </select>
+        <div className="flex rounded-xl border border-[var(--border)] overflow-hidden h-[34px]">
+          {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
+            <button
+              key={group}
+              onClick={() => {
+                const value = fuelGroup === group ? null : group;
+                setFuelGroup(value);
+                if (value) setMonth(null);
+              }}
+              className={`px-3 text-xs font-semibold transition-colors ${
+                fuelGroup === group
+                  ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                  : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+              }`}
+            >
+              {group}
+            </button>
+          ))}
+        </div>
       </div>
-      {selectedCategory && (
+      {comboImpossible ? (
         <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
-          Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory}</span> registrations for FY {year} — a year total, no month breakdown available for this view.
+          Category and Powertrain can't be combined here — no VAHAN table pivots on Maker × Category × Fuel together. Clear one of them to see a ranking.
+        </div>
+      ) : (selectedCategory || fuelGroup) && (
+        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory || fuelGroup}</span> registrations for FY {year} — a year total, no month breakdown available for this view.
         </div>
       )}
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '80ms' }}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
-            {selectedCategory ? `Top Manufacturers — ${selectedCategory}` : 'Top Manufacturers'}
+            {selectedCategory || fuelGroup ? `Top Manufacturers — ${selectedCategory || fuelGroup}` : 'Top Manufacturers'}
           </h3>
-          <ExportCsvButton filename={`top-makers-fy${year}${selectedCategory ? `-${selectedCategory}` : ''}`} rows={makers} />
+          <ExportCsvButton filename={`top-makers-fy${year}${selectedCategory ? `-${selectedCategory}` : ''}${fuelGroup ? `-${fuelGroup}` : ''}`} rows={makers} />
         </div>
-        {makersLoading ? (
+        {comboImpossible ? (
+          <EmptyState variant="no-data" title="Pick one: Category or Powertrain" description="Maker x Category and Maker x Fuel are two separate cross-tabs -- there's no combined Maker x Category x Fuel table to rank against." />
+        ) : makersLoading ? (
           <div className="h-[420px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
         ) : makerChartData.length === 0 ? (
           <EmptyState
             variant="no-data"
-            title={`No maker data for FY ${year}${selectedCategory ? ` / ${selectedCategory}` : ''}`}
-            description={selectedCategory
-              ? `The Maker × Category breakdown has only ever been scraped for the current year -- try clearing the category filter, or switch to FY ${new Date().getFullYear()}.`
-              : `Try a different year.`}
+            title={`No maker data for FY ${year}${selectedCategory ? ` / ${selectedCategory}` : ''}${fuelGroup ? ` / ${fuelGroup}` : ''}`}
+            description="Try a different year."
           />
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(280, makerChartData.length * 30)}>
-            <BarChart data={makerChartData} layout="vertical">
+            <BarChart data={makerChartData} layout="vertical" margin={{ right: 48 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
               <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
@@ -122,6 +152,7 @@ export function MakersModelsPage() {
                 {makerChartData.map((d: { name: string }, i: number) => (
                   <Cell key={i} fill={chart.seriesColor(d.name)} />
                 ))}
+                <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>

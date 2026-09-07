@@ -92,8 +92,8 @@ export const getFuelCategoryBreakdown = (params: { year: number; state?: string 
 export const getCrosstabCoverage = (): Promise<{ maker_category: number[]; fuel_category: number[]; maker_fuel: number[] }> =>
   api.get('/categories/crosstab-coverage').then(r => r.data);
 
-export const getMakerFuelBreakdown = (params: { year: number; state?: string | null; maker?: string | null; fuel_group?: string | null }) =>
-  api.get('/categories/maker-fuel-breakdown', { params }).then(r => r.data);
+export const getMakerFuelBreakdown = (params: { year: number; state?: string | null; maker?: string | null; fuel_group?: string | null; limit?: number }, signal?: AbortSignal) =>
+  api.get('/categories/maker-fuel-breakdown', { params, signal }).then(r => r.data);
 
 export const getCrosstabDetail = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; fuel_group?: string | null }): Promise<{
   total: number | null;
