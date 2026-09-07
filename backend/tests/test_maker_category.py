@@ -90,3 +90,37 @@ async def test_top_makers_with_vehicle_category_reads_the_crosstab(client, db_se
     assert response.status_code == 200
     rows = {r["maker"]: r["count"] for r in response.json()}
     assert rows == {"HONDA": 70, "TVS": 40}
+
+
+async def test_crosstab_detail_computes_total_top_state_and_yoy(client, db_session):
+    """Total/Top-State/YoY were permanently None before the crosstab tables
+    had multi-year, per-state history -- now they're real queries against
+    the same table (see /categories/crosstab-detail)."""
+    await _seed_maker_category(db_session)
+    await persist_maker_category_batch(
+        db_session,
+        {
+            "state_name": "Uttar Pradesh", "rto_code": "UP1", "rto_name": "Test RTO",
+            "records": [{"maker": "HONDA", "vehicle_class": "M-CYCLE/SCOOTER", "count": 200}],
+        },
+        state_code="UP", year=2026,
+    )
+    await persist_maker_category_batch(
+        db_session,
+        {
+            "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
+            "records": [{"maker": "HONDA", "vehicle_class": "M-CYCLE/SCOOTER", "count": 100}],
+        },
+        state_code="DL", year=2025,
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/v1/categories/crosstab-detail",
+        params={"year": 2026, "vehicle_category": "Two-Wheeler", "maker": "HONDA"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 270
+    assert data["top_state"] == "Uttar Pradesh"
+    assert data["yoy_growth_percent"] == 170.0

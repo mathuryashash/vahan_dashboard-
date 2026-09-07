@@ -9,7 +9,7 @@ import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
 import { ExportCsvButton } from '../components/ExportCsvButton';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -145,6 +145,21 @@ export function OverviewPage() {
   // actual elapsed days -- 365 is the same coarse approximation the rest of
   // this page already uses elsewhere for a full-year average.
   const crosstabAvgDaily = crosstabTotal !== undefined ? Math.round(crosstabTotal / 365) : undefined;
+
+  // YoY Growth and Top State for the same combo -- only became answerable
+  // once the crosstab tables got multi-year (2003+), per-state history;
+  // before that backfill this really was a permanent '--'.
+  const { data: crosstabDetail } = useQuery({
+    queryKey: ['crosstabDetail', selectedYear, selectedCategory, selectedMaker, fuelGroup, selectedState],
+    queryFn: () => getCrosstabDetail({
+      year: selectedYear,
+      vehicle_category: selectedCategory,
+      maker: selectedMaker,
+      fuel_group: fuelGroup,
+      state: selectedState,
+    }),
+    enabled: exactlyOnePairActive,
+  });
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
@@ -423,7 +438,7 @@ export function OverviewPage() {
       {kpiComboImpossible && (
         <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
           {exactlyOnePairActive
-            ? <>Total Registrations and Avg Daily below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination. YoY Growth and Top State genuinely aren't computable from a year-only total.</>
+            ? <>All four cards below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination.</>
             : <>Totals below aren't available with all three of Category, Brand, and Powertrain selected together — no VAHAN table pivots on all three at once. Drop one of them, or see the cross-tab panels below for any two together.</>}
         </div>
       )}
@@ -437,7 +452,16 @@ export function OverviewPage() {
           loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
           index={0}
         />
-        <KPICard label="YoY Growth" value={kpiComboImpossible ? '—' : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')} change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent} icon={<TrendingUp className="w-4 h-4" />} loading={kpisLoading} index={1} />
+        <KPICard
+          label="YoY Growth"
+          value={kpiComboImpossible
+            ? (exactlyOnePairActive && crosstabDetail?.yoy_growth_percent != null ? `${crosstabDetail.yoy_growth_percent.toFixed(1)}%` : '—')
+            : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')}
+          change={kpiComboImpossible ? (exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? undefined : undefined) : kpis?.yoy_growth_percent}
+          icon={<TrendingUp className="w-4 h-4" />}
+          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+          index={1}
+        />
         <KPICard
           label="Avg Daily Registrations"
           value={kpiComboImpossible ? (crosstabAvgDaily ?? '—') : (kpis?.total_registrations_today ?? 0)}
@@ -445,7 +469,15 @@ export function OverviewPage() {
           loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
           index={2}
         />
-        <KPICard label="Top State" value={kpiComboImpossible ? '—' : (kpis?.top_state ?? '—')} icon={<Award className="w-4 h-4" />} loading={kpisLoading} index={3} />
+        <KPICard
+          label="Top State"
+          value={kpiComboImpossible
+            ? (exactlyOnePairActive ? (crosstabDetail?.top_state ?? '—') : '—')
+            : (kpis?.top_state ?? '—')}
+          icon={<Award className="w-4 h-4" />}
+          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+          index={3}
+        />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">

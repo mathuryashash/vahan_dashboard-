@@ -95,6 +95,12 @@ export const getCrosstabCoverage = (): Promise<{ maker_category: number[]; fuel_
 export const getMakerFuelBreakdown = (params: { year: number; state?: string | null; maker?: string | null; fuel_group?: string | null }) =>
   api.get('/categories/maker-fuel-breakdown', { params }).then(r => r.data);
 
+export const getCrosstabDetail = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; fuel_group?: string | null }): Promise<{
+  total: number | null;
+  top_state: string | null;
+  yoy_growth_percent: number | null;
+}> => api.get('/categories/crosstab-detail', { params }).then(r => r.data);
+
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
 export const getDistrictsForState = (stateCode: string) =>

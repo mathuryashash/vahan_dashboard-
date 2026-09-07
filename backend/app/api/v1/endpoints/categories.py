@@ -345,3 +345,76 @@ async def get_maker_fuel_breakdown(
         key=lambda item: item["count"], reverse=True,
     )
     return rows[:limit] if fuel_group_filter else rows
+
+
+@router.get("/crosstab-detail")
+async def get_crosstab_detail(
+    year: int = _DEFAULT_YEAR,
+    state: str | None = Depends(get_effective_state),
+    vehicle_category: str | None = None,
+    maker: str | None = None,
+    fuel_group_filter: str | None = Query(None, alias="fuel_group"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Total + YoY growth + top state for one Maker+Category / Category+Fuel
+    / Maker+Fuel combination. These used to be permanently '-' on the
+    Overview KPI cards because the crosstab tables only had ~1 year of
+    data -- now that the backfill covers 2003-2023 plus every year since,
+    both are real queries: YoY re-runs the same combo for year-1, and Top
+    State groups the same combo by state_name instead of by maker/category.
+    Requires exactly two of vehicle_category/maker/fuel_group, same combo
+    constraint the frontend already enforces before calling this.
+    """
+    active = [bool(vehicle_category), bool(maker), bool(fuel_group_filter)]
+    if sum(active) != 2:
+        return {"total": None, "top_state": None, "yoy_growth_percent": None}
+
+    async def _totals_by_state(target_year: int) -> dict[str, int]:
+        if vehicle_category and maker:
+            query = select(MakerCategoryTotal.state_name, MakerCategoryTotal.count).where(
+                MakerCategoryTotal.year == target_year,
+                MakerCategoryTotal.maker == maker,
+                MakerCategoryTotal.vehicle_category == vehicle_category,
+            )
+            if state:
+                query = query.where(MakerCategoryTotal.state_name == state)
+            rows = (await db.execute(query)).all()
+            per_state: dict[str, int] = {}
+            for state_name, count in rows:
+                per_state[state_name] = per_state.get(state_name, 0) + count
+            return per_state
+
+        if vehicle_category and fuel_group_filter:
+            query = select(FuelCategoryTotal.state_name, FuelCategoryTotal.fuel_type, FuelCategoryTotal.count).where(
+                FuelCategoryTotal.year == target_year,
+                FuelCategoryTotal.vehicle_category == vehicle_category,
+            )
+            if state:
+                query = query.where(FuelCategoryTotal.state_name == state)
+        else:  # maker and fuel_group_filter
+            query = select(MakerFuelTotal.state_name, MakerFuelTotal.fuel_type, MakerFuelTotal.count).where(
+                MakerFuelTotal.year == target_year,
+                MakerFuelTotal.maker == maker,
+            )
+            if state:
+                query = query.where(MakerFuelTotal.state_name == state)
+        rows = (await db.execute(query)).all()
+        per_state = {}
+        for state_name, raw_fuel_type, count in rows:
+            if fuel_group(raw_fuel_type) != fuel_group_filter:
+                continue
+            per_state[state_name] = per_state.get(state_name, 0) + count
+        return per_state
+
+    per_state_this = await _totals_by_state(year)
+    per_state_prior = await _totals_by_state(year - 1)
+
+    total = sum(per_state_this.values())
+    prior_total = sum(per_state_prior.values())
+    yoy = ((total - prior_total) / prior_total * 100) if prior_total > 0 else None
+
+    top_state = None
+    if not state and per_state_this:
+        top_state = max(per_state_this.items(), key=lambda kv: kv[1])[0]
+
+    return {"total": total, "top_state": top_state, "yoy_growth_percent": yoy}
