@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Text, Boolean, Index
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Text, Boolean, Index, text
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -88,6 +88,26 @@ class Registration(Base):
         Index("idx_reg_year_class_month_count", "year", "vehicle_class", "month", "count"),
         Index("idx_reg_class_state_rto", "vehicle_class", "state_name", "rto_code"),
         Index("idx_reg_rto_year_supp_month_maker_count", "rto_code", "year", "is_supplementary", "month", "maker", "count"),
+        # None of the above leads with the column these three queries actually
+        # GROUP BY -- state-ranking/all-states-comparison, top-makers, and
+        # fuel-breakdown each fell back to scanning every row for the given
+        # year (confirmed via EXPLAIN ANALYZE: 715ms/3.7s/300ms respectively
+        # on 26M rows, the maker one badly enough to spill to disk). partial
+        # (postgresql_where) since each query already filters out the NULL/
+        # excluded rows the index would otherwise carry for nothing --
+        # ignored on other dialects (e.g. SQLite), which just get a full index.
+        Index(
+            "idx_reg_year_supp_state_count", "year", "is_supplementary", "state_name", "count",
+            postgresql_where=text("is_supplementary IS NOT TRUE"),
+        ),
+        Index(
+            "idx_reg_year_maker_count", "year", "maker", "count",
+            postgresql_where=text("maker IS NOT NULL"),
+        ),
+        Index(
+            "idx_reg_year_fuel_count", "year", "fuel_type", "count",
+            postgresql_where=text("fuel_type IS NOT NULL"),
+        ),
     )
 
 
@@ -117,6 +137,12 @@ class MakerCategoryTotal(Base):
     __table_args__ = (
         Index("idx_mct_year_category_maker", "year", "vehicle_category", "maker"),
         Index("idx_mct_year_maker", "year", "maker"),
+        # crosstab-detail and maker-category-breakdown both filter down to one
+        # state on top of (year, maker) when a state is picked -- neither
+        # index above carries state_name, so that filter runs as a
+        # post-scan (confirmed via EXPLAIN ANALYZE: ~115ms, ~4000 rows
+        # scanned to keep ~160). Small table, moderate win.
+        Index("idx_mct_year_maker_state_count", "year", "maker", "state_name", "count"),
     )
 
 
@@ -147,6 +173,9 @@ class FuelCategoryTotal(Base):
     __table_args__ = (
         Index("idx_fct_year_category_fuel", "year", "vehicle_category", "fuel_type"),
         Index("idx_fct_year_fuel", "year", "fuel_type"),
+        # Same state_name gap as MakerCategoryTotal above, for crosstab-detail
+        # and fuel-category-breakdown's category+state path.
+        Index("idx_fct_year_category_state", "year", "vehicle_category", "state_name", "fuel_type", "count"),
     )
 
 
@@ -177,6 +206,9 @@ class MakerFuelTotal(Base):
     __table_args__ = (
         Index("idx_mft_year_maker", "year", "maker"),
         Index("idx_mft_year_fuel", "year", "fuel_type"),
+        # Same state_name gap as the other two crosstabs, for crosstab-detail
+        # and maker-fuel-breakdown's maker+state path.
+        Index("idx_mft_year_maker_state", "year", "maker", "state_name", "fuel_type", "count"),
     )
 
 

@@ -40,11 +40,11 @@ export interface FilterParams {
   vehicle_model?: string | null;
 }
 
-export const getKPIs = (params?: FilterParams) => api.get('/summary/kpis', { params }).then(r => r.data);
-export const getTrend = (params?: Omit<FilterParams, 'month'>) =>
-  api.get('/summary/trend', { params }).then(r => r.data);
-export const getStateRanking = (params?: FilterParams & { limit?: number }) =>
-  api.get('/summary/state-ranking', { params }).then(r => r.data);
+export const getKPIs = (params?: FilterParams, signal?: AbortSignal) => api.get('/summary/kpis', { params, signal }).then(r => r.data);
+export const getTrend = (params?: Omit<FilterParams, 'month'>, signal?: AbortSignal) =>
+  api.get('/summary/trend', { params, signal }).then(r => r.data);
+export const getStateRanking = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>
+  api.get('/summary/state-ranking', { params, signal }).then(r => r.data);
 export const getStates = () => api.get('/states/').then(r => r.data);
 export const getStatesComparison = (year: number, limit?: number) =>
   api.get('/comparison/all-states', { params: { year, limit } }).then(r => r.data);
@@ -54,16 +54,16 @@ export const getYoYMonthly = (year_a: number, year_b: number, state?: string, st
   api.get('/yoy/monthly', { params: { year_a, year_b, state, start_month, end_month } }).then(r => r.data);
 export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number) =>
   api.get('/yoy/summary', { params: { year_a, year_b, start_month, end_month } }).then(r => r.data);
-export const getCategories = (params?: FilterParams) =>
-  api.get('/categories/', { params }).then(r => r.data);
+export const getCategories = (params?: FilterParams, signal?: AbortSignal) =>
+  api.get('/categories/', { params, signal }).then(r => r.data);
 export const getTopMakers = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>
   api.get('/categories/top-makers', { params, signal }).then(r => r.data);
 export const getFuelBreakdown = (params?: FilterParams) =>
   api.get('/categories/fuel-breakdown', { params }).then(r => r.data);
 export const triggerRefresh = () => api.post('/refresh/').then(r => r.data);
 export const getRefreshStatus = () => api.get('/refresh/status').then(r => r.data);
-export const getMonthDetail = (params: { year: number; month: number } & Omit<FilterParams, 'year' | 'month'>) =>
-  api.get('/summary/month-detail', { params }).then(r => r.data);
+export const getMonthDetail = (params: { year: number; month: number } & Omit<FilterParams, 'year' | 'month'>, signal?: AbortSignal) =>
+  api.get('/summary/month-detail', { params, signal }).then(r => r.data);
 export const getAvailableYears = (): Promise<number[]> => api.get('/summary/available-years').then(r => r.data);
 export const getScrapeProgress = () => api.get('/refresh/scrape-progress').then(r => r.data);
 export const getDataQuality = (): Promise<{
@@ -86,8 +86,8 @@ export const getOemTrend = (params: { maker: string; category: string }) =>
 export const getMakerCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; limit?: number }, signal?: AbortSignal) =>
   api.get('/categories/maker-category-breakdown', { params, signal }).then(r => r.data);
 
-export const getFuelCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; fuel_group?: string | null }) =>
-  api.get('/categories/fuel-category-breakdown', { params }).then(r => r.data);
+export const getFuelCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; fuel_group?: string | null }, signal?: AbortSignal) =>
+  api.get('/categories/fuel-category-breakdown', { params, signal }).then(r => r.data);
 
 export const getCrosstabCoverage = (): Promise<{ maker_category: number[]; fuel_category: number[]; maker_fuel: number[] }> =>
   api.get('/categories/crosstab-coverage').then(r => r.data);
@@ -95,11 +95,11 @@ export const getCrosstabCoverage = (): Promise<{ maker_category: number[]; fuel_
 export const getMakerFuelBreakdown = (params: { year: number; state?: string | null; maker?: string | null; fuel_group?: string | null; limit?: number }, signal?: AbortSignal) =>
   api.get('/categories/maker-fuel-breakdown', { params, signal }).then(r => r.data);
 
-export const getCrosstabDetail = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; fuel_group?: string | null }): Promise<{
+export const getCrosstabDetail = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; fuel_group?: string | null }, signal?: AbortSignal): Promise<{
   total: number | null;
   top_state: string | null;
   yoy_growth_percent: number | null;
-}> => api.get('/categories/crosstab-detail', { params }).then(r => r.data);
+}> => api.get('/categories/crosstab-detail', { params, signal }).then(r => r.data);
 
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);

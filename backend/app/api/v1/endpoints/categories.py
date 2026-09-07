@@ -6,11 +6,28 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
 from app.core.scope import get_effective_state
+from app.core.cache import TTLCache
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 
 router = APIRouter()
 
 _DEFAULT_YEAR = datetime.now().year
+
+# Every endpoint below is fired on Overview/Makers/Categories page load and
+# sums over either the 26M+ row Registration table or the multi-million-row
+# crosstab tables -- same cost shape as summary.py's kpis/trend/ranking,
+# which got this same TTLCache treatment already (see that file's comment
+# for the full rationale). 90s matches those; crosstab-coverage gets
+# available-years' longer 300s since it only changes when a backfill runs.
+_CACHE_TTL_SECONDS = 90
+_crosstab_coverage_cache = TTLCache(300)
+_categories_cache = TTLCache(_CACHE_TTL_SECONDS)
+_top_makers_cache = TTLCache(_CACHE_TTL_SECONDS)
+_fuel_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
+_maker_category_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
+_fuel_category_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
+_maker_fuel_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
+_crosstab_detail_cache = TTLCache(_CACHE_TTL_SECONDS)
 
 
 @router.get("/crosstab-coverage")
@@ -27,15 +44,21 @@ async def get_crosstab_coverage(db: AsyncSession = Depends(get_db), _user: User 
     to tell "not scraped for this year" apart from "scraped, real zero"
     instead of guessing from an empty filtered response.
     """
+    cached = _crosstab_coverage_cache.get(())
+    if cached is not None:
+        return cached
+
     async def years_for(model) -> list[int]:
         result = await db.execute(select(model.year).distinct().order_by(model.year.desc()))
         return [row[0] for row in result.all()]
 
-    return {
+    result = {
         "maker_category": await years_for(MakerCategoryTotal),
         "fuel_category": await years_for(FuelCategoryTotal),
         "maker_fuel": await years_for(MakerFuelTotal),
     }
+    _crosstab_coverage_cache.set((), result)
+    return result
 
 
 @router.get("/")
@@ -48,6 +71,11 @@ async def get_categories(
     raw: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
+    cache_key = (year, month, state, maker, vehicle_model, raw)
+    cached = _categories_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # vehicle_class='All' is the placeholder used by real scraped rows that
     # don't carry class info at that pivot (the maker- and fuel-dimension
     # passes -- see Registration.is_supplementary). Excluding it here means
@@ -97,7 +125,7 @@ async def get_categories(
     prev_rows = {r[0]: r[1] for r in prev_result.all()}
 
     key_name = "vehicle_class" if raw else "vehicle_category"
-    return [
+    response = [
         {
             key_name: r[0],
             "total_count": r[1],
@@ -111,6 +139,8 @@ async def get_categories(
         }
         for r in rows
     ]
+    _categories_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/top-makers")
@@ -125,6 +155,11 @@ async def get_top_makers(
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = (vehicle_class, vehicle_category, commercial_tier, year, month, state, vehicle_model, limit)
+    cached = _top_makers_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # The canonical maker-pass (Registration.maker IS NOT NULL) never carries
     # a real vehicle_class/vehicle_category/commercial_tier -- that dimension
     # only exists on the separate vehicle_class-pass, which in turn never
@@ -148,7 +183,9 @@ async def get_top_makers(
             cross_query = cross_query.where(MakerCategoryTotal.commercial_tier == commercial_tier)
         cross_query = cross_query.group_by(MakerCategoryTotal.maker).order_by(desc("total")).limit(limit)
         result = await db.execute(cross_query)
-        return [{"maker": r[0], "count": r[1]} for r in result.all()]
+        response = [{"maker": r[0], "count": r[1]} for r in result.all()]
+        _top_makers_cache.set(cache_key, response)
+        return response
 
     query = select(
         Registration.maker, func.sum(Registration.count).label("total")
@@ -162,7 +199,9 @@ async def get_top_makers(
 
     result = await db.execute(query)
     rows = result.all()
-    return [{"maker": r[0], "count": r[1]} for r in rows]
+    response = [{"maker": r[0], "count": r[1]} for r in rows]
+    _top_makers_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/fuel-breakdown")
@@ -178,6 +217,11 @@ async def get_fuel_breakdown(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    cache_key = (vehicle_class, vehicle_category, commercial_tier, fuel_group_filter, year, month, state, maker, vehicle_model)
+    cached = _fuel_breakdown_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # Same structural limitation as top-makers: the fuel-pass never carries
     # a real class/category/tier, so a fuel breakdown narrowed by one is
     # structurally impossible from the Registration table -- silently zero
@@ -222,10 +266,12 @@ async def get_fuel_breakdown(
             continue
         bucket = fuel_category(raw_fuel_type)
         totals[bucket] = totals.get(bucket, 0) + total
-    return [
+    response = [
         {"fuel_type": bucket, "count": total}
         for bucket, total in sorted(totals.items(), key=lambda item: item[1], reverse=True)
     ]
+    _fuel_breakdown_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/maker-category-breakdown")
@@ -244,6 +290,11 @@ async def get_maker_category_breakdown(
     to rank its categories. If both are given, groups by maker (returns the
     single row matching both).
     """
+    cache_key = (year, state, vehicle_category, maker, limit)
+    cached = _maker_category_breakdown_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     group_col = MakerCategoryTotal.vehicle_category if maker else MakerCategoryTotal.maker
     query = select(group_col, func.sum(MakerCategoryTotal.count).label("total")).where(
         MakerCategoryTotal.year == year
@@ -260,7 +311,9 @@ async def get_maker_category_breakdown(
     rows = result.all()
 
     key_name = "vehicle_category" if maker else "maker"
-    return [{key_name: r[0], "count": r[1]} for r in rows]
+    response = [{key_name: r[0], "count": r[1]} for r in rows]
+    _maker_category_breakdown_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/fuel-category-breakdown")
@@ -279,6 +332,11 @@ async def get_fuel_category_breakdown(
     Grouped in Python, not SQL, since fuel_group is computed from the raw
     fuel_type column (same reason /fuel-breakdown already does this).
     """
+    cache_key = (year, state, vehicle_category, fuel_group_filter)
+    cached = _fuel_category_breakdown_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     query = select(FuelCategoryTotal.fuel_type, FuelCategoryTotal.vehicle_category, FuelCategoryTotal.count).where(
         FuelCategoryTotal.year == year
     )
@@ -297,10 +355,12 @@ async def get_fuel_category_breakdown(
         totals[key] = totals.get(key, 0) + count
 
     key_name = "vehicle_category" if fuel_group_filter else "fuel_group"
-    return sorted(
+    response = sorted(
         [{key_name: k, "count": v} for k, v in totals.items()],
         key=lambda item: item["count"], reverse=True,
     )
+    _fuel_category_breakdown_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/maker-fuel-breakdown")
@@ -322,6 +382,11 @@ async def get_maker_fuel_breakdown(
     Python when ranking by maker, since fuel_group is computed from the raw
     fuel_type column (same reason fuel-category-breakdown does this).
     """
+    cache_key = (year, state, maker, fuel_group_filter, limit)
+    cached = _maker_fuel_breakdown_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     query = select(MakerFuelTotal.maker, MakerFuelTotal.fuel_type, MakerFuelTotal.count).where(
         MakerFuelTotal.year == year
     )
@@ -344,7 +409,9 @@ async def get_maker_fuel_breakdown(
         [{key_name: k, "count": v} for k, v in totals.items()],
         key=lambda item: item["count"], reverse=True,
     )
-    return rows[:limit] if fuel_group_filter else rows
+    response = rows[:limit] if fuel_group_filter else rows
+    _maker_fuel_breakdown_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/crosstab-detail")
@@ -368,6 +435,11 @@ async def get_crosstab_detail(
     active = [bool(vehicle_category), bool(maker), bool(fuel_group_filter)]
     if sum(active) != 2:
         return {"total": None, "top_state": None, "yoy_growth_percent": None}
+
+    cache_key = (year, state, vehicle_category, maker, fuel_group_filter)
+    cached = _crosstab_detail_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     async def _totals_by_state(target_year: int) -> dict[str, int]:
         if vehicle_category and maker:
@@ -417,4 +489,6 @@ async def get_crosstab_detail(
     if not state and per_state_this:
         top_state = max(per_state_this.items(), key=lambda kv: kv[1])[0]
 
-    return {"total": total, "top_state": top_state, "yoy_growth_percent": yoy}
+    response = {"total": total, "top_state": top_state, "yoy_growth_percent": yoy}
+    _crosstab_detail_cache.set(cache_key, response)
+    return response

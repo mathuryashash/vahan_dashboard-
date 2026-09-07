@@ -115,17 +115,17 @@ export function OverviewPage() {
 
   const { data: crosstabMakerCategory, isLoading: crosstabMakerCategoryLoading } = useQuery({
     queryKey: ['makerCategoryBreakdown', selectedYear, selectedCategory, selectedMaker, selectedState],
-    queryFn: () => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, maker: selectedMaker!, state: selectedState }),
+    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, maker: selectedMaker!, state: selectedState }, signal),
     enabled: exactlyOnePairActive && !!selectedCategory && !!selectedMaker,
   });
   const { data: crosstabFuelCategory, isLoading: crosstabFuelCategoryLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', selectedYear, selectedCategory, fuelGroup, selectedState],
-    queryFn: () => getFuelCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }),
+    queryFn: ({ signal }) => getFuelCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
     enabled: exactlyOnePairActive && !!selectedCategory && !!fuelGroup,
   });
   const { data: crosstabMakerFuel, isLoading: crosstabMakerFuelLoading } = useQuery({
     queryKey: ['makerFuelBreakdown', selectedYear, selectedMaker, fuelGroup, selectedState],
-    queryFn: () => getMakerFuelBreakdown({ year: selectedYear, maker: selectedMaker!, fuel_group: fuelGroup!, state: selectedState }),
+    queryFn: ({ signal }) => getMakerFuelBreakdown({ year: selectedYear, maker: selectedMaker!, fuel_group: fuelGroup!, state: selectedState }, signal),
     enabled: exactlyOnePairActive && !!selectedMaker && !!fuelGroup,
   });
 
@@ -151,44 +151,44 @@ export function OverviewPage() {
   // before that backfill this really was a permanent '--'.
   const { data: crosstabDetail } = useQuery({
     queryKey: ['crosstabDetail', selectedYear, selectedCategory, selectedMaker, fuelGroup, selectedState],
-    queryFn: () => getCrosstabDetail({
+    queryFn: ({ signal }) => getCrosstabDetail({
       year: selectedYear,
       vehicle_category: selectedCategory,
       maker: selectedMaker,
       fuel_group: fuelGroup,
       state: selectedState,
-    }),
+    }, signal),
     enabled: exactlyOnePairActive,
   });
 
   const { data: kpis, isLoading: kpisLoading } = useQuery({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
-    queryFn: () => getKPIs({
+    queryFn: ({ signal }) => getKPIs({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-    }),
+    }, signal),
     enabled: !kpiComboImpossible,
   });
 
   const { data: trend, isLoading: trendLoading } = useQuery({
     queryKey: ['trend', selectedYear, selectedState, selectedCategory, fuelGroup, selectedMaker],
-    queryFn: () => getTrend({
+    queryFn: ({ signal }) => getTrend({
       year: selectedYear,
       state: selectedState,
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-    }),
+    }, signal),
     enabled: !kpiComboImpossible,
   });
 
   const { data: ranking, isLoading: rankingLoading } = useQuery({
     queryKey: ['stateRanking', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
-    queryFn: () => getStateRanking({
+    queryFn: ({ signal }) => getStateRanking({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
@@ -196,18 +196,18 @@ export function OverviewPage() {
       fuel_group: fuelGroup,
       maker: selectedMaker,
       limit: 10
-    }),
+    }, signal),
     enabled: !kpiComboImpossible,
   });
 
   const { data: categories, isLoading: categoriesLoading } = useQuery({
     queryKey: ['categories', selectedYear, selectedMonth, selectedState, selectedMaker],
-    queryFn: () => getCategories({
+    queryFn: ({ signal }) => getCategories({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
       maker: selectedMaker,
-    }),
+    }, signal),
   });
 
   // Deliberately NOT filtered by selectedCategory: the live scraper can only
@@ -218,12 +218,12 @@ export function OverviewPage() {
   // Filtering this dropdown by category would always return zero brands.
   const { data: makers } = useQuery({
     queryKey: ['makers', selectedYear, selectedMonth, selectedState],
-    queryFn: () => getTopMakers({
+    queryFn: ({ signal }) => getTopMakers({
       year: selectedYear,
       month: selectedMonth,
       state: selectedState,
       limit: 30
-    }),
+    }, signal),
   });
 
   // The live VAHAN4 site has no day-level granularity at all -- its finest
@@ -235,14 +235,14 @@ export function OverviewPage() {
   // can ever supply.
   const { data: monthDetail, isLoading: monthDetailLoading, isError: monthDetailError } = useQuery<MonthDetail>({
     queryKey: ['monthDetail', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
-    queryFn: () => getMonthDetail({
+    queryFn: ({ signal }) => getMonthDetail({
       year: selectedYear,
       month: selectedMonth!,
       state: selectedState,
       vehicle_category: selectedCategory,
       fuel_group: fuelGroup,
       maker: selectedMaker,
-    }),
+    }, signal),
     enabled: selectedMonth != null && !kpiComboImpossible,
   });
 
@@ -653,7 +653,7 @@ export function OverviewPage() {
 function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }: { year: number; category: string; maker: string; month: number | null; state: string | null; hasYearData: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['makerCategoryBreakdown', year, category, maker, state],
-    queryFn: () => getMakerCategoryBreakdown({ year, vehicle_category: category, maker, state }),
+    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year, vehicle_category: category, maker, state }, signal),
   });
 
   // hasYearData (from /categories/crosstab-coverage, fetched once by the
@@ -699,7 +699,7 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
 function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearData }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', year, category, fuelGroup, state],
-    queryFn: () => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }),
+    queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }, signal),
   });
 
   // See MakerCategoryPanel's comment above -- hasYearData (not an empty
@@ -738,7 +738,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
 function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData }: { year: number; maker: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['makerFuelBreakdown', year, maker, fuelGroup, state],
-    queryFn: () => getMakerFuelBreakdown({ year, maker, fuel_group: fuelGroup, state }),
+    queryFn: ({ signal }) => getMakerFuelBreakdown({ year, maker, fuel_group: fuelGroup, state }, signal),
   });
 
   // /maker-fuel-breakdown returns one row keyed by "maker" (not "fuel_group")
