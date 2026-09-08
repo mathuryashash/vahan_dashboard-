@@ -12,13 +12,14 @@ import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { ExportCsvButton } from '../components/ExportCsvButton';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 export function CategoriesPage() {
   const navigate = useNavigate();
   const chart = useChartTheme();
   const { selectedYear } = useAppStore();
 
-  const { data: categories, isLoading } = useQuery({
+  const { data: categories, isLoading, isError, refetch } = useQuery({
     queryKey: ['categories', selectedYear],
     queryFn: () => getCategories({ year: selectedYear }),
   });
@@ -32,6 +33,13 @@ export function CategoriesPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {isError && (
+        <ErrorBanner
+          title="Couldn't load category data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetch() }}
+        />
+      )}
       <div className="flex items-center justify-between animate-entrance">
         <div>
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Categories & Fuel</h2>

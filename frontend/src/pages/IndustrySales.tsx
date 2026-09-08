@@ -6,6 +6,7 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -40,7 +41,7 @@ export function IndustrySalesPage() {
 
   const { data: oemStatus } = useQuery({ queryKey: ['oemStatus'], queryFn: getOemStatus });
 
-  const { data: monthly, isLoading: monthlyLoading } = useQuery({
+  const { data: monthly, isLoading: monthlyLoading, isError: monthlyError, refetch: refetchMonthly } = useQuery({
     queryKey: ['oemMonthly', category, selectedYear, selectedMonth],
     queryFn: () => getOemMonthly({ category: category!, year: selectedYear, month: selectedMonth }),
     enabled: !!category,
@@ -60,6 +61,13 @@ export function IndustrySalesPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {monthlyError && (
+        <ErrorBanner
+          title="Couldn't load industry sales data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetchMonthly() }}
+        />
+      )}
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Industry Sales</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">

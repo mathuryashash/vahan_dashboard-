@@ -8,6 +8,7 @@ import { useAppStore } from '../hooks/useAppStore';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { useAuth } from '../contexts/AuthContext';
 import type { RTOListItem, RTOAnalysis } from '../types';
@@ -68,7 +69,7 @@ export function RtoAnalysisPage() {
     enabled: !!districtCode,
   });
 
-  const { data: rtos, isLoading: rtosLoading } = useQuery<RTOListItem[]>({
+  const { data: rtos, isLoading: rtosLoading, isError: rtosError, refetch: refetchRtos } = useQuery<RTOListItem[]>({
     queryKey: ['rtoList', stateCode, fyYear],
     queryFn: () => getRtosForState(stateCode, fyYear),
     enabled: !!stateCode,
@@ -93,6 +94,13 @@ export function RtoAnalysisPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {rtosError && (
+        <ErrorBanner
+          title="Couldn't load RTO data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetchRtos() }}
+        />
+      )}
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">RTO Analysis</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">

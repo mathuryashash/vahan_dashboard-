@@ -8,6 +8,7 @@ import { useAppStore } from '../hooks/useAppStore';
 import { getYoYMonthly, getYoYSummary } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { EmptyState } from '../components/EmptyState';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -43,7 +44,7 @@ export function YoYPage() {
   const [endMonth, setEndMonth] = useState(12);
   const isCustomRange = startMonth !== 1 || endMonth !== 12;
 
-  const { data: monthly, isLoading } = useQuery({
+  const { data: monthly, isLoading, isError, refetch } = useQuery({
     queryKey: ['yoy', comparisonYearA, comparisonYearB, startMonth, endMonth],
     queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB, undefined, startMonth, endMonth),
   });
@@ -77,6 +78,13 @@ export function YoYPage() {
 
   return (
     <div className="p-6 space-y-5">
+      {isError && (
+        <ErrorBanner
+          title="Couldn't load year-over-year data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetch() }}
+        />
+      )}
       <div className="flex items-center justify-between">
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Year-over-Year Analysis</h2>

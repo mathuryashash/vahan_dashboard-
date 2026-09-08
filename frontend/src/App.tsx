@@ -1,16 +1,21 @@
-import { useState } from 'react';
+import { useState, lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
-import { OverviewPage } from './pages/Overview';
-import { ComparisonPage } from './pages/Comparison';
-import { YoYPage } from './pages/YoY';
-import { CategoriesPage } from './pages/Categories';
-import { CategoryDetailPage } from './pages/CategoryDetail';
-import { MakersModelsPage } from './pages/MakersModels';
-import { IndustrySalesPage } from './pages/IndustrySales';
-import { RtoAnalysisPage } from './pages/RtoAnalysis';
 import { LoginPage } from './pages/Login';
+
+// Route-level code splitting -- every page (Recharts included) used to ship
+// in one bundle regardless of which single page a visit actually lands on
+// (found by frontend review). Login stays eager: it's the only thing an
+// unauthenticated visit ever renders.
+const OverviewPage = lazy(() => import('./pages/Overview').then((m) => ({ default: m.OverviewPage })));
+const ComparisonPage = lazy(() => import('./pages/Comparison').then((m) => ({ default: m.ComparisonPage })));
+const YoYPage = lazy(() => import('./pages/YoY').then((m) => ({ default: m.YoYPage })));
+const CategoriesPage = lazy(() => import('./pages/Categories').then((m) => ({ default: m.CategoriesPage })));
+const CategoryDetailPage = lazy(() => import('./pages/CategoryDetail').then((m) => ({ default: m.CategoryDetailPage })));
+const MakersModelsPage = lazy(() => import('./pages/MakersModels').then((m) => ({ default: m.MakersModelsPage })));
+const IndustrySalesPage = lazy(() => import('./pages/IndustrySales').then((m) => ({ default: m.IndustrySalesPage })));
+const RtoAnalysisPage = lazy(() => import('./pages/RtoAnalysis').then((m) => ({ default: m.RtoAnalysisPage })));
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
 import { useScrapeProgress } from './hooks/useIsLiveData';
@@ -56,16 +61,18 @@ export default function App() {
             onLogout={handleLogout}
           />
           <main className="flex-1 overflow-y-auto">
-            <Routes>
-              <Route path="/" element={<OverviewPage />} />
-              <Route path="/comparison" element={<ComparisonPage />} />
-              <Route path="/yoy" element={<YoYPage />} />
-              <Route path="/categories" element={<CategoriesPage />} />
-              <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
-              <Route path="/makers" element={<MakersModelsPage />} />
-              <Route path="/industry-sales" element={<IndustrySalesPage />} />
-              <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
-            </Routes>
+            <Suspense fallback={<div className="p-6"><div className="h-40 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" /></div>}>
+              <Routes>
+                <Route path="/" element={<OverviewPage />} />
+                <Route path="/comparison" element={<ComparisonPage />} />
+                <Route path="/yoy" element={<YoYPage />} />
+                <Route path="/categories" element={<CategoriesPage />} />
+                <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
+                <Route path="/makers" element={<MakersModelsPage />} />
+                <Route path="/industry-sales" element={<IndustrySalesPage />} />
+                <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
+              </Routes>
+            </Suspense>
           </main>
         </div>
       </div>

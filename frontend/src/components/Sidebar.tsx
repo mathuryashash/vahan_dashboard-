@@ -65,6 +65,7 @@ export function Sidebar() {
       <div className="px-3 py-3 border-t border-[var(--border)]">
         <button
           onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className="w-full flex items-center justify-center py-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors rounded-lg hover:bg-[var(--bg-card-hover)]"
         >
           {sidebarCollapsed ? (

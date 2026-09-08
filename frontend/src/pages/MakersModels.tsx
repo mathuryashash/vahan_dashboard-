@@ -7,6 +7,7 @@ import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { EmptyState } from '../components/EmptyState';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -36,7 +37,7 @@ export function MakersModelsPage() {
   // structural limit as the Overview page's combined filters. `month` only
   // applies to the plain (no category, no fuel) leaderboard.
   const comboImpossible = !!(selectedCategory && fuelGroup);
-  const { data: makers, isLoading: makersLoading } = useQuery({
+  const { data: makers, isLoading: makersLoading, isError: makersError, refetch: refetchMakers } = useQuery({
     queryKey: ['makers-full', year, month, selectedCategory, fuelGroup, selectedState],
     queryFn: ({ signal }) => {
       if (selectedCategory) return getMakerCategoryBreakdown({ year, vehicle_category: selectedCategory, state: selectedState, limit: 20 }, signal);
@@ -51,6 +52,13 @@ export function MakersModelsPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {makersError && (
+        <ErrorBanner
+          title="Couldn't load maker data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetchMakers() }}
+        />
+      )}
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Makers</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">

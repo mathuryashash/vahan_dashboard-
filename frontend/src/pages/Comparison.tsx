@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { getStatesComparison, compareStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -48,7 +49,7 @@ export function ComparisonPage() {
     queryFn: () => getStatesComparison(selectedYear, 36),
   });
 
-  const { data: comparison } = useQuery({
+  const { data: comparison, isError: comparisonError, refetch: refetchComparison } = useQuery({
     queryKey: ['compare', stateA, stateB, selectedYear],
     queryFn: () => compareStates(stateA, stateB, selectedYear),
     enabled: !!stateA,
@@ -68,6 +69,13 @@ export function ComparisonPage() {
 
   return (
     <div className="p-6 space-y-5">
+      {comparisonError && (
+        <ErrorBanner
+          title="Couldn't load comparison data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetchComparison() }}
+        />
+      )}
       <div className="flex items-center justify-between">
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">State Comparison</h2>

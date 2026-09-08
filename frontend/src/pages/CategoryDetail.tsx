@@ -8,6 +8,7 @@ import { ArrowLeft } from '../components/Icons';
 import { Link } from 'react-router-dom';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { EmptyState } from '../components/EmptyState';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 // The live VAHAN4 site can only pivot on one Y-axis dimension per visit, so
 // the scraper's maker-pass and fuel-pass rows are never tagged with a real
@@ -31,7 +32,7 @@ export function CategoryDetailPage() {
 
   const currentCat = (cats || []).find((c: { vehicle_category: string }) => c.vehicle_category === decoded);
 
-  const { data: makers, isLoading: makersLoading } = useQuery({
+  const { data: makers, isLoading: makersLoading, isError: makersError, refetch: refetchMakers } = useQuery({
     queryKey: ['makers', decoded, selectedYear],
     queryFn: () => getTopMakers({ vehicle_category: decoded, year: selectedYear }),
     enabled: !!decoded,
@@ -47,6 +48,13 @@ export function CategoryDetailPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {makersError && (
+        <ErrorBanner
+          title="Couldn't load maker data"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetchMakers() }}
+        />
+      )}
       <div className="animate-entrance">
         <Link to="/categories" className="inline-flex items-center gap-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] font-mono mb-3 transition-colors">
           <ArrowLeft className="w-3.5 h-3.5" />

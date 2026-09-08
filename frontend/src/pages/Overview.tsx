@@ -8,6 +8,7 @@ import {
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
@@ -161,7 +162,7 @@ export function OverviewPage() {
     enabled: exactlyOnePairActive,
   });
 
-  const { data: kpis, isLoading: kpisLoading } = useQuery({
+  const { data: kpis, isLoading: kpisLoading, isError: kpisError, refetch: refetchKpis } = useQuery({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: ({ signal }) => getKPIs({
       year: selectedYear,
@@ -174,7 +175,7 @@ export function OverviewPage() {
     enabled: !kpiComboImpossible,
   });
 
-  const { data: trend, isLoading: trendLoading } = useQuery({
+  const { data: trend, isLoading: trendLoading, isError: trendError, refetch: refetchTrend } = useQuery({
     queryKey: ['trend', selectedYear, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: ({ signal }) => getTrend({
       year: selectedYear,
@@ -186,7 +187,7 @@ export function OverviewPage() {
     enabled: !kpiComboImpossible,
   });
 
-  const { data: ranking, isLoading: rankingLoading } = useQuery({
+  const { data: ranking, isLoading: rankingLoading, isError: rankingError, refetch: refetchRanking } = useQuery({
     queryKey: ['stateRanking', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: ({ signal }) => getStateRanking({
       year: selectedYear,
@@ -199,6 +200,15 @@ export function OverviewPage() {
     }, signal),
     enabled: !kpiComboImpossible,
   });
+
+  // A failed request (network error, 500) rendered identically to a
+  // legitimate empty result -- both just showed "no data"/"0" -- which
+  // undermines the honest-empty-state pattern the rest of this page relies
+  // on: a user can't tell "the API is down" from "VAHAN never scraped
+  // this" (found by frontend review). One banner covers the three main
+  // queries; a page-specific failure buried in a lower panel still shows
+  // via that panel's own empty state.
+  const hasLoadError = kpisError || trendError || rankingError;
 
   const { data: categories, isLoading: categoriesLoading } = useQuery({
     queryKey: ['categories', selectedYear, selectedMonth, selectedState, selectedMaker],
@@ -299,6 +309,13 @@ export function OverviewPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {hasLoadError && (
+        <ErrorBanner
+          title="Couldn't load dashboard data"
+          description="The request to the server failed -- this is different from a real empty result. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => { refetchKpis(); refetchTrend(); refetchRanking(); } }}
+        />
+      )}
       <div className="flex items-center justify-between">
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">

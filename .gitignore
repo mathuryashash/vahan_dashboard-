@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+*.tsbuildinfo
 .env
 *.egg-info/
 backend/data/*.db
