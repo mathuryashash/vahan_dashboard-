@@ -6,7 +6,10 @@ from sqlalchemy import Column, Index, Integer, MetaData, String, Table, inspect,
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
-from app.core.migrations import ensure_analyzed, ensure_columns, ensure_indexes, ensure_vehicle_category_backfilled
+from app.core.migrations import (
+    drop_orphaned_indexes, ensure_analyzed, ensure_columns, ensure_indexes,
+    ensure_no_duplicate_rows, ensure_vehicle_category_backfilled,
+)
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -184,6 +187,87 @@ async def test_ensure_vehicle_category_backfilled_classifies_existing_rows():
 
     async with engine.begin() as conn:
         await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_ensure_no_duplicate_rows_removes_duplicates_keeps_highest_id():
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, rto_code TEXT, year INT, maker TEXT)"
+        ))
+        # Two duplicate pairs (same rto_code/year/maker) and one unique row.
+        await conn.execute(text(
+            f"INSERT INTO {table_name} (rto_code, year, maker) VALUES "
+            f"('DL1', 2026, 'HONDA'), ('DL1', 2026, 'HONDA'), "
+            f"('UP1', 2026, 'TVS'), ('UP1', 2026, 'TVS'), "
+            f"('DL1', 2026, 'TVS')"
+        ))
+
+    await ensure_no_duplicate_rows(engine, table_name, ["rto_code", "year", "maker"])
+
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text(f"SELECT rto_code, maker FROM {table_name} ORDER BY rto_code, maker"))).all()
+    assert rows == [("DL1", "HONDA"), ("DL1", "TVS"), ("UP1", "TVS")]
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_ensure_no_duplicate_rows_is_idempotent():
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, rto_code TEXT, year INT)"))
+        await conn.execute(text(f"INSERT INTO {table_name} (rto_code, year) VALUES ('DL1', 2026)"))
+
+    await ensure_no_duplicate_rows(engine, table_name, ["rto_code", "year"])
+    await ensure_no_duplicate_rows(engine, table_name, ["rto_code", "year"])  # must not raise or delete the survivor
+
+    async with engine.connect() as conn:
+        count = (await conn.execute(text(f"SELECT count(*) FROM {table_name}"))).scalar()
+    assert count == 1
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_ensure_no_duplicate_rows_rejects_invalid_identifiers():
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    with pytest.raises(ValueError):
+        await ensure_no_duplicate_rows(engine, "registrations; DROP TABLE registrations", ["year"])
+    with pytest.raises(ValueError):
+        await ensure_no_duplicate_rows(engine, "registrations", ["year; DROP TABLE registrations"])
+    await engine.dispose()
+
+
+async def test_drop_orphaned_indexes_removes_index_and_is_idempotent():
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    index_name = f"ix_{table_name}_state_code"
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, state_code TEXT)"))
+        await conn.execute(text(f"CREATE INDEX {index_name} ON {table_name} (state_code)"))
+
+    await drop_orphaned_indexes(engine, [index_name])
+    await drop_orphaned_indexes(engine, [index_name])  # idempotent -- must not raise once already gone
+
+    async with engine.connect() as conn:
+        indexnames = await conn.run_sync(lambda sync_conn: {i["name"] for i in inspect(sync_conn).get_indexes(table_name)})
+    assert index_name not in indexnames
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_drop_orphaned_indexes_rejects_invalid_identifier():
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    with pytest.raises(ValueError):
+        await drop_orphaned_indexes(engine, ["ix_foo; DROP TABLE registrations"])
     await engine.dispose()
 
 

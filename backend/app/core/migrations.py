@@ -60,6 +60,48 @@ async def ensure_indexes(engine: AsyncEngine, metadata) -> None:
                 await conn.execute(ddl)
 
 
+async def drop_orphaned_indexes(engine: AsyncEngine, index_names: list[str]) -> None:
+    """Drop indexes that no longer appear in any model's __table_args__.
+
+    The mirror image of ensure_indexes: that function only ever creates, so
+    an index removed from a model (made redundant by a newer, wider one, or
+    found to have zero query-side use) keeps sitting on every already-
+    deployed database forever, still paying its per-insert maintenance cost,
+    unless something explicitly drops it. Safe to run on every startup --
+    DROP INDEX IF EXISTS is a no-op once it's gone.
+    """
+    async with engine.begin() as conn:
+        for name in index_names:
+            if not _IDENTIFIER_RE.match(name):
+                raise ValueError(f"Invalid index name: {name!r}")
+            await conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
+
+
+async def ensure_no_duplicate_rows(engine: AsyncEngine, table_name: str, key_columns: list[str]) -> None:
+    """Delete all but the highest-id row per `key_columns` group.
+
+    A prerequisite for adding a unique constraint on those columns -- the
+    constraint's own CREATE UNIQUE INDEX fails outright if duplicates already
+    exist. Confirmed live on maker_category_totals: 31,620 exact-duplicate
+    rows (same rto_code+year+maker+vehicle_class, same count), all in the
+    current year, silently double-counted into every SUM(count) that read
+    them. Safe to run on every startup: a table with no duplicates left
+    matches zero rows and is a cheap no-op.
+    """
+    if not _IDENTIFIER_RE.match(table_name):
+        raise ValueError(f"Invalid table name: {table_name!r}")
+    for col in key_columns:
+        if not _IDENTIFIER_RE.match(col):
+            raise ValueError(f"Invalid column name: {col!r}")
+    join_cond = " AND ".join(f"a.{col} = b.{col}" for col in key_columns)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"""
+            DELETE FROM {table_name} a
+            USING {table_name} b
+            WHERE a.id < b.id AND {join_cond}
+        """))
+
+
 def _sql_literal(value: str) -> str:
     """Single-quoted SQL string literal, with embedded quotes doubled.
     Values here always come from our own hardcoded classification table

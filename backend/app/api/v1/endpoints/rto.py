@@ -4,9 +4,18 @@ from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
 from app.core.query_filters import exclude_supplementary
 from app.core.scope import require_rto_code, require_state_code
+from app.core.cache import TTLCache
 from app.models.models import Registration
 
 router = APIRouter()
+
+# Same cost shape and same fix as summary.py/categories.py's hot endpoints --
+# both of these scan the 26M-row registrations table (state-wide or one
+# RTO's full FY), and RTO Analysis re-fires them on every state/year/RTO
+# pick.
+_CACHE_TTL_SECONDS = 90
+_rto_list_cache = TTLCache(_CACHE_TTL_SECONDS)
+_rto_analysis_cache = TTLCache(_CACHE_TTL_SECONDS)
 
 
 def fy_filter(fy_year: int):
@@ -30,6 +39,11 @@ async def get_rtos_for_state(
     volume. Reads from `registrations` directly (not the `rtos` master
     table) so the list only ever shows RTOs that actually have data.
     """
+    cache_key = (state_code, year)
+    cached = _rto_list_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     query = exclude_supplementary(
         select(
             Registration.rto_code,
@@ -40,10 +54,12 @@ async def get_rtos_for_state(
     ).group_by(Registration.rto_code, Registration.rto_name).order_by(desc("total"))
 
     result = await db.execute(query)
-    return [
+    response = [
         {"rto_code": r.rto_code, "rto_name": r.rto_name, "total": r.total}
         for r in result.all()
     ]
+    _rto_list_cache.set(cache_key, response)
+    return response
 
 
 @router.get("/{rto_code}/analysis")
@@ -55,6 +71,11 @@ async def get_rto_analysis(
     """Company (maker) % breakdown for one RTO/FY, plus an overview:
     total registrations and average per active month.
     """
+    cache_key = (rto_code, year)
+    cached = _rto_analysis_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     base = exclude_supplementary(
         select(Registration).where(Registration.rto_code == rto_code, fy_filter(year))
     )
@@ -83,7 +104,7 @@ async def get_rto_analysis(
     name_result = await db.execute(base.limit(1))
     sample = name_result.scalars().first()
 
-    return {
+    response = {
         "rto_code": rto_code,
         "rto_name": sample.rto_name if sample else None,
         "state_name": sample.state_name if sample else None,
@@ -100,3 +121,5 @@ async def get_rto_analysis(
             for m in makers
         ],
     }
+    _rto_analysis_cache.set(cache_key, response)
+    return response

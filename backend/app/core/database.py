@@ -59,7 +59,10 @@ async def init_db():
     from app.models import models  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    from app.core.migrations import ensure_analyzed, ensure_columns, ensure_indexes, ensure_vehicle_category_backfilled
+    from app.core.migrations import (
+        drop_orphaned_indexes, ensure_analyzed, ensure_columns, ensure_indexes,
+        ensure_no_duplicate_rows, ensure_vehicle_category_backfilled,
+    )
     await ensure_columns(engine, {
         "states": {"zone_code": "VARCHAR(10)"},
         "registrations": {
@@ -68,6 +71,21 @@ async def init_db():
             "commercial_tier": "VARCHAR(15)",
         },
     })
+    # Made redundant by a wider index covering the same leading columns, or
+    # found to have zero query-side use -- see the removed Index() calls'
+    # git history / the comments left in their place in models.py.
+    await drop_orphaned_indexes(engine, [
+        "ix_registrations_day", "ix_registrations_recorded_at",
+        "idx_mct_year_maker", "idx_mft_year_maker",
+    ])
+    # Must run before ensure_indexes: the unique indexes declared below on
+    # each crosstab table's natural key fail outright if duplicate rows
+    # already exist (confirmed live: 31,620 of them on
+    # maker_category_totals, silently double-counted into every SUM(count)
+    # that read them -- see ensure_no_duplicate_rows' own docstring).
+    await ensure_no_duplicate_rows(engine, "maker_category_totals", ["rto_code", "year", "maker", "vehicle_class"])
+    await ensure_no_duplicate_rows(engine, "fuel_category_totals", ["rto_code", "year", "fuel_type", "vehicle_class"])
+    await ensure_no_duplicate_rows(engine, "maker_fuel_totals", ["rto_code", "year", "maker", "fuel_type"])
     await ensure_indexes(engine, Base.metadata)
     await ensure_vehicle_category_backfilled(engine)
     await ensure_analyzed(engine, list(Base.metadata.tables))

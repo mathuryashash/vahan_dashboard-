@@ -55,10 +55,15 @@ class Registration(Base):
     maker = Column(String(200), nullable=True)
     fuel_type = Column(String(100), nullable=True)
     norms_type = Column(String(50), nullable=True)
-    day = Column(Integer, nullable=True, index=True)
+    # Always NULL for real data -- VAHAN has no day-level granularity (see
+    # summary.py's own docstring on this) -- and recorded_at has zero
+    # query-side references anywhere in the codebase. Neither index was
+    # earning its per-insert maintenance cost on a 26M-row, millions/year
+    # table (dropped below in migrations.py; nothing here recreates them).
+    day = Column(Integer, nullable=True)
     vehicle_model = Column(String(200), nullable=True, index=True)
     count = Column(Integer, default=0)
-    recorded_at = Column(DateTime, default=func.now(), index=True)
+    recorded_at = Column(DateTime, default=func.now())
     # The live scraper can only pivot on one dimension (Maker, Vehicle Class,
     # or Fuel) per site visit, so a single RTO/month's real registrations end
     # up split across multiple rows -- one full breakdown by maker, another
@@ -136,13 +141,24 @@ class MakerCategoryTotal(Base):
 
     __table_args__ = (
         Index("idx_mct_year_category_maker", "year", "vehicle_category", "maker"),
-        Index("idx_mct_year_maker", "year", "maker"),
+        # idx_mct_year_maker (year, maker) removed -- fully subsumed by the
+        # wider index below sharing its leading two columns (dropped in
+        # migrations.py, nothing here recreates it).
         # crosstab-detail and maker-category-breakdown both filter down to one
         # state on top of (year, maker) when a state is picked -- neither
         # index above carries state_name, so that filter runs as a
         # post-scan (confirmed via EXPLAIN ANALYZE: ~115ms, ~4000 rows
         # scanned to keep ~160). Small table, moderate win.
         Index("idx_mct_year_maker_state_count", "year", "maker", "state_name", "count"),
+        # delete-then-insert in persist_maker_category_batch is scoped to
+        # (rto_code, year) only, not this row's full natural key -- nothing
+        # stopped two overlapping/re-run scrapes from each inserting their
+        # own copy of the same (rto, year, maker, vehicle_class) cell.
+        # Confirmed live: 31,620 exact-duplicate rows, all in the current
+        # year (deduped in migrations.py's ensure_no_duplicate_rows before
+        # this constraint is created). A real DB constraint, not just
+        # app-level delete-before-insert, so this can't silently recur.
+        Index("idx_mct_natural_key", "rto_code", "year", "maker", "vehicle_class", unique=True),
     )
 
 
@@ -176,6 +192,10 @@ class FuelCategoryTotal(Base):
         # Same state_name gap as MakerCategoryTotal above, for crosstab-detail
         # and fuel-category-breakdown's category+state path.
         Index("idx_fct_year_category_state", "year", "vehicle_category", "state_name", "fuel_type", "count"),
+        # Same duplicate-prevention gap as MakerCategoryTotal -- see
+        # idx_mct_natural_key's comment. This table had zero duplicates when
+        # checked, but nothing stopped it happening here too.
+        Index("idx_fct_natural_key", "rto_code", "year", "fuel_type", "vehicle_class", unique=True),
     )
 
 
@@ -204,11 +224,17 @@ class MakerFuelTotal(Base):
     count = Column(Integer, default=0)
 
     __table_args__ = (
-        Index("idx_mft_year_maker", "year", "maker"),
+        # idx_mft_year_maker (year, maker) removed -- fully subsumed by the
+        # wider index below sharing its leading two columns (dropped in
+        # migrations.py, nothing here recreates it).
         Index("idx_mft_year_fuel", "year", "fuel_type"),
         # Same state_name gap as the other two crosstabs, for crosstab-detail
         # and maker-fuel-breakdown's maker+state path.
         Index("idx_mft_year_maker_state", "year", "maker", "state_name", "fuel_type", "count"),
+        # Same duplicate-prevention gap as MakerCategoryTotal -- see
+        # idx_mct_natural_key's comment. This table had zero duplicates when
+        # checked, but nothing stopped it happening here too.
+        Index("idx_mft_natural_key", "rto_code", "year", "maker", "fuel_type", unique=True),
     )
 
 
