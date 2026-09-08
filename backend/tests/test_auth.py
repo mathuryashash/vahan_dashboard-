@@ -97,6 +97,27 @@ async def test_admin_only_endpoint_rejects_a_viewer_token(client, db_session):
         _restore_admin_override()
 
 
+async def test_login_locks_out_after_repeated_failures(client, db_session):
+    """Guards against unlimited online password guessing (see
+    app/core/rate_limit.py) -- the correct password must still be rejected
+    once the failure count trips the lockout, not just wrong ones."""
+    await _seed_user(db_session, email="locktarget@example.com", password="correct-horse")
+    del app.dependency_overrides[get_current_user]
+    try:
+        for _ in range(5):
+            response = await client.post(
+                "/api/v1/auth/login", data={"username": "locktarget@example.com", "password": "wrong"}
+            )
+            assert response.status_code == 401
+
+        response = await client.post(
+            "/api/v1/auth/login", data={"username": "locktarget@example.com", "password": "correct-horse"}
+        )
+        assert response.status_code == 429
+    finally:
+        _restore_admin_override()
+
+
 async def test_admin_can_create_and_list_users(client, db_session):
     response = await client.post(
         "/api/v1/users/",

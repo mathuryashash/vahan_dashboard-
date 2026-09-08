@@ -15,6 +15,16 @@ logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The dev default signs a valid admin JWT for anyone who reads this
+    # (open) source -- fine for local work, not for a server anyone can
+    # reach. setup-native.sh generates a real secret into .env; this catches
+    # every other path (a manual deploy, a forgotten .env) before it ever
+    # accepts a request instead of silently running with a public key.
+    if settings.JWT_SECRET_KEY == "dev-only-change-me-in-production":
+        raise RuntimeError(
+            "JWT_SECRET_KEY is still the insecure default -- set a real one in .env "
+            "before starting the server (e.g. `python -c \"import secrets; print(secrets.token_hex(32))\"`)."
+        )
     await init_db()
     async with AsyncSessionLocal() as session:
         await seed_geo_hierarchy(session)

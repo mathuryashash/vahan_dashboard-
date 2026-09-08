@@ -9,6 +9,7 @@ from app.main import app
 from app.core.database import get_db
 from app.models.models import User, UserRole, UserScope
 from app.core.cache import TTLCache
+from app.core.rate_limit import login_rate_limiter
 
 TEST_DATABASE_URL = os.getenv(
     "TEST_DATABASE_URL",
@@ -27,6 +28,18 @@ def _clear_ttl_caches():
     TTLCache.clear_all()
     yield
     TTLCache.clear_all()
+
+
+@pytest.fixture(autouse=True)
+def _clear_login_rate_limiter():
+    """login_rate_limiter is module-level state (see app/core/rate_limit.py)
+    -- without this, a test that deliberately fails login 5x to exercise the
+    lockout would leave that email locked for the next test using it (e.g.
+    the shared "admin@example.com" fixture email), turning an unrelated
+    later test's expected 401 into an unexplained 429."""
+    login_rate_limiter.reset()
+    yield
+    login_rate_limiter.reset()
 
 
 @pytest.fixture

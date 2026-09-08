@@ -76,8 +76,23 @@ if [ -f .venv/Scripts/activate ]; then source .venv/Scripts/activate; else sourc
 # pip.exe can't replace its own running executable file.
 python -m pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
+# Reuse an existing secret across re-runs (this script overwrites .env every
+# time it runs, e.g. after every git pull) -- regenerating it on every run
+# would silently log every user out by invalidating all outstanding JWTs.
+# Only a fresh install (no .env yet, or an old one still carrying the
+# insecure hardcoded default) gets a new one.
+existing_secret=""
+if [ -f .env ]; then
+  existing_secret=$(grep '^JWT_SECRET_KEY=' .env | cut -d= -f2-)
+fi
+if [ -z "$existing_secret" ] || [ "$existing_secret" = "dev-only-change-me-in-production" ]; then
+  jwt_secret=$(python -c "import secrets; print(secrets.token_hex(32))")
+else
+  jwt_secret="$existing_secret"
+fi
 cat > .env <<ENV
 DATABASE_URL=postgresql+asyncpg://$APP_USER:$APP_PASSWORD@$PGHOST:$PGPORT/$APP_DB
+JWT_SECRET_KEY=$jwt_secret
 ENV
 # The seed dump above has no `users` table (auth data is deliberately not
 # shipped in it) -- without this, the 3 demo accounts in pass.txt

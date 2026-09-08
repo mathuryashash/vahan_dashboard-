@@ -63,7 +63,7 @@ async def trigger_refresh(
 
 
 @router.get("/status")
-async def get_refresh_status():
+async def get_refresh_status(_user: User = Depends(get_current_user)):
     return {
         "last_updated": settings.LAST_UPDATED,
         "status": settings.REFRESH_STATUS,
@@ -72,7 +72,7 @@ async def get_refresh_status():
 
 
 @router.get("/scrape-progress")
-async def get_scrape_progress(db: AsyncSession = Depends(get_db)):
+async def get_scrape_progress(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     """How much of the live-data migration is done, by state (the only
     reliably-known denominator — total RTO count isn't knowable in advance
     since states not yet scraped haven't had their real RTO list discovered

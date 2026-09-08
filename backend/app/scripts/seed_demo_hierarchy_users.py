@@ -5,9 +5,18 @@ national/state/rto). Picks a real state and a real RTO within it from the
 `states`/`rtos` master tables, so the state-head and RTO-head accounts are
 actually scoped to data that exists.
 
+Password is randomized per install, not a fixed literal -- this script runs
+unconditionally on every setup-native.sh (including customer installs), so a
+hardcoded password would be the same guessable credential on every
+deployment everywhere. Only printed once, at creation time; a re-run against
+already-existing accounts leaves their password untouched (matches the
+pre-randomization behavior, and re-running this after every fresh
+`git pull` shouldn't silently rotate anyone's login).
+
 Usage: python -m app.scripts.seed_demo_hierarchy_users
 """
 import asyncio
+import secrets
 
 from sqlalchemy import func, select
 
@@ -15,10 +24,8 @@ from app.core.auth import hash_password
 from app.core.database import AsyncSessionLocal, init_db
 from app.models.models import RTO, Registration, State, User, UserRole, UserScope
 
-DEMO_PASSWORD = "Demo@12345"
 
-
-async def _upsert(db, email: str, full_name: str, role: str, scope_type: str, **scope) -> User:
+async def _upsert(db, email: str, full_name: str, role: str, scope_type: str, password: str, **scope) -> tuple[User, bool]:
     existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing is not None:
         existing.full_name = full_name
@@ -31,13 +38,13 @@ async def _upsert(db, email: str, full_name: str, role: str, scope_type: str, **
         for k, v in scope.items():
             setattr(existing, k, v)
         existing.is_active = True
-        return existing
+        return existing, False
     user = User(
-        email=email, hashed_password=hash_password(DEMO_PASSWORD), full_name=full_name,
+        email=email, hashed_password=hash_password(password), full_name=full_name,
         role=role, scope_type=scope_type, **scope,
     )
     db.add(user)
-    return user
+    return user, True
 
 
 async def main() -> None:
@@ -79,28 +86,39 @@ async def main() -> None:
                 await db.execute(select(RTO).where(RTO.state_code == state.state_code).order_by(RTO.rto_name))
             ).scalars().first()
 
-        india_head = await _upsert(
-            db, "india.head@vahan.demo", "India Head", UserRole.ADMIN, UserScope.NATIONAL,
+        password = secrets.token_urlsafe(12)
+
+        india_head, india_new = await _upsert(
+            db, "india.head@vahan.demo", "India Head", UserRole.ADMIN, UserScope.NATIONAL, password,
         )
-        state_head = await _upsert(
-            db, "state.head@vahan.demo", f"{state.state_name} State Head", UserRole.ANALYST, UserScope.STATE,
+        state_head, state_new = await _upsert(
+            db, "state.head@vahan.demo", f"{state.state_name} State Head", UserRole.ANALYST, UserScope.STATE, password,
             scope_state_code=state.state_code, scope_state_name=state.state_name,
         )
-        rto_users = None
+        rto_users, rto_new = (None, False)
         if rto is not None:
-            rto_users = await _upsert(
-                db, "rto.head@vahan.demo", f"{rto.rto_name} RTO Head", UserRole.VIEWER, UserScope.RTO,
+            rto_users, rto_new = await _upsert(
+                db, "rto.head@vahan.demo", f"{rto.rto_name} RTO Head", UserRole.VIEWER, UserScope.RTO, password,
                 scope_state_code=state.state_code, scope_state_name=state.state_name,
                 scope_rto_code=rto.rto_code, scope_rto_name=rto.rto_name,
             )
 
         await db.commit()
 
-        print(f"Password for all three: {DEMO_PASSWORD}\n")
-        print(f"  india.head@vahan.demo  -- national admin, sees every state, can drill to any RTO")
-        print(f"  state.head@vahan.demo  -- state analyst, locked to {state.state_name}")
+        any_new = india_new or state_new or rto_new
+        if any_new:
+            print(f"Password for newly-created accounts below: {password}\n")
+        else:
+            print("All three demo accounts already existed -- passwords unchanged, not reprinted.\n")
+
+        def line(email: str, is_new: bool, desc: str) -> str:
+            tag = "(new)" if is_new else "(already existed, password unchanged)"
+            return f"  {email:<26} {tag:<38} -- {desc}"
+
+        print(line("india.head@vahan.demo", india_new, "national admin, sees every state, can drill to any RTO"))
+        print(line("state.head@vahan.demo", state_new, f"state analyst, locked to {state.state_name}"))
         if rto_users is not None:
-            print(f"  rto.head@vahan.demo    -- RTO viewer, locked to {rto.rto_name} ({state.state_name})")
+            print(line("rto.head@vahan.demo", rto_new, f"RTO viewer, locked to {rto.rto_name} ({state.state_name})"))
         else:
             print("  rto.head@vahan.demo    -- skipped, no RTO rows found for that state")
 
