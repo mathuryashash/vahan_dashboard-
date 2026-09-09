@@ -20,18 +20,22 @@ class Settings(BaseSettings):
     LAST_UPDATED: str | None = None
     REFRESH_STATUS: str = "idle"  # idle | running | success | error
     REFRESH_ERROR: str | None = None
-    # Minimum time between manually-triggered scrapes. POST /refresh/ has no
-    # auth (it's a public dashboard button), so without a cooldown anyone
-    # could keep re-triggering a fresh ~1-1.5h scrape back-to-back forever --
-    # hammering both this app's own DB (write contention) and the government
-    # site the scraper hits.
+    # Minimum time between manually-triggered scrapes. POST /refresh/ is now
+    # admin-only (require_role), but the cooldown still matters even
+    # authenticated: an admin fat-fingering the button twice shouldn't launch
+    # two concurrent ~1-1.5h scrapes, and it caps how often the government
+    # site gets hit regardless of who's asking.
     REFRESH_COOLDOWN_MINUTES: int = 30
     LAST_REFRESH_STARTED_AT: datetime | None = None
     # Number of states to scrape in parallel within each dimension process.
     # Each state runs in its own HTTP session with its own pacing (1.5s between
     # RTO requests), so N concurrent states means N requests every ~1.5s instead of 1.
-    # Default 1 preserves original serial behavior. Increase to 2-4 for higher throughput.
-    SCRAPER_CONCURRENT_STATES: int = 1
+    # Stepped 1 -> 2 (not straight to 4-6): VAHAN showed signs of bot-detection
+    # at "dozens of concurrent sessions" during this session's crosstab
+    # backfill (per the scraper-speed investigation) -- 2 is the safe first
+    # step to actually observe error-rate impact before going higher. Bump
+    # to 3-4 once a real scrape at 2 comes back clean.
+    SCRAPER_CONCURRENT_STATES: int = 2
     # Off by default: enabling this adds a full extra all-India, all-3-
     # dimension scrape (the same weight as a manual Refresh) once a day, on
     # top of the normal 5h current-year loop -- a real, standing increase in
