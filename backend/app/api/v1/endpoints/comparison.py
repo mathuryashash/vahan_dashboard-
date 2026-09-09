@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
-from app.core.query_filters import exclude_supplementary
+from app.core.query_filters import apply_fuel_group_filter, apply_total_filters
 from app.core.scope import enforce_state
 from app.core.cache import TTLCache
 from app.models.models import Registration, User, UserScope
@@ -28,33 +28,38 @@ async def compare_states(
     state_a: str,
     state_b: str | None = None,
     year: int = _DEFAULT_YEAR,
+    vehicle_category: str | None = None,
+    fuel_group: str | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     state_a = enforce_state(user, state_a)
     state_b = enforce_state(user, state_b)
-    result_a = await db.execute(
-        exclude_supplementary(
-            select(Registration.month, func.sum(Registration.count).label("count"))
-            .where(Registration.year == year, Registration.state_name == state_a)
+
+    def _monthly_query(state_name: str):
+        # apply_total_filters (not a bare exclude_supplementary) -- the
+        # canonical maker-pass always stores vehicle_class='All', which only
+        # ever classifies to vehicle_category='Other', never a real category
+        # like Two-Wheeler. A vehicle_category/fuel_group filter has to read
+        # the vehicle_class-dimension or fuel-dimension pass instead (the
+        # only rows that ever carry a real category/fuel value) -- same fix
+        # already applied to summary.py's kpis/trend. Plain
+        # exclude_supplementary here would have silently zeroed out every
+        # category-filtered state comparison.
+        query = apply_fuel_group_filter(
+            apply_total_filters(
+                select(Registration.month, func.sum(Registration.count).label("count"))
+                .where(Registration.year == year, Registration.state_name == state_name),
+                vehicle_category=vehicle_category, fuel_group=fuel_group,
+            ),
+            fuel_group,
         )
-        .group_by(Registration.month)
-        .order_by(Registration.month)
-    )
+        return query.group_by(Registration.month).order_by(Registration.month)
+
+    result_a = await db.execute(_monthly_query(state_a))
     rows_a = result_a.all()
 
-    result_b = (
-        await db.execute(
-            exclude_supplementary(
-                select(Registration.month, func.sum(Registration.count).label("count"))
-                .where(Registration.year == year, Registration.state_name == state_b)
-            )
-            .group_by(Registration.month)
-            .order_by(Registration.month)
-        )
-        if state_b
-        else None
-    )
+    result_b = await db.execute(_monthly_query(state_b)) if state_b else None
     rows_b = result_b.all() if result_b else []
 
     return {
@@ -72,20 +77,33 @@ async def compare_states(
 async def get_all_states_comparison(
     year: int = _DEFAULT_YEAR,
     limit: int = 36,
+    vehicle_category: str | None = None,
+    fuel_group: str | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    cache_key = (year, limit, user.scope_type, user.scope_state_name)
+    cache_key = (year, limit, vehicle_category, fuel_group, user.scope_type, user.scope_state_name)
     cached = _all_states_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    base_query = exclude_supplementary(
-        select(Registration.state_name, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year)
+    # Same apply_total_filters requirement as compare_states above -- a bare
+    # exclude_supplementary would silently zero out any category/fuel_group
+    # filter (the canonical maker-pass never carries a real one).
+    base_query = apply_fuel_group_filter(
+        apply_total_filters(
+            select(Registration.state_name, func.sum(Registration.count).label("total"))
+            .where(Registration.year == year),
+            vehicle_category=vehicle_category, fuel_group=fuel_group,
+        ),
+        fuel_group,
     )
-    total_query = exclude_supplementary(
-        select(func.sum(Registration.count)).where(Registration.year == year)
+    total_query = apply_fuel_group_filter(
+        apply_total_filters(
+            select(func.sum(Registration.count)).where(Registration.year == year),
+            vehicle_category=vehicle_category, fuel_group=fuel_group,
+        ),
+        fuel_group,
     )
     # A state/RTO-scoped user comparing "all states" only has one state to
     # see -- clamp both the ranking and its denominator to it, rather than

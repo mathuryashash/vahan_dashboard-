@@ -46,10 +46,10 @@ export const getTrend = (params?: Omit<FilterParams, 'month'>, signal?: AbortSig
 export const getStateRanking = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>
   api.get('/summary/state-ranking', { params, signal }).then(r => r.data);
 export const getStates = () => api.get('/states/').then(r => r.data);
-export const getStatesComparison = (year: number, limit?: number) =>
-  api.get('/comparison/all-states', { params: { year, limit } }).then(r => r.data);
-export const compareStates = (state_a: string, state_b?: string, year?: number) =>
-  api.get('/comparison/states', { params: { state_a, state_b, year } }).then(r => r.data);
+export const getStatesComparison = (year: number, limit?: number, vehicle_category?: string | null, fuel_group?: string | null) =>
+  api.get('/comparison/all-states', { params: { year, limit, vehicle_category, fuel_group } }).then(r => r.data);
+export const compareStates = (state_a: string, state_b?: string, year?: number, vehicle_category?: string | null, fuel_group?: string | null) =>
+  api.get('/comparison/states', { params: { state_a, state_b, year, vehicle_category, fuel_group } }).then(r => r.data);
 export const getYoYMonthly = (year_a: number, year_b: number, state?: string, start_month?: number, end_month?: number) =>
   api.get('/yoy/monthly', { params: { year_a, year_b, state, start_month, end_month } }).then(r => r.data);
 export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number) =>

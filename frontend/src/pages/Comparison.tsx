@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
 import { useState, useEffect } from 'react';
-import { getStatesComparison, compareStates } from '../api/vahan';
+import { getStatesComparison, compareStates, getCategories } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -26,7 +26,9 @@ function StateTooltip({ active, payload, label, chart }: TooltipProps<number, st
 
 export function ComparisonPage() {
   const chart = useChartTheme();
-  const { selectedYear, selectedState, setSelectedState } = useAppStore();
+  // Category/Powertrain are shared across every tab (see useAppStore) --
+  // picking Two-Wheeler on Overview filters this page's comparison too.
+  const { selectedYear, selectedState, setSelectedState, selectedCategory, setSelectedCategory, fuelGroup, setFuelGroup } = useAppStore();
   // State A mirrors the shared selection (see useAppStore) -- picking Bihar
   // on Overview shows Bihar here as one side of the comparison too. State B
   // has no cross-tab equivalent, always a locally-picked second state.
@@ -44,14 +46,19 @@ export function ComparisonPage() {
     setSelectedState(value);
   };
 
+  const { data: categories } = useQuery({
+    queryKey: ['categories', selectedYear],
+    queryFn: () => getCategories({ year: selectedYear }),
+  });
+
   const { data: allStates } = useQuery({
-    queryKey: ['states', selectedYear],
-    queryFn: () => getStatesComparison(selectedYear, 36),
+    queryKey: ['states', selectedYear, selectedCategory, fuelGroup],
+    queryFn: () => getStatesComparison(selectedYear, 36, selectedCategory, fuelGroup),
   });
 
   const { data: comparison, isError: comparisonError, refetch: refetchComparison } = useQuery({
-    queryKey: ['compare', stateA, stateB, selectedYear],
-    queryFn: () => compareStates(stateA, stateB, selectedYear),
+    queryKey: ['compare', stateA, stateB, selectedYear, selectedCategory, fuelGroup],
+    queryFn: () => compareStates(stateA, stateB, selectedYear, selectedCategory, fuelGroup),
     enabled: !!stateA,
   });
 
@@ -76,12 +83,47 @@ export function ComparisonPage() {
           action={{ label: 'Retry', onClick: () => refetchComparison() }}
         />
       )}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">State Comparison</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
             Cross-state registration analysis — FY {selectedYear}
+            {selectedCategory ? ` · ${selectedCategory}` : ''}
+            {fuelGroup ? ` · ${fuelGroup}` : ''}
           </p>
+        </div>
+        <div className="flex items-end gap-3 animate-entrance" style={{ animationDelay: '20ms' }}>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
+            <select
+              value={selectedCategory || ''}
+              onChange={(e) => setSelectedCategory(e.target.value || null)}
+              className="bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            >
+              <option value="">All Categories</option>
+              {(categories || []).map((c: { vehicle_category: string }) => (
+                <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</label>
+            <div className="flex rounded-xl border border-[var(--border)] overflow-hidden h-[34px]">
+              {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
+                <button
+                  key={group}
+                  onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
+                  className={`px-3 text-xs font-semibold transition-colors ${
+                    fuelGroup === group
+                      ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                      : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+                  }`}
+                >
+                  {group}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -134,7 +134,17 @@ export function OverviewPage() {
   let crosstabTotal: number | undefined;
   let crosstabLoading = false;
   if (exactlyOnePairActive && selectedCategory && selectedMaker) {
-    crosstabTotal = (crosstabMakerCategory || []).find((r: { maker: string; count: number }) => r.maker === selectedMaker)?.count;
+    // /maker-category-breakdown returns one row keyed by "vehicle_category"
+    // (not "maker") when both maker and vehicle_category are passed together
+    // -- the query is already filtered to that one maker server-side, so it
+    // groups by the field left unfixed instead (see categories.py's
+    // key_name). Searching for r.maker here (a field this response shape
+    // never has) always returned undefined -- silently showing "--" for
+    // Total Registrations/Avg Daily even when the real total was 0, not
+    // unknown. Same class of bug MakerFuelPanel/FuelCategoryPanel already
+    // had fixed below -- this was the one remaining case, in the KPI-card
+    // source instead of a panel.
+    crosstabTotal = (crosstabMakerCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
     crosstabLoading = crosstabMakerCategoryLoading;
   } else if (exactlyOnePairActive && selectedCategory && fuelGroup) {
     crosstabTotal = (crosstabFuelCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
@@ -482,7 +492,9 @@ export function OverviewPage() {
         />
         <KPICard
           label="Avg Daily Registrations"
-          value={kpiComboImpossible ? (crosstabAvgDaily ?? '—') : (kpis?.total_registrations_today ?? 0)}
+          value={kpiComboImpossible
+            ? (crosstabTotal === undefined ? '—' : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : crosstabAvgDaily)
+            : (kpis?.total_registrations_today ?? 0)}
           icon={<Bike className="w-4 h-4" />}
           loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
           index={2}
