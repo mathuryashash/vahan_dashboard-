@@ -9,7 +9,7 @@ import { getCategories, getTopMakers, getFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
-import { TruncatedYAxisTick } from '../components/ChartAxisTick';
+import { TruncatedYAxisTick, insidePieLabel } from '../components/ChartAxisTick';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -66,6 +66,8 @@ export function CategoriesPage() {
                     outerRadius={110}
                     paddingAngle={1}
                     dataKey="value"
+                    label={insidePieLabel}
+                    labelLine={false}
                   >
                     {pieData.map((p: { name: string }, i: number) => (
                       <Cell key={i} fill={pieColors.get(p.name)} />

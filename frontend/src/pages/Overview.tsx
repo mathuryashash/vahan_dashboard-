@@ -9,6 +9,7 @@ import { TrendingUp, Award, Car, Bike } from '../components/Icons';
 import { KPICard } from '../components/KPICard';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { insidePieLabel } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
@@ -547,7 +548,11 @@ export function OverviewPage() {
             <>
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={2} dataKey="value">
+                  <Pie
+                    data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={2} dataKey="value"
+                    label={insidePieLabel}
+                    labelLine={false}
+                  >
                     {pieData.map((p: { name: string }, i: number) => <Cell key={i} fill={pieColors.get(p.name)} />)}
                   </Pie>
                   <Tooltip formatter={(val: number) => [val.toLocaleString('en-IN'), '']} contentStyle={chart.tooltipContentStyle()} {...chart.tooltipTextStyle} />

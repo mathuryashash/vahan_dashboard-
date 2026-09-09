@@ -36,7 +36,11 @@ async def test_get_oem_monthly_aggregates_across_year_when_month_omitted(client,
     rows = response.json()
     hero = next(r for r in rows if r["maker"] == "HERO MOTOCORP LTD")
     assert hero["count"] == 472144 + 450000  # June + May summed, not just one month
-    assert hero["share_percent"] is None  # not meaningful summed across months
+    # A maker's own share_percent column is relative to one month's total
+    # market -- not meaningful summed across months. Its YTD share of the
+    # YTD total across all makers IS meaningful: (472144+450000) /
+    # (472144+359243+450000) * 100.
+    assert hero["share_percent"] == 71.96
 
 
 async def test_get_oem_trend(client, db_session):

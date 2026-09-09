@@ -1,7 +1,7 @@
 // frontend/src/pages/CategoryDetail.tsx
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
-import { PieChart, Pie, Cell, BarChart, Bar, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
+import { PieChart, Pie, Cell, BarChart, Bar, LabelList, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { getTopMakers, getFuelBreakdown, getCategories } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { ArrowLeft } from '../components/Icons';
@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { insidePieLabel } from '../components/ChartAxisTick';
 
 // The live VAHAN4 site can only pivot on one Y-axis dimension per visit, so
 // the scraper's maker-pass and fuel-pass rows are never tagged with a real
@@ -90,7 +91,7 @@ export function CategoryDetailPage() {
         ) : (
           <>
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={(makers || []).map((m: { maker: string; count: number }) => ({ name: m.maker, count: m.count }))} layout="vertical">
+              <BarChart data={(makers || []).map((m: { maker: string; count: number }) => ({ name: m.maker, count: m.count }))} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
                 <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={140} />
@@ -102,6 +103,7 @@ export function CategoryDetailPage() {
                   {(makers || []).map((m: { maker: string }, i: number) => (
                     <Cell key={i} fill={chart.seriesColor(m.maker)} />
                   ))}
+                  <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -141,6 +143,8 @@ export function CategoryDetailPage() {
                   outerRadius={100}
                   paddingAngle={2}
                   dataKey="value"
+                  label={insidePieLabel}
+                  labelLine={false}
                 >
                   {(fuel || []).map((f: { fuel_type: string }, i: number) => (
                     <Cell key={i} fill={chart.seriesColor(f.fuel_type)} />

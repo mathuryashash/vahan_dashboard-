@@ -39,6 +39,29 @@ function wrapLabel(full: string): string[] {
   return lines;
 }
 
+// Recharts' default Pie label sits OUTSIDE the ring with a leader line --
+// looks fine on a large chart, but clips against the card edge on these
+// dashboard's compact donuts (160-320px containers). Rendered at the
+// midpoint of the ring instead: always fits, no leader line needed.
+// Suppresses tiny slices (<5%) since a label wouldn't fit inside their
+// sliver anyway. Pass directly as <Pie label={insidePieLabel} labelLine={false}>.
+export function insidePieLabel({
+  cx, cy, midAngle, innerRadius, outerRadius, percent,
+}: {
+  cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; percent: number;
+}) {
+  if (!percent || percent <= 0.05) return null;
+  const RADIAN = Math.PI / 180;
+  const r = innerRadius + (outerRadius - innerRadius) / 2;
+  const x = cx + r * Math.cos(-midAngle * RADIAN);
+  const y = cy + r * Math.sin(-midAngle * RADIAN);
+  return (
+    <text x={x} y={y} fill="#fff" textAnchor="middle" dominantBaseline="central" fontSize={10} fontFamily="JetBrains Mono">
+      {`${(percent * 100).toFixed(0)}%`}
+    </text>
+  );
+}
+
 export function TruncatedYAxisTick({
   x, y, payload, fill,
 }: {

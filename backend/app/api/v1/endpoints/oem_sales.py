@@ -89,9 +89,12 @@ async def get_oem_monthly(
         ]
 
     # No month picked: a year-to-date leaderboard, summed across every real
-    # month FADA has published so far this year. share_percent isn't
-    # meaningful summed across months (they're each relative to a different
-    # month's total market), so it's omitted rather than shown misleadingly.
+    # month FADA has published so far this year. Each row's own
+    # share_percent column is a single month's share of that month's total
+    # market -- not meaningful summed as-is across months with different
+    # totals. What IS meaningful: this maker's YTD count as a share of the
+    # YTD total across all makers, so compute that instead of leaving the
+    # column blank.
     query = (
         select(OEMMonthlySales.maker, func.sum(OEMMonthlySales.count).label("count"))
         .where(
@@ -103,9 +106,15 @@ async def get_oem_monthly(
         .order_by(desc("count"))
     )
     result = await db.execute(query)
+    rows = result.all()
+    ytd_total = sum(count for _, count in rows)
     return [
-        {"maker": maker, "count": count, "share_percent": None}
-        for maker, count in result.all()
+        {
+            "maker": maker,
+            "count": count,
+            "share_percent": round(count / ytd_total * 100, 2) if ytd_total else None,
+        }
+        for maker, count in rows
     ]
 
 

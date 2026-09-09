@@ -6,7 +6,7 @@ import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistr
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
-import { TruncatedYAxisTick } from '../components/ChartAxisTick';
+import { TruncatedYAxisTick, insidePieLabel } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportCsvButton } from '../components/ExportCsvButton';
@@ -262,7 +262,11 @@ export function RtoAnalysisPage() {
                 <div className="flex flex-col lg:flex-row items-center gap-6">
                   <ResponsiveContainer width="100%" height={320} className="lg:max-w-md">
                     <PieChart>
-                      <Pie data={makerPieData} cx="50%" cy="50%" innerRadius={70} outerRadius={120} paddingAngle={1} dataKey="value">
+                      <Pie
+                        data={makerPieData} cx="50%" cy="50%" innerRadius={70} outerRadius={120} paddingAngle={1} dataKey="value"
+                        label={insidePieLabel}
+                        labelLine={false}
+                      >
                         {makerPieData.map((d, i: number) => (
                           <Cell key={i} fill={d.name === 'Other' ? chart.grid : makerPieColors.get(d.name)} />
                         ))}

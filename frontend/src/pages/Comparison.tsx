@@ -1,6 +1,6 @@
 // frontend/src/pages/Comparison.tsx
 import { useQuery } from '@tanstack/react-query';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
+import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
 import { useState, useEffect } from 'react';
 import { getStatesComparison, compareStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
@@ -148,13 +148,17 @@ export function ComparisonPage() {
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '120ms' }}>
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">{stateA} vs {stateB} — Monthly</h3>
         <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={merged} layout="vertical" barGap={6}>
+          <BarChart data={merged} layout="vertical" barGap={6} margin={{ right: 40 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v/1000).toFixed(0)}K`} />
             <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} width={36} />
             <Tooltip content={<StateTooltip chart={chart} />} />
-            <Bar dataKey={stateA} fill={colorA} radius={[0, 3, 3, 0]} maxBarSize={16} />
-            <Bar dataKey={stateB} fill={colorB} radius={[0, 3, 3, 0]} maxBarSize={16} />
+            <Bar dataKey={stateA} fill={colorA} radius={[0, 3, 3, 0]} maxBarSize={16}>
+              <LabelList dataKey={stateA} position="right" formatter={(v: number) => `${(v / 1000).toFixed(0)}K`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+            </Bar>
+            <Bar dataKey={stateB} fill={colorB} radius={[0, 3, 3, 0]} maxBarSize={16}>
+              <LabelList dataKey={stateB} position="right" formatter={(v: number) => `${(v / 1000).toFixed(0)}K`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
         <div className="flex items-center justify-center gap-6 mt-3 text-[11px] font-mono">

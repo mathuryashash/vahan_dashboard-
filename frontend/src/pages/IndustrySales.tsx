@@ -1,6 +1,7 @@
 // frontend/src/pages/IndustrySales.tsx
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, LabelList, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { getOemCategories, getOemMonthly, getOemTrend, getOemStatus } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
@@ -8,6 +9,7 @@ import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportCsvButton } from '../components/ExportCsvButton';
+import { downloadXlsx } from '../utils/csv';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -40,6 +42,23 @@ export function IndustrySalesPage() {
     : null;
 
   const { data: oemStatus } = useQuery({ queryKey: ['oemStatus'], queryFn: getOemStatus });
+
+  const [exportingAll, setExportingAll] = useState(false);
+  const handleExportAllCategories = async () => {
+    if (!categories || categories.length === 0) return;
+    setExportingAll(true);
+    try {
+      const perCategory = await Promise.all(
+        categories.map((c) => getOemMonthly({ category: c, year: selectedYear, month: null }))
+      );
+      await downloadXlsx(
+        `fada-all-categories-fy${selectedYear}`,
+        categories.map((c, i) => ({ name: c, rows: perCategory[i] }))
+      );
+    } finally {
+      setExportingAll(false);
+    }
+  };
 
   const { data: monthly, isLoading: monthlyLoading, isError: monthlyError, refetch: refetchMonthly } = useQuery({
     queryKey: ['oemMonthly', category, selectedYear, selectedMonth],
@@ -83,16 +102,26 @@ export function IndustrySalesPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-1.5 max-w-xs">
-        <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
-        <select
-          value={category || ''}
-          onChange={(e) => { setSelectedCategory(e.target.value); setSelectedMaker(null); }}
-          className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+      <div className="flex items-end justify-between gap-4 flex-wrap">
+        <div className="flex flex-col gap-1.5 max-w-xs">
+          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
+          <select
+            value={category || ''}
+            onChange={(e) => { setSelectedCategory(e.target.value); setSelectedMaker(null); }}
+            className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          >
+            <option value="">Please select a category</option>
+            {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <button
+          onClick={handleExportAllCategories}
+          disabled={!categories || categories.length === 0 || exportingAll}
+          title="Download every category's leaderboard as one Excel file, one sheet per category"
+          className="flex items-center gap-1.5 px-3 py-2 text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border)] rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          <option value="">Please select a category</option>
-          {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
-        </select>
+          {exportingAll ? 'Exporting…' : `Export All Categories (${categories?.length ?? 0}) — Excel`}
+        </button>
       </div>
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
@@ -108,7 +137,7 @@ export function IndustrySalesPage() {
           <EmptyState variant="no-data" title="No FADA data for this category/year" description="Try a different category or year." />
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(280, barData.length * 30)}>
-            <BarChart data={barData} layout="vertical">
+            <BarChart data={barData} layout="vertical" margin={{ right: 48 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
               <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={210} />
@@ -122,7 +151,9 @@ export function IndustrySalesPage() {
                 radius={[0, 4, 4, 0]}
                 onClick={(data: { name?: string }) => data?.name && setSelectedMaker(data.name)}
                 cursor="pointer"
-              />
+              >
+                <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         )}

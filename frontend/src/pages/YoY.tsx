@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, TooltipProps
+  BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, TooltipProps
 } from 'recharts';
 import { useAppStore } from '../hooks/useAppStore';
 import { getYoYMonthly, getYoYSummary } from '../api/vahan';
@@ -175,13 +175,17 @@ export function YoYPage() {
         </div>
         {isLoading ? <div className="h-64 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" /> : (
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={chartData} barGap={4}>
+            <BarChart data={chartData} barGap={4} margin={{ top: 20 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v/1000000).toFixed(1)}M`} width={40} />
               <Tooltip content={<YoYTooltip chart={chart} />} />
-              <Bar dataKey={`${comparisonYearA}`} fill={colorA} radius={[3, 3, 0, 0]} maxBarSize={20} />
-              <Bar dataKey={`${comparisonYearB}`} fill={colorB} radius={[3, 3, 0, 0]} maxBarSize={20} />
+              <Bar dataKey={`${comparisonYearA}`} fill={colorA} radius={[3, 3, 0, 0]} maxBarSize={20}>
+                <LabelList dataKey={`${comparisonYearA}`} position="top" formatter={(v: number) => `${(v / 1000000).toFixed(1)}M`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+              </Bar>
+              <Bar dataKey={`${comparisonYearB}`} fill={colorB} radius={[3, 3, 0, 0]} maxBarSize={20}>
+                <LabelList dataKey={`${comparisonYearB}`} position="top" formatter={(v: number) => `${(v / 1000000).toFixed(1)}M`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         )}
@@ -191,7 +195,7 @@ export function YoYPage() {
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '130ms' }}>
           <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">Month-wise Growth Rate</h3>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={growthChartData} layout="vertical">
+            <BarChart data={growthChartData} layout="vertical" margin={{ right: 30, left: 10 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" domain={[-50, 50]} tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${v}%`} />
               <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={30} axisLine={false} tickLine={false} />
@@ -200,6 +204,7 @@ export function YoYPage() {
                 {growthChartData.map((d, i: number) => (
                   <Cell key={i} fill={(d.growth as number) >= 0 ? chart.success : chart.danger} />
                 ))}
+                <LabelList dataKey="growth" position="right" formatter={(v: number) => `${v.toFixed(1)}%`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
