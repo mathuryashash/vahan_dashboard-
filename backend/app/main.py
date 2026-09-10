@@ -4,8 +4,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from app.core.config import settings
 from app.core.database import init_db, AsyncSessionLocal
+from app.core.rate_limit import limiter
 from app.api.v1.router import api_router
 from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
 from scraper.scheduler import run_scheduler_loop, run_fada_scheduler_loop, run_previous_year_revalidation_loop
@@ -45,6 +49,12 @@ app = FastAPI(
     version=settings.VERSION,
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Blanket 120/min-per-IP default (see app/core/rate_limit.py) applied to
+# every route automatically -- no per-endpoint decorators to keep in sync.
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

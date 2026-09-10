@@ -1,11 +1,11 @@
 import time
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends
-from sqlalchemy import select, func, distinct
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import require_role, get_current_user
 from app.core.database import get_db
-from app.models.models import OEMMonthlySales, Registration, ScrapeQualityLog, State, User, UserRole
+from app.models.models import OEMMonthlySales, ScrapeQualityLog, State, User, UserRole
 from app.schemas.schemas import RefreshResponse
 from app.services.scraper_service import run_scraper
 from app.core.config import settings
@@ -85,19 +85,44 @@ async def get_scrape_progress(db: AsyncSession = Depends(get_db), _user: User = 
 
     states_total = (await db.execute(select(func.count()).select_from(State))).scalar() or 36
 
-    states_done = (
-        await db.execute(
-            select(func.count(distinct(Registration.state_name))).where(Registration.vehicle_class == "All")
+    # A plain COUNT(DISTINCT ...) here forces Postgres to scan every one of
+    # the ~20M rows where vehicle_class='All' just to find 36 distinct state
+    # names / ~1,400 distinct RTOs (confirmed via EXPLAIN ANALYZE: ~13s + ~15s
+    # -- an index doesn't help a DISTINCT scan when this many rows match).
+    # A "loose index scan" (recursive CTE) walks idx_reg_class_state_rto by
+    # jumping straight to the next distinct value instead of visiting every
+    # row -- same index, ~36/~1,400 probes instead of 20M row reads, cuts
+    # this to ~1.1s total (confirmed live).
+    states_done = (await db.execute(text("""
+        WITH RECURSIVE s AS (
+            (SELECT state_name FROM registrations WHERE vehicle_class = 'All' ORDER BY state_name LIMIT 1)
+            UNION ALL
+            SELECT (
+                SELECT state_name FROM registrations
+                WHERE vehicle_class = 'All' AND state_name > s.state_name
+                ORDER BY state_name LIMIT 1
+            )
+            FROM s WHERE s.state_name IS NOT NULL
         )
-    ).scalar() or 0
+        SELECT count(*) FROM s WHERE state_name IS NOT NULL
+    """))).scalar() or 0
 
-    rto_subq = (
-        select(Registration.state_name, Registration.rto_code)
-        .where(Registration.vehicle_class == "All")
-        .distinct()
-        .subquery()
-    )
-    rtos_done = (await db.execute(select(func.count()).select_from(rto_subq))).scalar() or 0
+    rtos_done = (await db.execute(text("""
+        WITH RECURSIVE r AS (
+            (SELECT state_name, rto_code FROM registrations WHERE vehicle_class = 'All'
+             ORDER BY state_name, rto_code LIMIT 1)
+            UNION ALL
+            SELECT n.state_name, n.rto_code
+            FROM r,
+            LATERAL (
+                SELECT state_name, rto_code FROM registrations
+                WHERE vehicle_class = 'All' AND (state_name, rto_code) > (r.state_name, r.rto_code)
+                ORDER BY state_name, rto_code LIMIT 1
+            ) n
+            WHERE r.state_name IS NOT NULL
+        )
+        SELECT count(*) FROM r WHERE state_name IS NOT NULL
+    """))).scalar() or 0
 
     result = {
         "states_done": states_done,

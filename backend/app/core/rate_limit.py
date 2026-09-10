@@ -1,4 +1,16 @@
 import time
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+# Blanket per-IP limit applied to every route via SlowAPIMiddleware (see
+# main.py) -- no per-endpoint @limiter.limit() decorators needed. 120/min
+# is well above real usage (a full Overview page load fires ~8 aggregation
+# calls once, not 120/min), just enough to stop a scripted client hammering
+# the 26M-row-scanning endpoints (summary.py kpis/trend/state-ranking,
+# categories.py, comparison.py). Kept in this module rather than app.main to
+# avoid a circular import: main.py mounts api_router, which imports the
+# endpoint modules, which would need this object back from main.py.
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
 
 
 class LoginRateLimiter:
