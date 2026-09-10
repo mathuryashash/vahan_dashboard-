@@ -279,6 +279,17 @@ export function OverviewPage() {
   const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
   const vehicleMixReady = useSettledLayout(categoriesLoading);
 
+  // A state/RTO-scoped analyst can't do anything about missing data (no
+  // access to /refresh/, it's admin-only) -- an empty card telling them to
+  // "run a sync" or a bare "couldn't load" is just noise they can't act on.
+  // National users keep the existing empty/error states since they're the
+  // ones who could actually trigger a scrape. isStateLocked already covers
+  // both state- and RTO-scoped accounts (scope_type !== 'national').
+  const showTrendCard = !isStateLocked || trendLoading || chartData.length > 0;
+  const showVehicleMixCard = !isStateLocked || categoriesLoading || !vehicleMixReady || pieData.length > 0;
+  const monthDetailUnavailable = selectedMonth != null && !monthDetailLoading && (monthDetailError || !monthDetail);
+  const showMonthDetailCard = !isStateLocked || !monthDetailUnavailable;
+
   // The KPI cards/trend chart above can't combine Category + Maker (the live
   // scraper's maker-pass and vehicle_class-pass never share a row for the
   // same RTO/month). A real answer for this combination DOES exist though --
@@ -510,7 +521,9 @@ export function OverviewPage() {
         />
       </div>
 
+      {(showTrendCard || showVehicleMixCard) && (
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        {showTrendCard && (
         <div className="xl:col-span-2 bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '200ms' }}>
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -541,7 +554,9 @@ export function OverviewPage() {
             </ResponsiveContainer>
           )}
         </div>
+        )}
 
+        {showVehicleMixCard && (
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '250ms' }}>
           <div className="mb-4">
             <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Vehicle Mix</h3>
@@ -584,7 +599,9 @@ export function OverviewPage() {
             </>
           )}
         </div>
+        )}
       </div>
+      )}
 
       {/* Always rendered (not just once a month happens to be selected) so this
           feature is discoverable rather than silently absent. Driven by the
@@ -593,6 +610,7 @@ export function OverviewPage() {
           own axis-selector options — its finest is "Month Wise"), so a
           real month total and year-to-date through it are the finest detail
           this data source can ever supply. */}
+      {showMonthDetailCard && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '280ms' }}>
         <div className="mb-4">
           <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Month &amp; Year-to-Date Detail</h3>
@@ -618,6 +636,7 @@ export function OverviewPage() {
           </div>
         )}
       </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4">
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '300ms' }}>
