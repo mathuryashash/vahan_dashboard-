@@ -11,7 +11,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { insidePieLabel } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -755,6 +755,32 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }, signal),
   });
 
+  // The exact combo (e.g. "EV Two-Wheelers in March") only exists as a year
+  // total -- but each half of it, taken alone, IS real month-level data
+  // (Category alone from the vehicle_class-dimension pass, Fuel alone from
+  // the fuel-dimension pass -- see Registration.is_supplementary). Surfacing
+  // both next to the year total gives an honest closest answer instead of
+  // just explaining why the exact number isn't available (found: users
+  // expect a month number here and don't know a narrower single-filter
+  // query would actually give them one).
+  const { data: categoryMonthly } = useQuery({
+    queryKey: ['categoryMonthlyOnly', year, month, state],
+    queryFn: ({ signal }) => getCategories({ year, month, state }, signal),
+    enabled: !!month,
+  });
+  const categoryMonthlyCount = (categoryMonthly || []).find(
+    (c: { vehicle_category: string; total_count: number }) => c.vehicle_category === category
+  )?.total_count;
+
+  const { data: fuelMonthly } = useQuery({
+    queryKey: ['fuelMonthlyOnly', year, month, state],
+    queryFn: () => getFuelBreakdown({ year, month, state }),
+    enabled: !!month,
+  });
+  const fuelMonthlyCount = (fuelMonthly || []).find(
+    (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
+  )?.count;
+
   // See MakerCategoryPanel's comment above -- hasYearData (not an empty
   // filtered response) tells "not scraped this year" apart from a real zero.
   const noDataForYear = !hasYearData;
@@ -776,9 +802,26 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
         )}
       </div>
       {month && (
-        <p className="text-[10px] text-[var(--text-muted)] mt-1">
-          This is a year total — the underlying data has no month breakdown, so the Month filter doesn't apply here.
-        </p>
+        <>
+          <p className="text-[10px] text-[var(--text-muted)] mt-1">
+            This is a year total — the underlying data has no month breakdown, so the Month filter doesn't apply here.
+          </p>
+          <div className="mt-2 pt-2 border-t border-[var(--border)] flex flex-col gap-1">
+            <p className="text-[10px] text-[var(--text-muted)]">Closest real numbers for {MONTH_NAMES[month - 1]} {year} (each alone, not combined):</p>
+            <div className="flex items-center justify-between text-[11px]">
+              <span>{category} (all powertrains)</span>
+              <span className="font-mono font-semibold text-[var(--text-primary)]">
+                {categoryMonthlyCount != null ? categoryMonthlyCount.toLocaleString('en-IN') : '···'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span>{fuelGroup} (all categories)</span>
+              <span className="font-mono font-semibold text-[var(--text-primary)]">
+                {fuelMonthlyCount != null ? fuelMonthlyCount.toLocaleString('en-IN') : '···'}
+              </span>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
