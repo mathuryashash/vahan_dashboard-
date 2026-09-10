@@ -231,6 +231,23 @@ export function OverviewPage() {
     }, signal),
   });
 
+  // Separate from `categories` above (which drives the Vehicle Mix pie and
+  // is deliberately maker-filtered -- correctly empty whenever a maker's
+  // selected, same reason the KPI cards go "--"). The Category <select>'s
+  // OPTION LIST needs the maker-independent list instead: maker and a real
+  // category never coexist on the same Registration row (see MakersModels.tsx's
+  // matching comment on its own maker dropdown), so filtering this by
+  // selectedMaker made the option list empty the moment a maker was picked --
+  // the browser then silently fell back to showing "All Categories" since
+  // the <option> matching the actual selectedCategory value no longer
+  // existed, even though selectedCategory itself was untouched (found live:
+  // dropdown showed "All Categories" while every panel below still said
+  // "Two-Wheeler", reading selectedCategory directly as a prop).
+  const { data: categoryOptions } = useQuery({
+    queryKey: ['categoryOptions', selectedYear, selectedMonth, selectedState],
+    queryFn: ({ signal }) => getCategories({ year: selectedYear, month: selectedMonth, state: selectedState }, signal),
+  });
+
   // Deliberately NOT filtered by selectedCategory: the live scraper can only
   // pivot one dimension (maker OR vehicle_class) per RTO visit, so the
   // canonical maker-pass rows always store vehicle_class='All' and the
@@ -395,7 +412,7 @@ export function OverviewPage() {
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
           <select value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
             <option value="">All Categories</option>
-            {(categories || []).map((c: { vehicle_category: string }) => (
+            {(categoryOptions || []).map((c: { vehicle_category: string }) => (
               <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
             ))}
           </select>
