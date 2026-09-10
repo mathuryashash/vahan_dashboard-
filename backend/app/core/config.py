@@ -30,12 +30,13 @@ class Settings(BaseSettings):
     # Number of states to scrape in parallel within each dimension process.
     # Each state runs in its own HTTP session with its own pacing (1.5s between
     # RTO requests), so N concurrent states means N requests every ~1.5s instead of 1.
-    # Stepped 1 -> 2 (not straight to 4-6): VAHAN showed signs of bot-detection
-    # at "dozens of concurrent sessions" during this session's crosstab
-    # backfill (per the scraper-speed investigation) -- 2 is the safe first
-    # step to actually observe error-rate impact before going higher. Bump
-    # to 3-4 once a real scrape at 2 comes back clean.
-    SCRAPER_CONCURRENT_STATES: int = 2
+    # Stepped 1 -> 2 -> 3 (not straight to 4-6): VAHAN showed signs of
+    # bot-detection at "dozens of concurrent sessions" during this session's
+    # crosstab backfill. 2 ran clean for two full scrapes in a row (2947s and
+    # 2923s, zero 429/403/ViewExpired/SessionExpired across either run --
+    # confirmed via full log scan) -- 3 is the next step. Bump to 4+ only
+    # after a clean full run is observed at 3 too.
+    SCRAPER_CONCURRENT_STATES: int = 3
     # Off by default: enabling this adds a full extra all-India, all-3-
     # dimension scrape (the same weight as a manual Refresh) once a day, on
     # top of the normal 5h current-year loop -- a real, standing increase in

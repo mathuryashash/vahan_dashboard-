@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -26,6 +26,16 @@ import { AuthContext } from './contexts/AuthContext';
 export default function App() {
   const [auth, setAuth] = useState<AuthUser | null>(getStoredAuth());
   const queryClient = useQueryClient();
+
+  // Overview ("/") is the one page every post-login visit hits immediately --
+  // prefetching its chunk during idle time (works whether auth is already
+  // set or the user is still on the login screen) removes that fetch from
+  // the critical path instead of paying for it only once the route mounts.
+  // Hashed chunk filenames rule out a static <link rel="modulepreload">.
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 200));
+    idle(() => { import('./pages/Overview'); });
+  }, []);
 
   const { data, dataUpdatedAt } = useQuery({
     queryKey: ['refreshStatus'],

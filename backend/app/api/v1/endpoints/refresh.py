@@ -107,6 +107,14 @@ async def get_scrape_progress(db: AsyncSession = Depends(get_db), _user: User = 
         SELECT count(*) FROM s WHERE state_name IS NOT NULL
     """))).scalar() or 0
 
+    # Row-comparison (state_name, rto_code) > (...) is NULL (so filtered out)
+    # once rto_code is needed to break a tie -- a row with rto_code IS NULL
+    # would never be reached by this walk, unlike a plain DISTINCT, which
+    # does count a (state, NULL) pair. Not reachable today: every
+    # vehicle_class='All' row comes from persist_rto_batch, which always
+    # sets rto_code from the scraped RTO list (see scraper_service.py) --
+    # documenting the assumption rather than guarding for a case the write
+    # path doesn't produce (code review finding).
     rtos_done = (await db.execute(text("""
         WITH RECURSIVE r AS (
             (SELECT state_name, rto_code FROM registrations WHERE vehicle_class = 'All'

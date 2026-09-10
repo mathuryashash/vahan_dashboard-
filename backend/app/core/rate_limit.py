@@ -1,6 +1,21 @@
 import time
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from starlette.requests import Request
+
+# In production (see frontend/nginx.conf), the browser never reaches uvicorn
+# directly -- nginx proxies /api/ to the backend container, so plain
+# get_remote_address() would read nginx's own container IP for every
+# request (uvicorn isn't started with --proxy-headers, and even if it were,
+# that reads X-Forwarded-For, which this nginx config doesn't set -- only
+# X-Real-IP, via `proxy_set_header X-Real-IP $remote_addr` in nginx.conf).
+# Without this, every user behind the one nginx instance would share a
+# single 120/min budget instead of getting their own (code review finding).
+# Falls back to get_remote_address for local dev, where there's no proxy in
+# front of uvicorn at all and the header is simply absent.
+def _client_ip(request: Request) -> str:
+    return request.headers.get("x-real-ip") or get_remote_address(request)
+
 
 # Blanket per-IP limit applied to every route via SlowAPIMiddleware (see
 # main.py) -- no per-endpoint @limiter.limit() decorators needed. 120/min
@@ -10,7 +25,7 @@ from slowapi.util import get_remote_address
 # categories.py, comparison.py). Kept in this module rather than app.main to
 # avoid a circular import: main.py mounts api_router, which imports the
 # endpoint modules, which would need this object back from main.py.
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+limiter = Limiter(key_func=_client_ip, default_limits=["120/minute"])
 
 
 class LoginRateLimiter:
