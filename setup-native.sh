@@ -83,7 +83,15 @@ pip install --quiet -r requirements.txt
 # insecure hardcoded default) gets a new one.
 existing_secret=""
 if [ -f .env ]; then
-  existing_secret=$(grep '^JWT_SECRET_KEY=' .env | cut -d= -f2-)
+  # `|| true` matters: grep exits 1 on "no match" (not an error, just no
+  # JWT_SECRET_KEY line yet -- the normal case on a truly first-ever run, or
+  # here, whenever .env exists but predates this line being added). Under
+  # this script's `set -euo pipefail`, that 1 propagates through the pipe
+  # into the assignment and kills the whole script right here with zero
+  # output -- confirmed live: reproduced exactly this way on a fresh
+  # install, looked identical to the earlier index-build "hang" but was a
+  # completely different, silent bug.
+  existing_secret=$(grep '^JWT_SECRET_KEY=' .env | cut -d= -f2- || true)
 fi
 if [ -z "$existing_secret" ] || [ "$existing_secret" = "dev-only-change-me-in-production" ]; then
   jwt_secret=$(python -c "import secrets; print(secrets.token_hex(32))")
