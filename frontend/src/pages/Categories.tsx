@@ -171,7 +171,7 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
       {isLoading ? (
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
-        <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 30)}>
+        <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 38)}>
           <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
@@ -210,7 +210,7 @@ function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: str
       {isLoading ? (
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
-        <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 30)}>
+        <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 38)}>
           <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />

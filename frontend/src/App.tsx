@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { LoginPage } from './pages/Login';
@@ -74,7 +74,12 @@ export default function App() {
             <Suspense fallback={<div className="p-6"><div className="h-40 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" /></div>}>
               <Routes>
                 <Route path="/" element={<OverviewPage />} />
-                <Route path="/comparison" element={<ComparisonPage />} />
+                {/* Comparing states only makes sense for a national viewer -- a
+                    state/RTO-scoped account is locked to one state anyway (see
+                    comparison.py's scope clamp), so the page would just show
+                    their own state with nothing to compare against. Blocks
+                    direct URL navigation, not just the Sidebar link below. */}
+                <Route path="/comparison" element={auth.scope_type === 'national' ? <ComparisonPage /> : <Navigate to="/" replace />} />
                 <Route path="/yoy" element={<YoYPage />} />
                 <Route path="/categories" element={<CategoriesPage />} />
                 <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />

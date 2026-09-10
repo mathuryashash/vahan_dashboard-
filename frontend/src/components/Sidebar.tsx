@@ -3,10 +3,14 @@ import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, Map, TrendingUp, BarChart3, Car, Award, Building, ChevronLeft, ChevronRight } from './Icons';
 import clsx from 'clsx';
 import { useAppStore } from '../hooks/useAppStore';
+import { useAuth } from '../contexts/AuthContext';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Overview' },
-  { to: '/comparison', icon: Map, label: 'State Comparison' },
+  // Comparing states only makes sense nationally -- a state/RTO-scoped
+  // account is locked to one state, so there's nothing to compare against
+  // (see App.tsx's route guard, which also blocks direct URL navigation).
+  { to: '/comparison', icon: Map, label: 'State Comparison', nationalOnly: true },
   { to: '/yoy', icon: TrendingUp, label: 'Year over Year' },
   { to: '/categories', icon: BarChart3, label: 'Categories & Fuel' },
   { to: '/makers', icon: Car, label: 'Makers' },
@@ -37,6 +41,8 @@ function NavItem({ to, icon: Icon, label, collapsed }: { to: string; icon: React
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useAppStore();
+  const auth = useAuth();
+  const visibleNavItems = navItems.filter((item) => !item.nationalOnly || auth.scope_type === 'national');
 
   return (
     <aside
@@ -57,7 +63,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 py-3 space-y-1">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {visibleNavItems.map(({ to, icon: Icon, label }) => (
           <NavItem key={to} to={to} icon={Icon} label={label} collapsed={sidebarCollapsed} />
         ))}
       </nav>

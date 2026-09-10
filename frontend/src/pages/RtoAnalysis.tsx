@@ -196,7 +196,7 @@ export function RtoAnalysisPage() {
               description={districtCode ? "Try a different district, year, or clear the district filter." : "Try a different year or state."}
             />
           ) : (
-            <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 30)}>
+            <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 38)}>
               <BarChart data={rtoChartData} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />

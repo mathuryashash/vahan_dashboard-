@@ -1,6 +1,11 @@
 // frontend/src/components/ChartAxisTick.tsx
-const MAX_LINE_CHARS = 22;
-const MAX_LINES = 2;
+const MAX_LINE_CHARS = 24;
+// Real Indian OEM legal names ("HONDA MOTORCYCLE AND SCOOTER INDIA PVT LTD",
+// "SUZUKI MOTORCYCLE INDIA PRIVATE LIMITED") routinely run 40-45 chars --
+// 2 lines * 22 chars wasn't enough headroom and was ellipsis-clipping real
+// names (found via live testing: full name only visible on tooltip hover,
+// not the axis label). 3 * 24 covers effectively all of them.
+const MAX_LINES = 3;
 
 // Real maker/category names ("MAHINDRA LIMITED (SWARAJ DIVISION)") run much
 // longer than a single line comfortably fits, and Recharts doesn't wrap
@@ -17,13 +22,19 @@ function wrapLabel(full: string): string[] {
   const lines: string[] = [];
   let current = "";
   for (const word of words) {
+    // Once on the last allowed line, keep packing every remaining word onto
+    // it unconditionally instead of stopping at the char limit -- the tail
+    // below truncates it with an ellipsis if it's still too long. The old
+    // version broke out of the loop here on the FIRST overflow, silently
+    // discarding every word after it (found live: a name near the boundary
+    // lost its final word or two even though they'd have fit).
+    const onFinalLine = lines.length === MAX_LINES - 1;
     const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length <= MAX_LINE_CHARS || !current) {
+    if (onFinalLine || candidate.length <= MAX_LINE_CHARS || !current) {
       current = candidate;
     } else {
       lines.push(current);
       current = word;
-      if (lines.length === MAX_LINES - 1) break;
     }
   }
   if (current) lines.push(current);
@@ -31,10 +42,9 @@ function wrapLabel(full: string): string[] {
   if (lines.length > MAX_LINES) {
     lines.length = MAX_LINES;
   }
-  const consumed = lines.join(" ").length;
-  if (consumed < full.length && lines.length === MAX_LINES) {
-    const last = lines[MAX_LINES - 1];
-    lines[MAX_LINES - 1] = last.length > MAX_LINE_CHARS - 1 ? `${last.slice(0, MAX_LINE_CHARS - 1)}…` : `${last}…`;
+  const lastIdx = lines.length - 1;
+  if (lastIdx >= 0 && lines[lastIdx].length > MAX_LINE_CHARS) {
+    lines[lastIdx] = `${lines[lastIdx].slice(0, MAX_LINE_CHARS - 1)}…`;
   }
   return lines;
 }

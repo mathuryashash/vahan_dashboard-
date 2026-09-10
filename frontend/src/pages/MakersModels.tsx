@@ -147,7 +147,7 @@ export function MakersModelsPage() {
             description="Try a different year."
           />
         ) : (
-          <ResponsiveContainer width="100%" height={Math.max(280, makerChartData.length * 30)}>
+          <ResponsiveContainer width="100%" height={Math.max(280, makerChartData.length * 38)}>
             <BarChart data={makerChartData} layout="vertical" margin={{ right: 48 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
