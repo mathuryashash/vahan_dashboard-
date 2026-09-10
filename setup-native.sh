@@ -99,6 +99,15 @@ ENV
 # (india.head/state.head/rto.head@vahan.demo) don't exist on a fresh
 # install, so anyone but whichever one happened to get created some other
 # way can't log in. Upsert-based, safe to re-run.
+#
+# This also runs init_db()'s index-creation migrations for the first time
+# against whatever's already in `registrations` -- on the full 26M+ row seed
+# dump, building those indexes from scratch has been measured at several
+# minutes with no visible progress until this comment was added (confirmed
+# live: mistaken for a hang, real elapsed time ~9 minutes on a fresh install
+# with no prior indexes). Only the first run pays this cost; every run after
+# is a fast no-op check.
+echo "  (first run can take several minutes building indexes over the seed data -- this is normal, not stuck)"
 python -m app.scripts.seed_demo_hierarchy_users
 cd ..
 

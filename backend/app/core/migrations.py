@@ -1,4 +1,6 @@
+import logging
 import re
+import time
 
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import OperationalError
@@ -7,6 +9,7 @@ from sqlalchemy.schema import CreateIndex
 
 from app.core.query_filters import _VEHICLE_CATEGORY_MAP
 
+logger = logging.getLogger("migrations")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -52,12 +55,25 @@ async def ensure_indexes(engine: AsyncEngine, metadata) -> None:
     behind: the table and its data land fine, but a CREATE INDEX later in
     the script never ran. CREATE INDEX IF NOT EXISTS makes this idempotent
     and safe to run on every startup, not just once.
+
+    First run against a full seed load (26M+ rows in `registrations`) has to
+    actually build every index from scratch here -- confirmed live on a
+    fresh install: ~6 minutes with zero output, easy to mistake for a hung
+    process (the exact support question this logging exists to prevent).
+    Every run after the first is a no-op check per index (CREATE INDEX IF
+    NOT EXISTS against an index that already exists), effectively instant.
     """
     async with engine.begin() as conn:
-        for table in metadata.tables.values():
-            for index in table.indexes:
-                ddl = CreateIndex(index, if_not_exists=True)
-                await conn.execute(ddl)
+        indexes = [(table, index) for table in metadata.tables.values() for index in table.indexes]
+        logger.info("Checking %d index(es) (first run on a large table can take several minutes)...", len(indexes))
+        for i, (table, index) in enumerate(indexes, 1):
+            t0 = time.monotonic()
+            ddl = CreateIndex(index, if_not_exists=True)
+            await conn.execute(ddl)
+            elapsed = time.monotonic() - t0
+            if elapsed > 1:
+                logger.info("  [%d/%d] %s on %s took %.1fs", i, len(indexes), index.name, table.name, elapsed)
+        logger.info("Index check complete.")
 
 
 async def drop_orphaned_indexes(engine: AsyncEngine, index_names: list[str]) -> None:

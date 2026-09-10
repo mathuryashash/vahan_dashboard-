@@ -16,9 +16,17 @@ pre-randomization behavior, and re-running this after every fresh
 Usage: python -m app.scripts.seed_demo_hierarchy_users
 """
 import asyncio
+import logging
 import secrets
 
 from sqlalchemy import func, select
+
+# Every other standalone script in this codebase does this (run_full_scrape.py,
+# backfill_all_years.py, etc.) -- this one didn't, so init_db()'s migrations.py
+# progress logs (added after a fresh install's first-run index build looked
+# like a silent multi-minute hang) were invisible here specifically, the one
+# script that actually needed them the most.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 from app.core.auth import hash_password
 from app.core.database import AsyncSessionLocal, init_db
