@@ -1,7 +1,7 @@
 // frontend/src/pages/MakersModels.tsx
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getAvailableYears } from '../api/vahan';
+import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -96,6 +96,103 @@ export function MakersModelsPage() {
   // whichever of selectedCategory/fuelGroup happens to be checked first,
   // regardless of whether the OTHER one is also set).
   const isEstimated = !!(month && (selectedCategory || fuelGroup) && monthRatio != null && !comboImpossible);
+  // For the triple-estimate branch below: whether the month-proration layer
+  // has actually resolved and been applied, not just whether a month is
+  // picked -- same distinction isEstimated already makes above (found in
+  // review: the title/filename were gating on raw `month`, so they could
+  // briefly claim "(estimated, Jan)" before monthRatio itself had loaded,
+  // while the chart was still only at year-level).
+  const tripleMonthApplied = !!(month && monthRatio != null);
+
+  // ---- Maker x Category x Fuel estimate (comboImpossible case) ----
+  // No VAHAN table pivots on all three, but all three PAIRWISE cross-tabs
+  // are real (Maker x Category, Maker x Fuel, Category x Fuel). The
+  // "no three-factor interaction" log-linear model -- the standard
+  // technique for estimating a 3-way cell from its three 2-way margins when
+  // the full 3-way table isn't observed (used in small-area estimation /
+  // synthetic table reconstruction) -- gives, per maker:
+  //   cell(m) ~ N * r_mc(m) * r_mf(m) * r_cf / (m_total(m) * c_total * f_total)
+  // Verified live before building this: raw per-maker outputs summed to
+  // only ~13% of the real Category x Fuel total (r_cf) -- the one-shot
+  // closed-form isn't self-consistent with the known margin on its own, so
+  // every maker's raw estimate gets rescaled so they sum exactly to r_cf
+  // (the one real number we have for the full combo). After rescaling,
+  // results tracked real-world knowledge well on a live check (e.g. an
+  // EV-only OEM subsidiary came out ~98% EV within its own Four-Wheeler
+  // total; a mostly-ICE maker came out under 1%).
+  const { data: rMcList, isLoading: rMcLoading } = useQuery({
+    queryKey: ['tripleMakerCategory', year, selectedCategory, selectedState],
+    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year, vehicle_category: selectedCategory!, state: selectedState, limit: 100 }, signal),
+    enabled: comboImpossible,
+  });
+  const { data: rMfList, isLoading: rMfLoading } = useQuery({
+    queryKey: ['tripleMakerFuel', year, fuelGroup, selectedState],
+    queryFn: ({ signal }) => getMakerFuelBreakdown({ year, fuel_group: fuelGroup!, state: selectedState, limit: 100 }, signal),
+    enabled: comboImpossible,
+  });
+  const { data: rCfRows, isLoading: rCfLoading } = useQuery({
+    queryKey: ['tripleCategoryFuel', year, selectedCategory, fuelGroup, selectedState],
+    queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
+    enabled: comboImpossible,
+  });
+  const { data: makerYearTotalsList, isLoading: makerYearLoading } = useQuery({
+    queryKey: ['tripleMakerYear', year, selectedState],
+    queryFn: ({ signal }) => getTopMakers({ year, state: selectedState, limit: 100 }, signal),
+    enabled: comboImpossible,
+  });
+  const { data: allCategoriesForYear, isLoading: allCategoriesLoading } = useQuery({
+    queryKey: ['tripleCategoryYear', year, selectedState],
+    queryFn: ({ signal }) => getCategories({ year, state: selectedState }, signal),
+    enabled: comboImpossible,
+  });
+  const { data: allFuelsForYear, isLoading: allFuelsLoading } = useQuery({
+    queryKey: ['tripleFuelYear', year, selectedState],
+    queryFn: () => getFuelBreakdown({ year, state: selectedState }),
+    enabled: comboImpossible,
+  });
+  // Found in review: only tracking one of these six queries' isLoading gave
+  // a false "no data" message on essentially the primary way to explore
+  // this feature (e.g. toggling ICE/Hybrid/EV) -- rMcList's key doesn't
+  // depend on fuelGroup so it stays cached instantly while rMfList/rCfRows
+  // are still genuinely refetching for the new fuel group.
+  const tripleLoading = comboImpossible && (rMcLoading || rMfLoading || rCfLoading || makerYearLoading || allCategoriesLoading || allFuelsLoading);
+
+  const rCf = (rCfRows || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+  const cTotal = (allCategoriesForYear || []).find((c: { vehicle_category: string; total_count: number }) => c.vehicle_category === selectedCategory)?.total_count;
+  const fTotal = (allFuelsForYear || []).find((f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup)?.count;
+  const grandTotalN = (allCategoriesForYear || []).reduce((sum: number, c: { total_count: number }) => sum + c.total_count, 0) || undefined;
+
+  const tripleDataReady = comboImpossible && !!rCf && !!cTotal && !!fTotal && !!grandTotalN && !!rMcList && !!rMfList && !!makerYearTotalsList;
+
+  let tripleChartData: { name: string; count: number }[] = [];
+  if (tripleDataReady) {
+    const mfMap = new Map<string, number>((rMfList || []).map((x: { maker: string; count: number }) => [x.maker, x.count]));
+    const myMap = new Map<string, number>((makerYearTotalsList || []).map((x: { maker: string; count: number }) => [x.maker, x.count]));
+    type RawEstimate = { name: string; raw: number };
+    const raw: RawEstimate[] = (rMcList || [])
+      .map((row: { maker: string; count: number }): RawEstimate | null => {
+        const rMf = mfMap.get(row.maker);
+        const mTotal = myMap.get(row.maker);
+        if (!rMf || !mTotal) return null;
+        return { name: row.maker, raw: (grandTotalN! * row.count * rMf * rCf!) / (mTotal * cTotal! * fTotal!) };
+      })
+      .filter((x: RawEstimate | null): x is RawEstimate => x !== null);
+    const rawSum = raw.reduce((s: number, x: RawEstimate) => s + x.raw, 0);
+    // Rescale so the estimates sum to the one real number we actually have
+    // (r_cf) instead of just the raw closed-form output -- see comment above.
+    const scale = rawSum > 0 ? rCf! / rawSum : 0;
+    tripleChartData = raw
+      .map((x: RawEstimate) => ({ name: x.name, count: Math.round(x.raw * scale) }))
+      .sort((a: { count: number }, b: { count: number }) => b.count - a.count)
+      .slice(0, 20);
+    // Same month-proration as the 2-way estimate above, applied on top of
+    // the already-modeled year estimate -- compounds two layers of
+    // approximation, so this only ever fires when the user has explicitly
+    // picked a month too, never silently.
+    if (month && monthRatio != null) {
+      tripleChartData = tripleChartData.map((d) => ({ name: d.name, count: Math.round(d.count * monthRatio!) }));
+    }
+  }
 
   const makerChartData = (makers || []).map((m: { maker: string; count: number }) => ({
     name: m.maker,
@@ -161,8 +258,19 @@ export function MakersModelsPage() {
         </div>
       </div>
       {comboImpossible ? (
-        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
-          Category and Powertrain can't be combined here — no VAHAN table pivots on Maker × Category × Fuel together. Clear one of them to see a ranking.
+        <div className="bg-[var(--bg-card)] border border-dashed border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          {tripleLoading ? (
+            'Computing an estimate for Maker × Category × Fuel — no VAHAN table has this combination directly…'
+          ) : tripleChartData.length === 0 ? (
+            <>No real pairwise data to estimate from for <span className="font-semibold text-[var(--accent)]">{selectedCategory}</span> × <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span> in FY {year}. Try a different year, or clear one filter for a real ranking.</>
+          ) : (
+            <>
+              <span className="font-semibold text-[var(--accent)]">Estimated</span> — no VAHAN table pivots on Maker × Category × Fuel together, so this ranking is modeled from the three real pairwise cross-tabs (Maker×{selectedCategory}, Maker×{fuelGroup}, {selectedCategory}×{fuelGroup}) using a standard statistical technique for reconstructing a 3-way total from 2-way margins. It assumes each maker's {fuelGroup} share within {selectedCategory} doesn't diverge from what these three real numbers already imply — treat as a rough approximation, not an observed count.
+              {tripleMonthApplied && (
+                <> A second layer of modeling is stacked on top for {MONTH_NAMES[month! - 1]}: the FY estimate above is further prorated by {selectedCategory}'s own real month-share of its year total ({(monthRatio! * 100).toFixed(1)}%) — two independent approximations compounded, treat this month-level number with extra caution.</>
+              )}
+            </>
+          )}
         </div>
       ) : (selectedCategory || fuelGroup) && (
         <div className={`bg-[var(--bg-card)] border rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance ${isEstimated ? 'border-dashed border-[var(--border)]' : 'border-[var(--border)]'}`}>
@@ -181,13 +289,19 @@ export function MakersModelsPage() {
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '80ms' }}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
-            {selectedCategory || fuelGroup
+            {comboImpossible
+              ? `Top Manufacturers — ${selectedCategory} × ${fuelGroup}${tripleMonthApplied ? ` (estimated, ${MONTH_NAMES[month! - 1]})` : ' (estimated)'}`
+              : selectedCategory || fuelGroup
               ? `Top Manufacturers — ${selectedCategory || fuelGroup}${isEstimated ? ` (estimated, ${MONTH_NAMES[month! - 1]})` : ''}`
               : 'Top Manufacturers'}
           </h3>
           <ExportCsvButton
-            filename={`top-makers-fy${year}${selectedCategory ? `-${selectedCategory}` : ''}${fuelGroup ? `-${fuelGroup}` : ''}${isEstimated ? `-est-${MONTH_NAMES[month! - 1]}` : ''}`}
-            rows={isEstimated
+            filename={comboImpossible
+              ? `top-makers-fy${year}-${selectedCategory}-${fuelGroup}-estimated${tripleMonthApplied ? `-${MONTH_NAMES[month! - 1]}` : ''}`
+              : `top-makers-fy${year}${selectedCategory ? `-${selectedCategory}` : ''}${fuelGroup ? `-${fuelGroup}` : ''}${isEstimated ? `-est-${MONTH_NAMES[month! - 1]}` : ''}`}
+            rows={comboImpossible
+              ? tripleChartData.map((d) => ({ maker: d.name, estimated_count: d.count, note: 'modeled from 3 real pairwise cross-tabs, not observed data' }))
+              : isEstimated
               // Export must match what's on screen -- keeps both the real FY
               // total and the modeled estimate as separate labeled columns
               // rather than silently swapping one for the other (found in
@@ -203,7 +317,29 @@ export function MakersModelsPage() {
           />
         </div>
         {comboImpossible ? (
-          <EmptyState variant="no-data" title="Pick one: Category or Powertrain" description="Maker x Category and Maker x Fuel are two separate cross-tabs -- there's no combined Maker x Category x Fuel table to rank against." />
+          tripleLoading ? (
+            <div className="h-[420px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          ) : tripleChartData.length === 0 ? (
+            <EmptyState variant="no-data" title="No estimate available" description="Not enough overlapping real data between the two cross-tabs for this year/state to model a ranking." />
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(280, tripleChartData.length * 38)}>
+              <BarChart data={tripleChartData} layout="vertical" margin={{ right: 48 }}>
+                <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
+                <Tooltip
+                  formatter={(val: number) => [`~${val.toLocaleString('en-IN')}`, 'Estimated registrations']}
+                  contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
+                />
+                <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                  {tripleChartData.map((d) => (
+                    <Cell key={d.name} fill={chart.seriesColor(d.name)} />
+                  ))}
+                  <LabelList dataKey="count" position="right" formatter={(v: number) => `~${v.toLocaleString('en-IN')}`} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )
         ) : makersLoading ? (
           <div className="h-[420px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
         ) : makerChartData.length === 0 ? (
