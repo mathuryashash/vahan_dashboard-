@@ -168,13 +168,15 @@ export function MakersModelsPage() {
   if (tripleDataReady) {
     const mfMap = new Map<string, number>((rMfList || []).map((x: { maker: string; count: number }) => [x.maker, x.count]));
     const myMap = new Map<string, number>((makerYearTotalsList || []).map((x: { maker: string; count: number }) => [x.maker, x.count]));
-    type RawEstimate = { name: string; raw: number };
+    type RawEstimate = { name: string; raw: number; ceiling: number };
     const raw: RawEstimate[] = (rMcList || [])
       .map((row: { maker: string; count: number }): RawEstimate | null => {
         const rMf = mfMap.get(row.maker);
         const mTotal = myMap.get(row.maker);
         if (!rMf || !mTotal) return null;
-        return { name: row.maker, raw: (grandTotalN! * row.count * rMf * rCf!) / (mTotal * cTotal! * fTotal!) };
+        // row.count is this maker's real Maker x Category total (all fuels)
+        // -- a fuel-only slice of it can never exceed that real number.
+        return { name: row.maker, raw: (grandTotalN! * row.count * rMf * rCf!) / (mTotal * cTotal! * fTotal!), ceiling: row.count };
       })
       .filter((x: RawEstimate | null): x is RawEstimate => x !== null);
     const rawSum = raw.reduce((s: number, x: RawEstimate) => s + x.raw, 0);
@@ -182,7 +184,11 @@ export function MakersModelsPage() {
     // (r_cf) instead of just the raw closed-form output -- see comment above.
     const scale = rawSum > 0 ? rCf! / rawSum : 0;
     tripleChartData = raw
-      .map((x: RawEstimate) => ({ name: x.name, count: Math.round(x.raw * scale) }))
+      // Found live (same model, single-cell version, Overview.tsx): a maker
+      // with a tiny real presence in this category can rescale ABOVE its
+      // own real all-fuels ceiling -- logically impossible, small counts
+      // amplify this model's approximation error. Clamped here too.
+      .map((x: RawEstimate) => ({ name: x.name, count: Math.round(Math.min(x.raw * scale, x.ceiling)) }))
       .sort((a: { count: number }, b: { count: number }) => b.count - a.count)
       .slice(0, 20);
     // Same month-proration as the 2-way estimate above, applied on top of

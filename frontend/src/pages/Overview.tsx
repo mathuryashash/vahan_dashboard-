@@ -21,6 +21,54 @@ import type { MonthDetail } from '../types';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** Estimates one maker's Category x Fuel count via the "no three-factor
+ * interaction" log-linear model (same technique as the Makers tab's
+ * ranking estimate, shipped earlier today): raw(m) = r_mc(m) * r_mf(m) /
+ * m_total(m) for every maker with both real cross-tab counts, rescaled so
+ * the sum across all makers matches the one real number we have (rCf, the
+ * Category x Fuel total) -- then returns just the one requested maker's
+ * share of that rescaled total. N/category-total/fuel-total all cancel out
+ * algebraically once rescaled to rCf, so they're not needed here (verified
+ * in that feature's code review). Returns undefined if any input is
+ * missing or the target maker isn't present in both cross-tabs -- never a
+ * fabricated zero. */
+function rescaledMakerEstimate(
+  mcList: { maker: string; count: number }[] | undefined,
+  mfList: { maker: string; count: number }[] | undefined,
+  myList: { maker: string; count: number }[] | undefined,
+  rCf: number | undefined,
+  targetMaker: string | null,
+): number | undefined {
+  if (!mcList || !mfList || !myList || !rCf || !targetMaker) return undefined;
+  const mfMap = new Map<string, number>(mfList.map((x) => [x.maker, x.count]));
+  const myMap = new Map<string, number>(myList.map((x) => [x.maker, x.count]));
+  let targetRaw: number | undefined;
+  let targetCeiling: number | undefined;
+  let rawSum = 0;
+  for (const row of mcList) {
+    const rMf = mfMap.get(row.maker);
+    const mTotal = myMap.get(row.maker);
+    if (!rMf || !mTotal) continue;
+    const raw = (row.count * rMf) / mTotal;
+    rawSum += raw;
+    if (row.maker === targetMaker) {
+      targetRaw = raw;
+      targetCeiling = row.count; // real Maker x Category (all fuels) -- a hard ceiling
+    }
+  }
+  if (targetRaw == null || rawSum <= 0 || targetCeiling == null) return undefined;
+  const estimate = targetRaw * (rCf / rawSum);
+  // A Fuel-only slice of a maker's Category count can never exceed the
+  // maker's real (all-fuels) Category total -- found live: for a maker
+  // with a tiny real presence in this category (e.g. a 2-wheeler-focused
+  // OEM's near-nonexistent Four-Wheeler business), the rescaled estimate
+  // came out ABOVE that real ceiling (30 vs a real ceiling of 27). Small
+  // absolute counts amplify this model's approximation error
+  // disproportionately -- clamping to the one real number that must bound
+  // it is cheap insurance against a logically impossible result.
+  return Math.round(Math.min(estimate, targetCeiling));
+}
+
 function PeriodStat({ label, count, growth }: { label: string; count: number; growth: number | null }) {
   return (
     <div className="bg-[var(--bg-sunken)] rounded-xl p-4">
@@ -123,7 +171,11 @@ export function OverviewPage() {
   const { data: crosstabFuelCategory, isLoading: crosstabFuelCategoryLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', selectedYear, selectedCategory, fuelGroup, selectedState],
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
-    enabled: exactlyOnePairActive && !!selectedCategory && !!fuelGroup,
+    // kpiComboImpossible (not exactlyOnePairActive) so this also fires when
+    // all 3 filters are set -- this query is maker-independent (Category x
+    // Fuel only), so it's exactly as valid there; reused below as rCf for
+    // the all-3-selected estimate.
+    enabled: kpiComboImpossible && !!selectedCategory && !!fuelGroup,
   });
   const { data: crosstabMakerFuel, isLoading: crosstabMakerFuelLoading } = useQuery({
     queryKey: ['makerFuelBreakdown', selectedYear, selectedMaker, fuelGroup, selectedState],
@@ -157,6 +209,47 @@ export function OverviewPage() {
   // actual elapsed days -- 365 is the same coarse approximation the rest of
   // this page already uses elsewhere for a full-year average.
   const crosstabAvgDaily = crosstabTotal !== undefined ? Math.round(crosstabTotal / 365) : undefined;
+
+  // ---- All 3 filters at once: estimate instead of a hard '--' ----
+  // No VAHAN table pivots on Maker x Category x Fuel together, but all
+  // three PAIRWISE cross-tabs are real -- same "no three-factor
+  // interaction" log-linear model as the Makers tab's ranking estimate
+  // (shipped earlier today). Simplified here versus that version: after
+  // rescaling every maker's raw estimate to sum to the one real number we
+  // have (the Category x Fuel total), the grand-total/category-total/
+  // fuel-total terms all algebraically cancel out (confirmed in that
+  // feature's review) -- so this only needs each maker's real
+  // Maker x Category count, real Maker x Fuel count, and real own-year
+  // total, not the extra totals the Makers-tab version separately fetches.
+  const allThreeActive = kpiComboImpossible && !exactlyOnePairActive;
+  const { data: tripleMcList, isLoading: tripleMcLoading } = useQuery({
+    queryKey: ['tripleMcList', selectedYear, selectedCategory, selectedState],
+    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, state: selectedState, limit: 100 }, signal),
+    enabled: allThreeActive,
+  });
+  const { data: tripleMfList, isLoading: tripleMfLoading } = useQuery({
+    queryKey: ['tripleMfList', selectedYear, fuelGroup, selectedState],
+    queryFn: ({ signal }) => getMakerFuelBreakdown({ year: selectedYear, fuel_group: fuelGroup!, state: selectedState, limit: 100 }, signal),
+    enabled: allThreeActive,
+  });
+  const { data: tripleMyList, isLoading: tripleMyLoading } = useQuery({
+    queryKey: ['tripleMyList', selectedYear, selectedState],
+    queryFn: ({ signal }) => getTopMakers({ year: selectedYear, state: selectedState, limit: 100 }, signal),
+    enabled: allThreeActive,
+  });
+  // crosstabFuelCategory (defined above) already gives the real Category x
+  // Fuel total (rCf) and is maker-independent -- reused as-is here, its
+  // `enabled` was loosened from `exactlyOnePairActive` to `kpiComboImpossible`
+  // above specifically so it also fires in this all-3 case.
+  const rCfForTriple = (crosstabFuelCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+
+  // Tracks all 4 dependent queries, not just one -- a single query's
+  // isLoading was found (in the Makers-tab version of this same estimate,
+  // reviewed earlier today) to falsely read "done" while sibling queries
+  // keyed on a just-changed filter were still genuinely in flight.
+  const tripleLoading = allThreeActive && (tripleMcLoading || tripleMfLoading || tripleMyLoading || crosstabFuelCategoryLoading);
+  const tripleEstimateTotal = tripleLoading ? undefined : rescaledMakerEstimate(tripleMcList, tripleMfList, tripleMyList, rCfForTriple, selectedMaker);
+  const tripleAvgDaily = tripleEstimateTotal !== undefined ? Math.round(tripleEstimateTotal / 365) : undefined;
 
   // YoY Growth and Top State for the same combo -- only became answerable
   // once the crosstab tables got multi-year (2003+), per-state history;
@@ -492,20 +585,20 @@ export function OverviewPage() {
       )}
 
       {kpiComboImpossible && (
-        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+        <div className={`bg-[var(--bg-card)] border rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance ${allThreeActive ? 'border-dashed border-[var(--border)]' : 'border-[var(--border)]'}`}>
           {exactlyOnePairActive
             ? <>All four cards below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination.</>
-            : <>Totals below aren't available with all three of Category, Brand, and Powertrain selected together — no VAHAN table pivots on all three at once. Drop one of them, or see the cross-tab panels below for any two together.</>}
+            : <><span className="font-semibold text-[var(--accent)]">Estimated</span> — no VAHAN table pivots on Maker × Category × Powertrain together, so Total Registrations and Avg Daily below are modeled from the three real pairwise cross-tabs (same technique as the Makers tab's ranking estimate), rescaled to match the one real number available. YoY Growth isn't estimated here yet (would need the same model run again for the prior year) — still shown as "—".</>}
         </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <KPICard
           label="Total Registrations"
-          value={kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
+          value={allThreeActive ? (tripleEstimateTotal != null ? `~${tripleEstimateTotal.toLocaleString('en-IN')}` : '—') : kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
           change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent}
           icon={<Car className="w-4 h-4" />}
-          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+          loading={allThreeActive ? tripleLoading : kpiComboImpossible ? crosstabLoading : kpisLoading}
           index={0}
         />
         <KPICard
@@ -520,16 +613,24 @@ export function OverviewPage() {
         />
         <KPICard
           label="Avg Daily Registrations"
-          value={kpiComboImpossible
+          value={allThreeActive
+            ? (tripleEstimateTotal == null ? '—' : tripleEstimateTotal > 0 && tripleAvgDaily === 0 ? '< 1' : `~${tripleAvgDaily}`)
+            : kpiComboImpossible
             ? (crosstabTotal === undefined ? '—' : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : crosstabAvgDaily)
             : (kpis?.total_registrations_today ?? 0)}
           icon={<Bike className="w-4 h-4" />}
-          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+          loading={allThreeActive ? tripleLoading : kpiComboImpossible ? crosstabLoading : kpisLoading}
           index={2}
         />
         <KPICard
           label="Top State"
-          value={kpiComboImpossible
+          value={allThreeActive
+            // A per-state breakdown of the 3-way estimate would need this
+            // same model re-run 36x (once per state) -- out of scope for
+            // now. When a state filter is already active, "top state" is
+            // trivially that state, so show it instead of a dash.
+            ? (selectedState ?? '—')
+            : kpiComboImpossible
             ? (exactlyOnePairActive ? (crosstabDetail?.top_state ?? '—') : '—')
             : (kpis?.top_state ?? '—')}
           icon={<Award className="w-4 h-4" />}
