@@ -7,6 +7,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import engine
+from app.core.migrations import vacuum_tables
 from app.core.query_filters import classify_vehicle
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State
 from scraper.vahan_scraper import DIMENSIONS
@@ -290,6 +292,23 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     scraped_year = year or datetime.now(timezone.utc).year
     if scraped_year == datetime.now(timezone.utc).year:
         settings.LAST_UPDATED = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Every scraper write is delete-then-insert (see persist_rto_batch) --
+    # a full scrape leaves millions of dead tuples behind, just under
+    # Postgres's default autovacuum trigger threshold (confirmed live: 4.4M
+    # dead tuples, 17% of the table, after one concurrency=4 scrape).
+    # Until autovacuum catches up on its own schedule, that stale visibility
+    # map forces every index-only scan into a heap fetch per row -- measured
+    # live, this turned the dashboard's own kpis query from 549ms to 63s.
+    # Explicit VACUUM ANALYZE here means the site is never left slow after a
+    # scrape waiting on autovacuum's timing.
+    try:
+        await vacuum_tables(engine, [
+            "registrations", "maker_category_totals", "fuel_category_totals", "maker_fuel_totals",
+        ])
+    except Exception:
+        logger.exception("Post-scrape VACUUM ANALYZE failed -- scrape data itself is still valid, just not vacuumed yet")
+
     settings.REFRESH_STATUS = "success"
     logger.info("Live VAHAN4 scrape complete (year=%s).", scraped_year)
 

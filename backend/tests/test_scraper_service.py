@@ -187,6 +187,12 @@ async def test_run_scraper_runs_dimensions_concurrently_not_sequentially(monkeyp
     async def fake_check_quality(db, year):
         return {}
     monkeypatch.setattr("app.services.scrape_quality.check_scrape_quality", fake_check_quality)
+    # Real VACUUM ANALYZE against 4 tables -- same reasoning as the quality
+    # check mock above, irrelevant to dimension-concurrency timing and slow
+    # enough on its own to blow the assertion below.
+    async def fake_vacuum(engine, table_names):
+        return None
+    monkeypatch.setattr("app.services.scraper_service.vacuum_tables", fake_vacuum)
 
     start = time.monotonic()
     await run_scraper()

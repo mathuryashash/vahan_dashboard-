@@ -164,6 +164,36 @@ async def ensure_vehicle_category_backfilled(engine: AsyncEngine, table_name: st
         """))
 
 
+async def vacuum_tables(engine: AsyncEngine, table_names: list[str]) -> None:
+    """VACUUM ANALYZE the given tables -- call this after a scrape writes a
+    large batch of rows, not just at startup.
+
+    Every scraper write is delete-then-insert per (rto_code, year, dimension)
+    (see persist_rto_batch / the crosstab tables' own comments) -- a full
+    scrape leaves millions of dead tuples behind. Confirmed live: after one
+    concurrency=4 scrape, `registrations` sat at 4.4M dead tuples (17% of the
+    table), just under Postgres's default autovacuum trigger threshold
+    (dead_tuples > 20% of live_tuples) -- close enough that autovacuum
+    hadn't caught up yet. With the visibility map that stale, an index-only
+    scan can't trust it and falls back to a heap fetch per row: the exact
+    kpis query this was found on went from 63s (4.1M heap fetches) to 549ms
+    (0 heap fetches) after a manual VACUUM ANALYZE. Not just ANALYZE: that
+    only refreshes planner row-count estimates, it doesn't reclaim dead
+    tuples or rebuild the visibility map, so it wouldn't have fixed this on
+    its own.
+
+    VACUUM cannot run inside a transaction block -- AUTOCOMMIT is required
+    (a plain engine.begin()/conn.commit() pattern raises
+    "VACUUM cannot run inside a transaction block").
+    """
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        for table_name in table_names:
+            if not _IDENTIFIER_RE.match(table_name):
+                raise ValueError(f"Invalid table name: {table_name!r}")
+            await conn.execute(text(f"VACUUM (ANALYZE) {table_name}"))
+
+
 async def ensure_analyzed(engine: AsyncEngine, table_names: list[str]) -> None:
     """ANALYZE any table whose planner statistics say it's empty when it
     actually has rows.

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 from app.core.migrations import (
     drop_orphaned_indexes, ensure_analyzed, ensure_columns, ensure_indexes,
-    ensure_no_duplicate_rows, ensure_vehicle_category_backfilled,
+    ensure_no_duplicate_rows, ensure_vehicle_category_backfilled, vacuum_tables,
 )
 
 TEST_DATABASE_URL = os.getenv(
@@ -292,4 +292,44 @@ async def test_ensure_vehicle_category_backfilled_is_idempotent():
 
     async with engine.begin() as conn:
         await conn.execute(text(f"DROP TABLE {table_name}"))
+
+
+async def test_vacuum_tables_actually_runs_vacuum():
+    # n_dead_tup is refreshed by Postgres's async stats collector, not
+    # synchronously after a DELETE in this same test process -- not a
+    # reliable signal to assert on here. last_vacuum/last_analyze, by
+    # contrast, are set directly by VACUUM/ANALYZE themselves as part of
+    # their own execution, so they're the deterministic thing to check.
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, val TEXT)"))
+        await conn.execute(text(f"INSERT INTO {table_name} (val) SELECT 'x' FROM generate_series(1, 100)"))
+        await conn.execute(text(f"DELETE FROM {table_name} WHERE id <= 50"))
+
+    async with engine.connect() as conn:
+        last_vacuum_before = (await conn.execute(text(
+            "SELECT last_vacuum FROM pg_stat_user_tables WHERE relname = :t"
+        ), {"t": table_name})).scalar()
+    assert last_vacuum_before is None  # never vacuumed yet
+
+    await vacuum_tables(engine, [table_name])
+
+    async with engine.connect() as conn:
+        row = (await conn.execute(text(
+            "SELECT last_vacuum, last_analyze FROM pg_stat_user_tables WHERE relname = :t"
+        ), {"t": table_name})).one()
+    assert row.last_vacuum is not None
+    assert row.last_analyze is not None
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_vacuum_tables_rejects_invalid_identifier():
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    with pytest.raises(ValueError):
+        await vacuum_tables(engine, ["registrations; DROP TABLE registrations"])
+    await engine.dispose()
     await engine.dispose()
