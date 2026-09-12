@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
+import { estimateTripleCells } from '../utils/tripleEstimate';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -106,20 +107,15 @@ export function MakersModelsPage() {
 
   // ---- Maker x Category x Fuel estimate (comboImpossible case) ----
   // No VAHAN table pivots on all three, but all three PAIRWISE cross-tabs
-  // are real (Maker x Category, Maker x Fuel, Category x Fuel). The
-  // "no three-factor interaction" log-linear model -- the standard
-  // technique for estimating a 3-way cell from its three 2-way margins when
-  // the full 3-way table isn't observed (used in small-area estimation /
-  // synthetic table reconstruction) -- gives, per maker:
-  //   cell(m) ~ N * r_mc(m) * r_mf(m) * r_cf / (m_total(m) * c_total * f_total)
-  // Verified live before building this: raw per-maker outputs summed to
-  // only ~13% of the real Category x Fuel total (r_cf) -- the one-shot
-  // closed-form isn't self-consistent with the known margin on its own, so
-  // every maker's raw estimate gets rescaled so they sum exactly to r_cf
-  // (the one real number we have for the full combo). After rescaling,
-  // results tracked real-world knowledge well on a live check (e.g. an
-  // EV-only OEM subsidiary came out ~98% EV within its own Four-Wheeler
-  // total; a mostly-ICE maker came out under 1%).
+  // are real (Maker x Category, Maker x Fuel, Category x Fuel). Shared
+  // estimateTripleCells (utils/tripleEstimate.ts) runs the "no three-factor
+  // interaction" log-linear model with capped iterative redistribution --
+  // same function Overview.tsx uses for its single-maker KPI-card version
+  // of this estimate. Only needs each maker's real Maker x Category count,
+  // real Maker x Fuel count, and real own-year total -- the grand
+  // total/category-total/fuel-total this used to also fetch all cancel out
+  // algebraically once rescaled to the one real number available (r_cf),
+  // so those two extra queries were removed as dead weight.
   const { data: rMcList, isLoading: rMcLoading } = useQuery({
     queryKey: ['tripleMakerCategory', year, selectedCategory, selectedState],
     queryFn: ({ signal }) => getMakerCategoryBreakdown({ year, vehicle_category: selectedCategory!, state: selectedState, limit: 100 }, signal),
@@ -140,56 +136,22 @@ export function MakersModelsPage() {
     queryFn: ({ signal }) => getTopMakers({ year, state: selectedState, limit: 100 }, signal),
     enabled: comboImpossible,
   });
-  const { data: allCategoriesForYear, isLoading: allCategoriesLoading } = useQuery({
-    queryKey: ['tripleCategoryYear', year, selectedState],
-    queryFn: ({ signal }) => getCategories({ year, state: selectedState }, signal),
-    enabled: comboImpossible,
-  });
-  const { data: allFuelsForYear, isLoading: allFuelsLoading } = useQuery({
-    queryKey: ['tripleFuelYear', year, selectedState],
-    queryFn: () => getFuelBreakdown({ year, state: selectedState }),
-    enabled: comboImpossible,
-  });
-  // Found in review: only tracking one of these six queries' isLoading gave
-  // a false "no data" message on essentially the primary way to explore
+  // Found in review (still applies): tracking only one of these queries'
+  // isLoading gave a false "no data" message on the primary way to explore
   // this feature (e.g. toggling ICE/Hybrid/EV) -- rMcList's key doesn't
   // depend on fuelGroup so it stays cached instantly while rMfList/rCfRows
   // are still genuinely refetching for the new fuel group.
-  const tripleLoading = comboImpossible && (rMcLoading || rMfLoading || rCfLoading || makerYearLoading || allCategoriesLoading || allFuelsLoading);
+  const tripleLoading = comboImpossible && (rMcLoading || rMfLoading || rCfLoading || makerYearLoading);
 
   const rCf = (rCfRows || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
-  const cTotal = (allCategoriesForYear || []).find((c: { vehicle_category: string; total_count: number }) => c.vehicle_category === selectedCategory)?.total_count;
-  const fTotal = (allFuelsForYear || []).find((f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup)?.count;
-  const grandTotalN = (allCategoriesForYear || []).reduce((sum: number, c: { total_count: number }) => sum + c.total_count, 0) || undefined;
-
-  const tripleDataReady = comboImpossible && !!rCf && !!cTotal && !!fTotal && !!grandTotalN && !!rMcList && !!rMfList && !!makerYearTotalsList;
+  const tripleDataReady = comboImpossible && !!rCf && !!rMcList && !!rMfList && !!makerYearTotalsList;
 
   let tripleChartData: { name: string; count: number }[] = [];
   if (tripleDataReady) {
-    const mfMap = new Map<string, number>((rMfList || []).map((x: { maker: string; count: number }) => [x.maker, x.count]));
-    const myMap = new Map<string, number>((makerYearTotalsList || []).map((x: { maker: string; count: number }) => [x.maker, x.count]));
-    type RawEstimate = { name: string; raw: number; ceiling: number };
-    const raw: RawEstimate[] = (rMcList || [])
-      .map((row: { maker: string; count: number }): RawEstimate | null => {
-        const rMf = mfMap.get(row.maker);
-        const mTotal = myMap.get(row.maker);
-        if (!rMf || !mTotal) return null;
-        // row.count is this maker's real Maker x Category total (all fuels)
-        // -- a fuel-only slice of it can never exceed that real number.
-        return { name: row.maker, raw: (grandTotalN! * row.count * rMf * rCf!) / (mTotal * cTotal! * fTotal!), ceiling: row.count };
-      })
-      .filter((x: RawEstimate | null): x is RawEstimate => x !== null);
-    const rawSum = raw.reduce((s: number, x: RawEstimate) => s + x.raw, 0);
-    // Rescale so the estimates sum to the one real number we actually have
-    // (r_cf) instead of just the raw closed-form output -- see comment above.
-    const scale = rawSum > 0 ? rCf! / rawSum : 0;
-    tripleChartData = raw
-      // Found live (same model, single-cell version, Overview.tsx): a maker
-      // with a tiny real presence in this category can rescale ABOVE its
-      // own real all-fuels ceiling -- logically impossible, small counts
-      // amplify this model's approximation error. Clamped here too.
-      .map((x: RawEstimate) => ({ name: x.name, count: Math.round(Math.min(x.raw * scale, x.ceiling)) }))
-      .sort((a: { count: number }, b: { count: number }) => b.count - a.count)
+    const estimates = estimateTripleCells({ mcList: rMcList!, mfList: rMfList!, myList: makerYearTotalsList!, rCf: rCf! });
+    tripleChartData = Array.from(estimates.entries())
+      .map(([name, count]) => ({ name, count: Math.round(count) }))
+      .sort((a, b) => b.count - a.count)
       .slice(0, 20);
     // Same month-proration as the 2-way estimate above, applied on top of
     // the already-modeled year estimate -- compounds two layers of

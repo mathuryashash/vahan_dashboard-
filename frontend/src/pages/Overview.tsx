@@ -18,20 +18,16 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import type { MonthDetail } from '../types';
+import { estimateTripleCells } from '../utils/tripleEstimate';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** Estimates one maker's Category x Fuel count via the "no three-factor
- * interaction" log-linear model (same technique as the Makers tab's
- * ranking estimate, shipped earlier today): raw(m) = r_mc(m) * r_mf(m) /
- * m_total(m) for every maker with both real cross-tab counts, rescaled so
- * the sum across all makers matches the one real number we have (rCf, the
- * Category x Fuel total) -- then returns just the one requested maker's
- * share of that rescaled total. N/category-total/fuel-total all cancel out
- * algebraically once rescaled to rCf, so they're not needed here (verified
- * in that feature's code review). Returns undefined if any input is
- * missing or the target maker isn't present in both cross-tabs -- never a
- * fabricated zero. */
+/** Thin wrapper around the shared estimateTripleCells (see
+ * utils/tripleEstimate.ts) for the single-maker KPI-card case -- runs the
+ * full capped-redistribution estimate across every maker (needed for the
+ * redistribution math to be correct) and returns just the one requested
+ * maker's share. Returns undefined if any input is missing or the target
+ * maker isn't present in both cross-tabs -- never a fabricated zero. */
 function rescaledMakerEstimate(
   mcList: { maker: string; count: number }[] | undefined,
   mfList: { maker: string; count: number }[] | undefined,
@@ -40,33 +36,9 @@ function rescaledMakerEstimate(
   targetMaker: string | null,
 ): number | undefined {
   if (!mcList || !mfList || !myList || !rCf || !targetMaker) return undefined;
-  const mfMap = new Map<string, number>(mfList.map((x) => [x.maker, x.count]));
-  const myMap = new Map<string, number>(myList.map((x) => [x.maker, x.count]));
-  let targetRaw: number | undefined;
-  let targetCeiling: number | undefined;
-  let rawSum = 0;
-  for (const row of mcList) {
-    const rMf = mfMap.get(row.maker);
-    const mTotal = myMap.get(row.maker);
-    if (!rMf || !mTotal) continue;
-    const raw = (row.count * rMf) / mTotal;
-    rawSum += raw;
-    if (row.maker === targetMaker) {
-      targetRaw = raw;
-      targetCeiling = row.count; // real Maker x Category (all fuels) -- a hard ceiling
-    }
-  }
-  if (targetRaw == null || rawSum <= 0 || targetCeiling == null) return undefined;
-  const estimate = targetRaw * (rCf / rawSum);
-  // A Fuel-only slice of a maker's Category count can never exceed the
-  // maker's real (all-fuels) Category total -- found live: for a maker
-  // with a tiny real presence in this category (e.g. a 2-wheeler-focused
-  // OEM's near-nonexistent Four-Wheeler business), the rescaled estimate
-  // came out ABOVE that real ceiling (30 vs a real ceiling of 27). Small
-  // absolute counts amplify this model's approximation error
-  // disproportionately -- clamping to the one real number that must bound
-  // it is cheap insurance against a logically impossible result.
-  return Math.round(Math.min(estimate, targetCeiling));
+  const result = estimateTripleCells({ mcList, mfList, myList, rCf });
+  const value = result.get(targetMaker);
+  return value != null ? Math.round(value) : undefined;
 }
 
 function PeriodStat({ label, count, growth }: { label: string; count: number; growth: number | null }) {
