@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
+  AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, TooltipProps, ResponsiveContainer
 } from 'recharts';
 import { TrendingUp, Award, Car, Bike } from '../components/Icons';
