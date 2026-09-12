@@ -89,7 +89,13 @@ export function MakersModelsPage() {
     const m = (fuelMonthTotals || []).find((f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup)?.count;
     monthRatio = (y && m != null) ? m / y : null;
   }
-  const isEstimated = !!(month && (selectedCategory || fuelGroup) && monthRatio != null);
+  // comboImpossible (both Category AND Powertrain set) already blocks the
+  // whole view with its own "pick one" message below -- without this guard,
+  // the title still claimed "(estimated, Jan)" even though nothing is
+  // actually shown in that state (found live: monthRatio resolves off
+  // whichever of selectedCategory/fuelGroup happens to be checked first,
+  // regardless of whether the OTHER one is also set).
+  const isEstimated = !!(month && (selectedCategory || fuelGroup) && monthRatio != null && !comboImpossible);
 
   const makerChartData = (makers || []).map((m: { maker: string; count: number }) => ({
     name: m.maker,
