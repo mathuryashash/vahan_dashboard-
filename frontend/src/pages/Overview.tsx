@@ -798,10 +798,51 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
     (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
   )?.count;
 
+  // Two ESTIMATES (not real data) for the exact combo-by-month, built by
+  // prorating the real year-total crosstab down using each side's own real
+  // monthly curve -- e.g. "category X was 7% of its FY total in this month,
+  // so assume the combo was too." Two valid bases (category's curve vs
+  // fuel's curve) can disagree meaningfully (confirmed live: 20% apart on a
+  // real example) since there's no real month-level combo data anywhere to
+  // check either against -- shown side by side, clearly marked as modeled,
+  // specifically so that disagreement stays visible rather than picking one
+  // and presenting it as settled.
+  const { data: categoryYearly } = useQuery({
+    queryKey: ['categoryYearOnly', year, state],
+    queryFn: ({ signal }) => getCategories({ year, month: null, state }, signal),
+    enabled: !!month,
+  });
+  const categoryYearCount = (categoryYearly || []).find(
+    (c: { vehicle_category: string; total_count: number }) => c.vehicle_category === category
+  )?.total_count;
+
+  const { data: fuelYearly } = useQuery({
+    queryKey: ['fuelYearOnly', year, state],
+    queryFn: () => getFuelBreakdown({ year, month: null, state }),
+    enabled: !!month,
+  });
+  const fuelYearCount = (fuelYearly || []).find(
+    (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
+  )?.count;
+
   // See MakerCategoryPanel's comment above -- hasYearData (not an empty
   // filtered response) tells "not scraped this year" apart from a real zero.
   const noDataForYear = !hasYearData;
   const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
+
+  // noDataForYear-gated: `count` falls back to 0 when the crosstab simply
+  // hasn't been scraped for this year/state (see the comment on
+  // noDataForYear above) -- without this guard, an unscraped combo would
+  // estimate to a confident-looking "~0" instead of the "unknown" that it
+  // actually is (found in review: categoryMonthlyCount/fuelMonthlyCount
+  // come from separate, independently-scraped endpoints and can be real
+  // even when the crosstab itself has nothing for this year).
+  const estimateByCategoryCurve = (!noDataForYear && categoryYearCount && categoryMonthlyCount != null)
+    ? count * (categoryMonthlyCount / categoryYearCount)
+    : undefined;
+  const estimateByFuelCurve = (!noDataForYear && fuelYearCount && fuelMonthlyCount != null)
+    ? count * (fuelMonthlyCount / fuelYearCount)
+    : undefined;
 
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
@@ -835,6 +876,23 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
               <span>{fuelGroup} (all categories)</span>
               <span className="font-mono font-semibold text-[var(--text-primary)]">
                 {fuelMonthlyCount != null ? fuelMonthlyCount.toLocaleString('en-IN') : '···'}
+              </span>
+            </div>
+          </div>
+          <div className="mt-2 pt-2 border-t border-dashed border-[var(--border)] flex flex-col gap-1">
+            <p className="text-[10px] text-[var(--text-muted)]">
+              Estimated {fuelGroup} {category} for {MONTH_NAMES[month - 1]} {year} — modeled from the year total above, not observed. VAHAN has no real month-level data for this combo; the two methods below can disagree.
+            </p>
+            <div className="flex items-center justify-between text-[11px]">
+              <span>~ by {category}'s monthly pattern</span>
+              <span className="font-mono font-semibold text-[var(--accent)]">
+                {estimateByCategoryCurve != null ? `~${Math.round(estimateByCategoryCurve).toLocaleString('en-IN')}` : '···'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px]">
+              <span>~ by {fuelGroup}'s monthly pattern</span>
+              <span className="font-mono font-semibold text-[var(--accent)]">
+                {estimateByFuelCurve != null ? `~${Math.round(estimateByFuelCurve).toLocaleString('en-IN')}` : '···'}
               </span>
             </div>
           </div>
