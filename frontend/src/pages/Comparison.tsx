@@ -6,6 +6,8 @@ import { getStatesComparison, compareStates, getCategories } from '../api/vahan'
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { LabeledSelect } from '../components/LabeledSelect';
+import { PowertrainToggle } from '../components/PowertrainToggle';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -100,36 +102,31 @@ export function ComparisonPage() {
           </p>
         </div>
         <div className="flex items-end gap-3 animate-entrance" style={{ animationDelay: '20ms' }}>
+          <LabeledSelect
+            label="Category"
+            value={selectedCategory || ''}
+            onChange={(e) => setSelectedCategory(e.target.value || null)}
+            className="bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          >
+            <option value="">All Categories</option>
+            {(categories || []).map((c: { vehicle_category: string }) => (
+              <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+            ))}
+          </LabeledSelect>
           <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
-            <select
-              value={selectedCategory || ''}
-              onChange={(e) => setSelectedCategory(e.target.value || null)}
-              className="bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            >
-              <option value="">All Categories</option>
-              {(categories || []).map((c: { vehicle_category: string }) => (
-                <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</label>
-            <div className="flex rounded-xl border border-[var(--border)] overflow-hidden h-[34px]">
-              {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
-                <button
-                  key={group}
-                  onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
-                  className={`px-3 text-xs font-semibold transition-colors ${
-                    fuelGroup === group
-                      ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
-                      : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
-                  }`}
-                >
-                  {group}
-                </button>
-              ))}
-            </div>
+            {/* span, not label: PowertrainToggle is a button group, not a
+                single form control a <label> can associate with -- its own
+                aria-label carries the accessible name instead. */}
+            <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</span>
+            <PowertrainToggle
+              value={fuelGroup}
+              onChange={setFuelGroup}
+              buttonClassName={(active) => `px-3 text-xs font-semibold transition-colors ${
+                active
+                  ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                  : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+              }`}
+            />
           </div>
         </div>
       </div>
@@ -224,10 +221,11 @@ export function ComparisonPage() {
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">All States — Ranked</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           {(allStates || []).map((s: { state_name: string; count: number; share_percent: number }, i: number) => (
-            <div
-              key={s.state_name}
+            <button
+              key={s.state_name} type="button"
+              aria-label={`Set State A to ${s.state_name}`}
               onClick={() => { setStateA(s.state_name); setFocusState(s.state_name); }}
-              className="bg-[var(--bg-sunken)] rounded-lg px-3 py-2 cursor-pointer transition-all hover:bg-[var(--bg-card-hover)] border"
+              className="w-full text-left bg-[var(--bg-sunken)] rounded-lg px-3 py-2 cursor-pointer transition-all hover:bg-[var(--bg-card-hover)] border"
               style={{ borderColor: focusState === s.state_name ? 'var(--accent)' : 'transparent' }}
             >
               <div className="flex items-center justify-between">
@@ -243,7 +241,7 @@ export function ComparisonPage() {
               <div className="mt-1.5 h-0.5 bg-[var(--bg-card)] rounded-full overflow-hidden">
                 <div className="h-full rounded-full" style={{ width: `${s.share_percent}%`, background: chart.seriesColor(s.state_name) }} />
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </div>

@@ -11,6 +11,8 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { insidePieLabel } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
+import { LabeledSelect } from '../components/LabeledSelect';
+import { PowertrainToggle } from '../components/PowertrainToggle';
 import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
@@ -442,74 +444,53 @@ export function OverviewPage() {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance">
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
-          {isStateLocked ? (
+        {isStateLocked ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</span>
             <div className={`${selectClass} cursor-default hover:border-[var(--border)]`}>{auth.scope_state_name}</div>
-          ) : (
-            <select value={selectedState || ''} onChange={(e) => setSelectedState(e.target.value || null)} className={selectClass}>
-              <option value="">All States</option>
-              {(statesList || []).map((s: { state_name: string }) => (
-                <option key={s.state_name} value={s.state_name}>{s.state_name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Year</label>
-          <select value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={selectClass}>
-            {(availableYears || [selectedYear]).map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Month</label>
-          <select value={selectedMonth || ''} onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)} className={selectClass}>
-            <option value="">All Months</option>
-            {MONTH_NAMES.map((name, idx) => (
-              <option key={name} value={idx + 1}>{name}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
-          <select value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
-            <option value="">All Categories</option>
-            {(categoryOptions || []).map((c: { vehicle_category: string }) => (
-              <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</label>
-          <div className="flex rounded-xl border border-[var(--border)] overflow-hidden h-[34px]">
-            {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
-              <button
-                key={group}
-                onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
-                className={`flex-1 text-xs font-semibold transition-colors ${
-                  fuelGroup === group
-                    ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
-                    : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
-                }`}
-              >
-                {group}
-              </button>
-            ))}
           </div>
+        ) : (
+          <LabeledSelect label="State" value={selectedState || ''} onChange={(e) => setSelectedState(e.target.value || null)} className={selectClass}>
+            <option value="">All States</option>
+            {(statesList || []).map((s: { state_name: string }) => (
+              <option key={s.state_name} value={s.state_name}>{s.state_name}</option>
+            ))}
+          </LabeledSelect>
+        )}
+
+        <LabeledSelect label="Year" value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={selectClass}>
+          {(availableYears || [selectedYear]).map((y) => <option key={y} value={y}>{y}</option>)}
+        </LabeledSelect>
+
+        <LabeledSelect label="Month" value={selectedMonth || ''} onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)} className={selectClass}>
+          <option value="">All Months</option>
+          {MONTH_NAMES.map((name, idx) => (
+            <option key={name} value={idx + 1}>{name}</option>
+          ))}
+        </LabeledSelect>
+
+        <LabeledSelect label="Category" value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
+          <option value="">All Categories</option>
+          {(categoryOptions || []).map((c: { vehicle_category: string }) => (
+            <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+          ))}
+        </LabeledSelect>
+
+        <div className="flex flex-col gap-1.5">
+          {/* span, not label: PowertrainToggle is a button group, not a
+              single form control a <label> can associate with -- its own
+              aria-label carries the accessible name instead. */}
+          <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</span>
+          <PowertrainToggle value={fuelGroup} onChange={setFuelGroup} />
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">OEM / Brand</label>
-          <select value={selectedMaker || ''} onChange={(e) => setSelectedMaker(e.target.value || null)} className={selectClass}>
+          <LabeledSelect label="OEM / Brand" value={selectedMaker || ''} onChange={(e) => setSelectedMaker(e.target.value || null)} className={selectClass}>
             <option value="">All Brands</option>
             {(makers || []).map((m: { maker: string }) => (
               <option key={m.maker} value={m.maker}>{m.maker}</option>
             ))}
-          </select>
+          </LabeledSelect>
           {selectedCategory && (
             <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight">
               not scoped to {selectedCategory} — VAHAN can't cross maker × category
@@ -746,7 +727,11 @@ export function OverviewPage() {
                 const pct = (s.total_count / max) * 100;
                 const color = chart.seriesColor(s.state_name);
                 return (
-                  <div key={s.state_name} className="flex items-center gap-3 group cursor-pointer" onClick={() => setSelectedState(s.state_name)}>
+                  <button
+                    key={s.state_name} type="button"
+                    className="w-full flex items-center gap-3 group cursor-pointer text-left"
+                    onClick={() => setSelectedState(s.state_name)}
+                  >
                     <span className="font-mono text-[11px] font-bold text-[var(--text-muted)] w-4 text-right shrink-0">#{i + 1}</span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-1">
@@ -760,7 +745,7 @@ export function OverviewPage() {
                     <span className="font-mono text-[11px] font-bold text-[var(--text-secondary)] w-20 text-right shrink-0">
                       {s.total_count?.toLocaleString('en-IN')}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>

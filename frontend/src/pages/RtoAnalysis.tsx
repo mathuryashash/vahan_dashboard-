@@ -10,6 +10,7 @@ import { TruncatedYAxisTick, insidePieLabel } from '../components/ChartAxisTick'
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ExportCsvButton } from '../components/ExportCsvButton';
+import { LabeledSelect } from '../components/LabeledSelect';
 import { useAuth } from '../contexts/AuthContext';
 import type { RTOListItem, RTOAnalysis } from '../types';
 
@@ -114,24 +115,22 @@ export function RtoAnalysisPage() {
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance flex flex-wrap gap-4">
         {auth.scope_type === 'national' ? (
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</label>
-            <select
-              value={stateCode}
-              onChange={(e) => { setStateCode(e.target.value); setDistrictCode(''); setRtoCode(null); }}
-              className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs"
-            >
-              <option value="">Select a state...</option>
-              {(states || []).map((s: { state_code: string; state_name: string }) => (
-                <option key={s.state_code} value={s.state_code}>{s.state_name}</option>
-              ))}
-            </select>
-          </div>
+          <LabeledSelect
+            label="State"
+            value={stateCode}
+            onChange={(e) => { setStateCode(e.target.value); setDistrictCode(''); setRtoCode(null); }}
+            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs"
+          >
+            <option value="">Select a state...</option>
+            {(states || []).map((s: { state_code: string; state_name: string }) => (
+              <option key={s.state_code} value={s.state_code}>{s.state_name}</option>
+            ))}
+          </LabeledSelect>
         ) : (
           <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">
+            <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">
               {auth.scope_type === 'rto' ? 'RTO' : 'State'}
-            </label>
+            </span>
             <div className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold w-full max-w-xs">
               {auth.scope_type === 'rto' ? auth.scope_rto_name : auth.scope_state_name}
             </div>
@@ -139,34 +138,30 @@ export function RtoAnalysisPage() {
         )}
 
         {auth.scope_type !== 'rto' && (
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">District</label>
-            <select
-              value={districtCode}
-              onChange={(e) => { setDistrictCode(e.target.value); setRtoCode(null); }}
-              disabled={!stateCode}
-              className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <option value="">All Districts</option>
-              {(districts || []).map((d) => (
-                <option key={d.district_code} value={d.district_code}>{d.district_name}</option>
-              ))}
-            </select>
-          </div>
+          <LabeledSelect
+            label="District"
+            value={districtCode}
+            onChange={(e) => { setDistrictCode(e.target.value); setRtoCode(null); }}
+            disabled={!stateCode}
+            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <option value="">All Districts</option>
+            {(districts || []).map((d) => (
+              <option key={d.district_code} value={d.district_code}>{d.district_name}</option>
+            ))}
+          </LabeledSelect>
         )}
 
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Financial Year</label>
-          <select
-            value={fyYear}
-            onChange={(e) => setFyYear(Number(e.target.value))}
-            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer"
-          >
-            {(availableYears || [fyYear]).map((y) => (
-              <option key={y} value={y}>FY {y}-{String((y + 1) % 100).padStart(2, '0')}</option>
-            ))}
-          </select>
-        </div>
+        <LabeledSelect
+          label="Financial Year"
+          value={fyYear}
+          onChange={(e) => setFyYear(Number(e.target.value))}
+          className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer"
+        >
+          {(availableYears || [fyYear]).map((y) => (
+            <option key={y} value={y}>FY {y}-{String((y + 1) % 100).padStart(2, '0')}</option>
+          ))}
+        </LabeledSelect>
       </div>
 
       {auth.scope_type === 'rto' ? null : !stateCode ? (

@@ -8,6 +8,7 @@ import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { LabeledSelect } from '../components/LabeledSelect';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { downloadXlsx } from '../utils/csv';
 
@@ -103,16 +104,16 @@ export function IndustrySalesPage() {
       )}
 
       <div className="flex items-end justify-between gap-4 flex-wrap">
-        <div className="flex flex-col gap-1.5 max-w-xs">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</label>
-          <select
+        <div className="max-w-xs w-full">
+          <LabeledSelect
+            label="Category"
             value={category || ''}
             onChange={(e) => { setSelectedCategory(e.target.value); setSelectedMaker(null); }}
             className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
           >
             <option value="">Please select a category</option>
             {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
-          </select>
+          </LabeledSelect>
         </div>
         <button
           onClick={handleExportAllCategories}

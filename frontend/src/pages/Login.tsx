@@ -40,8 +40,9 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           </div>
         </div>
 
-        <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1">Email</label>
+        <label htmlFor="login-email" className="block text-xs font-semibold text-[var(--text-secondary)] mb-1">Email</label>
         <input
+          id="login-email"
           type="email"
           required
           autoFocus
@@ -50,8 +51,9 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           className="w-full mb-4 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-sm text-[var(--text-primary)]"
         />
 
-        <label className="block text-xs font-semibold text-[var(--text-secondary)] mb-1">Password</label>
+        <label htmlFor="login-password" className="block text-xs font-semibold text-[var(--text-secondary)] mb-1">Password</label>
         <input
+          id="login-password"
           type="password"
           required
           value={password}

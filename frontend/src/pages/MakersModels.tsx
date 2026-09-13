@@ -9,6 +9,8 @@ import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { LabeledSelect } from '../components/LabeledSelect';
+import { PowertrainToggle } from '../components/PowertrainToggle';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -184,11 +186,12 @@ export function MakersModelsPage() {
         </p>
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap animate-entrance" style={{ animationDelay: '40ms' }}>
-        <select value={year} onChange={(e) => setYear(Number(e.target.value))} className={selectClass}>
+      <div className="flex items-end gap-3 flex-wrap animate-entrance" style={{ animationDelay: '40ms' }}>
+        <LabeledSelect label="Year" value={year} onChange={(e) => setYear(Number(e.target.value))} className={selectClass}>
           {(availableYears || [year]).map((y) => <option key={y} value={y}>{y}</option>)}
-        </select>
-        <select
+        </LabeledSelect>
+        <LabeledSelect
+          label="Month"
           value={month || ''}
           onChange={(e) => setMonth(e.target.value ? Number(e.target.value) : null)}
           title={(selectedCategory || fuelGroup) ? "Picking a month here shows an ESTIMATE (modeled, not real month-level data) -- see the banner below" : undefined}
@@ -198,8 +201,9 @@ export function MakersModelsPage() {
           {MONTH_NAMES.map((name, idx) => (
             <option key={name} value={idx + 1}>{name}</option>
           ))}
-        </select>
-        <select
+        </LabeledSelect>
+        <LabeledSelect
+          label="Category"
           value={selectedCategory || ''}
           onChange={(e) => setSelectedCategory(e.target.value || null)}
           className={selectClass}
@@ -208,21 +212,18 @@ export function MakersModelsPage() {
           {(categories || []).map((c: { vehicle_category: string }) => (
             <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
           ))}
-        </select>
-        <div className="flex rounded-xl border border-[var(--border)] overflow-hidden h-[34px]">
-          {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
-            <button
-              key={group}
-              onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
-              className={`px-3 text-xs font-semibold transition-colors ${
-                fuelGroup === group
-                  ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
-                  : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
-              }`}
-            >
-              {group}
-            </button>
-          ))}
+        </LabeledSelect>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</span>
+          <PowertrainToggle
+            value={fuelGroup}
+            onChange={setFuelGroup}
+            buttonClassName={(active) => `px-3 text-xs font-semibold transition-colors ${
+              active
+                ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+                : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+            }`}
+          />
         </div>
       </div>
       {comboImpossible ? (

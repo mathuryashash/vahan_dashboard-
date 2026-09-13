@@ -10,6 +10,7 @@ import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick, insidePieLabel } from '../components/ChartAxisTick';
+import { PowertrainToggle } from '../components/PowertrainToggle';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -101,10 +102,11 @@ export function CategoriesPage() {
           </div>
           <div className="space-y-3">
             {(categories || []).map((c: { vehicle_category: string; total_count: number; share_percent: number; yoy_growth: number }, i: number) => (
-              <div
-                key={i}
+              <button
+                key={c.vehicle_category} type="button"
+                aria-label={`View ${c.vehicle_category} breakdown`}
                 onClick={() => navigate(`/categories/${encodeURIComponent(c.vehicle_category)}`)}
-                className="flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-all duration-200 border border-transparent hover:border-[var(--border-strong)] hover:bg-[var(--bg-card-hover)] group"
+                className="w-full text-left flex items-center gap-4 p-3 rounded-xl cursor-pointer transition-all duration-200 border border-transparent hover:border-[var(--border-strong)] hover:bg-[var(--bg-card-hover)] group"
               >
                 <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: chart.seriesColor(c.vehicle_category) }} />
                 <div className="flex-1 min-w-0">
@@ -122,7 +124,7 @@ export function CategoriesPage() {
                     <span className="text-[10px] text-[var(--text-muted)] font-mono">{c.share_percent?.toFixed(1)}%</span>
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -152,21 +154,16 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: `${250 + index * 80}ms` }}>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{title}</h3>
-        <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
-          {(['ICE', 'Hybrid', 'EV'] as const).map((group) => (
-            <button
-              key={group}
-              onClick={() => setFuelGroup(fuelGroup === group ? null : group)}
-              className={`px-2.5 py-1 text-[10px] font-semibold transition-colors ${
-                fuelGroup === group
-                  ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
-                  : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
-              }`}
-            >
-              {group}
-            </button>
-          ))}
-        </div>
+        <PowertrainToggle
+          value={fuelGroup}
+          onChange={setFuelGroup}
+          className="flex rounded-lg border border-[var(--border)] overflow-hidden"
+          buttonClassName={(active) => `px-2.5 py-1 text-[10px] font-semibold transition-colors ${
+            active
+              ? 'bg-[var(--accent)] text-[var(--accent-contrast)]'
+              : 'bg-[var(--bg-sunken)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
+          }`}
+        />
       </div>
       {isLoading ? (
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
