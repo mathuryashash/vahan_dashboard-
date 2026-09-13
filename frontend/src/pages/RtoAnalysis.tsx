@@ -279,7 +279,7 @@ export function RtoAnalysisPage() {
                   </ResponsiveContainer>
                   <div className="w-full space-y-2">
                     {makerPieData.map((d, i: number) => (
-                      <div key={i} className="flex items-center justify-between text-xs">
+                      <div key={d.name} className="flex items-center justify-between text-xs">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: d.name === 'Other' ? chart.grid : makerPieColors.get(d.name) }} />
                           <span className="text-[var(--text-secondary)] truncate">{d.name}</span>

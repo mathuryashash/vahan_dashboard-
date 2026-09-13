@@ -4,8 +4,7 @@ the three tiers this enforces."""
 import bcrypt
 import jwt
 from datetime import datetime, timedelta, timezone
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +12,11 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import User
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+# httpOnly cookie, not a header -- see login()/logout() in endpoints/auth.py.
+# JS never reads or sets this value; the browser attaches it automatically on
+# every same-origin request, closing the XSS-can-steal-the-token gap a
+# localStorage-held token had.
+ACCESS_TOKEN_COOKIE = "access_token"
 
 
 def hash_password(password: str) -> str:
@@ -40,11 +43,17 @@ def decode_access_token(token: str) -> dict | None:
 _credentials_error = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="Could not validate credentials",
-    headers={"WWW-Authenticate": "Bearer"},
 )
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> User:
+def _token_from_cookie(request: Request) -> str:
+    token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+    if token is None:
+        raise _credentials_error
+    return token
+
+
+async def get_current_user(token: str = Depends(_token_from_cookie), db: AsyncSession = Depends(get_db)) -> User:
     payload = decode_access_token(token)
     if payload is None:
         raise _credentials_error

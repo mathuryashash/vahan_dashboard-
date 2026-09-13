@@ -81,7 +81,7 @@ export function CategoriesPage() {
               </ResponsiveContainer>
               <div className="mt-3 space-y-1.5 max-h-44 overflow-y-auto pr-1">
                 {pieData.map((p: { name: string; value: number }, i: number) => (
-                  <div key={i} className="flex items-center justify-between text-[11px]">
+                  <div key={p.name} className="flex items-center justify-between text-[11px]">
                     <div className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: pieColors.get(p.name) }} />
                       <span className="text-[var(--text-secondary)] truncate max-w-[110px]">{p.name}</span>

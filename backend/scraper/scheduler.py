@@ -132,6 +132,15 @@ async def run_fada_scheduler_loop() -> None:
                                 logger.warning("FADA scheduler: extraction returned 0 rows for %r, marking attempted so it isn't retried every cycle", release["title"])
                         except Exception as exc:
                             logger.error("FADA scheduler: failed processing %r: %s", release["title"], exc)
+                            # Without this, a DB-level failure (e.g. the
+                            # oem_monthly_sales natural-key constraint) leaves
+                            # this shared session's transaction aborted --
+                            # every subsequent release in new_releases would
+                            # then also fail (PendingRollbackError) and never
+                            # get a FadaScrapeAttempt row, so it's retried
+                            # forever on the next 24h cycle instead of just
+                            # this one release.
+                            await db.rollback()
             logger.info("FADA scheduled check succeeded in %.0fs, ingested %d release(s)", time.monotonic() - started, ingested)
             consecutive_failures = 0
         except Exception as exc:

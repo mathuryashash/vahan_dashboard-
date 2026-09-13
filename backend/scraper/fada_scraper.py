@@ -40,6 +40,14 @@ BASE_URL = "https://www.fada.in/"
 # layout change looks identical to a normal run unless this is checked.
 MIN_EXPECTED_ROWS = 60
 
+# Confirmed live: each archive listing page holds 15 press-release cards
+# (see _ENTRY_RE's own docstring below). A strict "zero entries" check only
+# catches total markup breakage; a narrower change (FADA tweaks the card
+# wrapper so most, not all, cards stop matching) would still pass a
+# nonzero check while quietly losing most of a page -- the same silent
+# degradation MIN_EXPECTED_ROWS above exists to catch on the PDF side.
+MIN_EXPECTED_ENTRIES_PAGE_1 = 10
+
 # Marks the start of each press-release card. Shared by _ENTRY_RE (to find
 # titles) and discover_releases (to detect an empty/end-of-archive page) so
 # the two checks can't silently drift apart if FADA's markup changes.
@@ -81,8 +89,22 @@ async def discover_releases(client: httpx.AsyncClient, max_pages: int = 10) -> l
     for page in range(1, max_pages + 1):
         resp = await client.get(ARCHIVE_URL, params={"page": page})
         resp.raise_for_status()
-        has_any_entries = _ENTRY_MARKER in resp.text
-        if not has_any_entries:
+        entry_count = resp.text.count(_ENTRY_MARKER)
+        if page == 1 and entry_count < MIN_EXPECTED_ENTRIES_PAGE_1:
+            # The archive can never genuinely be near-empty on page 1 -- FADA
+            # has published monthly for years and each page holds 15 cards.
+            # A strict "zero entries" check only catches total markup
+            # breakage; this also catches a narrower drift (FADA tweaks the
+            # card wrapper so most, not all, cards stop matching), which
+            # would otherwise look identical to "nothing new to ingest":
+            # discover_releases returns a near-empty list, the scheduler
+            # logs "ingested 0 release(s)" at INFO, and nothing ever notices.
+            raise RuntimeError(
+                f"FADA archive page 1 returned only {entry_count} entries (expected >= "
+                f"{MIN_EXPECTED_ENTRIES_PAGE_1}) -- fada.in's markup likely changed, not a "
+                "genuinely empty or near-empty archive."
+            )
+        if entry_count == 0:
             logger.info("FADA archive: page %d empty, stopping (found %d releases)", page, len(all_releases))
             break
         all_releases.extend(_parse_release_list_page(resp.text))

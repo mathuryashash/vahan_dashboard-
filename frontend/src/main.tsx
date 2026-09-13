@@ -20,9 +20,17 @@ class ErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { hasEr
     this.state = { hasError: false }
   }
   static getDerivedStateFromError() { return { hasError: true } }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('Unhandled error in component tree:', error, info.componentStack)
+  }
   render() {
     if (this.state.hasError) {
-      return null
+      return (
+        <div style={{ padding: 24, textAlign: 'center', color: '#666' }}>
+          <p>Something went wrong loading this page.</p>
+          <button onClick={() => window.location.reload()}>Reload</button>
+        </div>
+      )
     }
     return this.props.children
   }

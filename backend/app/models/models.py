@@ -113,6 +113,25 @@ class Registration(Base):
             "idx_reg_year_fuel_count", "year", "fuel_type", "count",
             postgresql_where=text("fuel_type IS NOT NULL"),
         ),
+        # Natural key across all three scrape dimensions (see
+        # scraper_service.persist_rto_batch): maker-dimension rows have
+        # vehicle_class='All'+real maker+fuel_type=NULL, vehicle_class-dimension
+        # rows have real vehicle_class+maker=NULL+fuel_type=NULL, fuel-dimension
+        # rows have vehicle_class='All'+maker=NULL+real fuel_type. maker and
+        # fuel_type are COALESCEd, not used raw: a standard multi-column
+        # UNIQUE index never treats two NULLs as conflicting, and EVERY row
+        # in this table has at least one of these two columns NULL (no
+        # dimension has both populated at once) -- a raw `"maker",
+        # "fuel_type"` index here would look complete but reject zero actual
+        # duplicates, in any dimension, ever (caught by code review before
+        # this shipped). The sentinel gives NULL a real, matchable value;
+        # expression indexes work identically on Postgres and SQLite, unlike
+        # a `postgresql_where`-only partial index, which would silently
+        # become a full (and here, incorrectly narrower) index on SQLite.
+        Index(
+            "idx_reg_natural_key", "rto_code", "year", "month", "is_supplementary", "vehicle_class",
+            text("COALESCE(maker, '')"), text("COALESCE(fuel_type, '')"), unique=True,
+        ),
     )
 
 
@@ -276,6 +295,20 @@ class OEMMonthlySales(Base):
 
     __table_args__ = (
         Index("idx_oem_sales_period", "source", "year", "month", "category"),
+        # Natural key per fada_scraper.persist_oem_sales: one row per
+        # (source, year, month, category, maker) -- maker=NULL is the single
+        # industry-wide total row for that period/category, and month=NULL
+        # is an FY-total-only period, neither a duplicate. month and maker
+        # are COALESCEd, not used raw: a standard multi-column UNIQUE index
+        # never treats two NULLs as conflicting, so a raw index here would
+        # accept unlimited duplicates among exactly the NULL-month and/or
+        # NULL-maker rows -- see Registration.idx_reg_natural_key for the
+        # same fix and why (caught by code review before this shipped).
+        Index(
+            "idx_oem_sales_natural_key", "source", "year",
+            text("COALESCE(month, -1)"), "category", text("COALESCE(maker, '')"),
+            unique=True,
+        ),
     )
 
 

@@ -93,7 +93,9 @@ async def drop_orphaned_indexes(engine: AsyncEngine, index_names: list[str]) -> 
             await conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
 
 
-async def ensure_no_duplicate_rows(engine: AsyncEngine, table_name: str, key_columns: list[str]) -> None:
+async def ensure_no_duplicate_rows(
+    engine: AsyncEngine, table_name: str, key_columns: list[str], unique_index_name: str | None = None,
+) -> None:
     """Delete all but the highest-id row per `key_columns` group.
 
     A prerequisite for adding a unique constraint on those columns -- the
@@ -101,21 +103,93 @@ async def ensure_no_duplicate_rows(engine: AsyncEngine, table_name: str, key_col
     exist. Confirmed live on maker_category_totals: 31,620 exact-duplicate
     rows (same rto_code+year+maker+vehicle_class, same count), all in the
     current year, silently double-counted into every SUM(count) that read
-    them. Safe to run on every startup: a table with no duplicates left
-    matches zero rows and is a cheap no-op.
+    them. `registrations` -- the oldest, largest, most-rescraped table, with
+    the longest history predating the REFRESH_STATUS overlap guard -- turned
+    out to be carrying far more: 4.56M duplicate rows out of 26.2M (17%),
+    accumulated across 24 years of backfills and re-scrapes. Verified this
+    wasn't over-deletion from a too-broad key before trusting it: zero
+    remaining duplicate groups under the narrowest possible correct key per
+    dimension, a smooth (non-cliff-shaped) year-over-year row count, and the
+    post-cleanup total for a recent month landing within ~4% of the
+    independently-scraped oem_monthly_sales/FADA figure for the same month.
+    Safe to run on every startup: a table with no duplicates left matches
+    zero rows and is a cheap no-op (see the already-constrained short-circuit
+    below for what makes that actually cheap on a large table).
     """
     if not _IDENTIFIER_RE.match(table_name):
         raise ValueError(f"Invalid table name: {table_name!r}")
     for col in key_columns:
         if not _IDENTIFIER_RE.match(col):
             raise ValueError(f"Invalid column name: {col!r}")
-    join_cond = " AND ".join(f"a.{col} = b.{col}" for col in key_columns)
+    # GROUP BY, not a self-join: a self-join needs a NULL-safe comparison
+    # (plain `=` never matches NULL against NULL, so two rows that are exact
+    # duplicates except both NULL in a key column -- e.g.
+    # registrations.maker/fuel_type, NULL for two of its three scrape
+    # dimensions -- would never match and so never get deduped). The
+    # SQL-standard fix, IS NOT DISTINCT FROM, is NULL-safe but was confirmed
+    # live to defeat Postgres's hash-join planning for this query entirely:
+    # a dedup check on maker_category_totals (~3M rows, already holding zero
+    # duplicates) went from an instant no-op to still running after 27+
+    # minutes -- a nested-loop-shaped nearly-quadratic self-join. GROUP BY
+    # sidesteps the problem rather than working around it: it already treats
+    # NULL as one group like any other value, so it's NULL-safe by
+    # construction, and (as a bonus) is plain portable SQL -- unlike the old
+    # `DELETE ... USING`, which is Postgres-only syntax SQLite's grammar
+    # doesn't support at all, this runs correctly on both.
+    group_cols = ", ".join(key_columns)
+    is_sqlite = str(engine.url).startswith("sqlite")
     async with engine.begin() as conn:
-        await conn.execute(text(f"""
-            DELETE FROM {table_name} a
-            USING {table_name} b
-            WHERE a.id < b.id AND {join_cond}
+        # Once the unique index this key is meant to back already exists,
+        # the DB itself guarantees no duplicate can exist -- any insert that
+        # would create one fails outright. Re-scanning the whole table to
+        # re-confirm what the constraint already guarantees is then pure
+        # overhead, not safety: confirmed live, this GROUP BY costs ~3
+        # minutes on registrations' 26M rows, and this function runs on
+        # every startup, not just once. Without this check, "safe to run on
+        # every startup" and "cheap no-op" (this function's own promise
+        # above) stop being true the moment a table gets this large.
+        #
+        # Checked against the catalog directly, not via SQLAlchemy's
+        # `inspect().get_indexes()`: some of these indexes (e.g.
+        # idx_reg_natural_key) wrap nullable columns in COALESCE(...)
+        # expressions rather than using them raw (a plain multi-column
+        # UNIQUE never treats two NULLs as conflicting) -- confirmed live,
+        # SQLAlchemy's Postgres reflection doesn't just report a degraded
+        # `column_names` for an expression-based index, it omits the index
+        # from get_indexes() entirely, so a reflection-based check can never
+        # find it and this would silently stop short-circuiting for exactly
+        # the tables that need it most.
+        if unique_index_name is not None:
+            if is_sqlite:
+                exists = (await conn.execute(
+                    text("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = :name"),
+                    {"name": unique_index_name},
+                )).scalar()
+            else:
+                exists = (await conn.execute(
+                    text("SELECT 1 FROM pg_indexes WHERE tablename = :table AND indexname = :name"),
+                    {"table": table_name, "name": unique_index_name},
+                )).scalar()
+            if exists:
+                return
+        if not is_sqlite:
+            # Confirmed live: this server's default work_mem (4MB) forces the
+            # GROUP BY below to spill its hash table to disk on a
+            # multi-million-row table, turning the same "instant no-op"
+            # query into 28+ minutes of disk I/O. SET LOCAL only affects
+            # this one transaction -- reverted automatically on
+            # commit/rollback, no lasting change to the server's actual
+            # configuration.
+            await conn.execute(text("SET LOCAL work_mem = '256MB'"))
+        logger.info("Checking %s for duplicate rows (key: %s)...", table_name, group_cols)
+        t0 = time.monotonic()
+        result = await conn.execute(text(f"""
+            DELETE FROM {table_name}
+            WHERE id NOT IN (SELECT MAX(id) FROM {table_name} GROUP BY {group_cols})
         """))
+        elapsed = time.monotonic() - t0
+        if elapsed > 1:
+            logger.info("  %s: removed %d duplicate row(s) in %.1fs", table_name, result.rowcount, elapsed)
 
 
 def _sql_literal(value: str) -> str:

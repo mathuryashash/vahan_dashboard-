@@ -9,7 +9,7 @@ higher chance of tripping its bot detection. Fully resumable: interrupting
 and re-running just resumes mid-year (per-RTO tracking, see
 run_full_scrape._already_done_rtos) or moves to the next year in the list.
 
-Usage: python -m scraper.backfill_all_years [--start-year 2025] [--end-year 2003] [--concurrent-states N]
+Usage: python -m scraper.backfill_all_years [--start-year <current year>] [--end-year 2003] [--concurrent-states N]
 """
 import argparse
 import asyncio
@@ -72,7 +72,7 @@ async def main(start_year: int, end_year: int, concurrent_states: int = CONCURRE
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--start-year", type=int, default=2025)
+    parser.add_argument("--start-year", type=int, default=datetime.now().year)
     parser.add_argument("--end-year", type=int, default=2003)
     parser.add_argument("--concurrent-states", type=int, default=1, help="Number of states to scrape in parallel per dimension (default: 1)")
     parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data, instead of only resuming an interrupted run")

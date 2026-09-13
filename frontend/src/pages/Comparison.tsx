@@ -132,7 +132,7 @@ export function ComparisonPage() {
           { label: 'State B', value: stateB, setter: setStateB, color: colorB },
           { label: 'States Active', value: `${stateOptions.length || 0} / 36`, setter: () => {}, color: 'var(--success)' }
         ].map((s, i) => (
-          <div key={i} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
+          <div key={s.label} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
             <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">{s.label}</p>
             {i < 2 ? (
               stateOptions.length === 0 ? (
@@ -173,6 +173,10 @@ export function ComparisonPage() {
           label: stateA, total: totalA, color: colorA,
         }, {
           label: stateB, total: totalB, color: colorB,
+        // index key is correct here (not the same-pattern bug as pieData/
+        // chartData lists elsewhere): this is a fixed 2-slot A/B pair, not a
+        // reorderable list, and card.label is the *selected state name* --
+        // colliding when a user picks the same state for both A and B.
         }].map((card, i) => (
           <div key={i} className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5">
             <div className="flex items-center gap-3 mb-3">

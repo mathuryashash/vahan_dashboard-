@@ -44,6 +44,13 @@ async def main() -> None:
                     logger.info("Persisted %d rows from %r", len(rows), release["title"])
                 except Exception as exc:
                     logger.error("Failed processing %r: %s", release["title"], exc)
+                    # Without this, a DB-level failure (e.g. the
+                    # oem_monthly_sales natural-key constraint) leaves this
+                    # shared session's transaction aborted -- every
+                    # subsequent release in this loop would then also fail
+                    # (PendingRollbackError), each one misreported as its own
+                    # unrelated failure.
+                    await db.rollback()
                 finally:
                     await asyncio.sleep(REQUEST_DELAY_SECONDS)
 

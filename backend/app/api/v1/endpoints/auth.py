@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import create_access_token, get_current_user, verify_password
+from app.core.auth import ACCESS_TOKEN_COOKIE, create_access_token, get_current_user, verify_password
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import login_rate_limiter
 from app.models.models import User
@@ -13,7 +14,10 @@ router = APIRouter()
 
 
 @router.post("/login")
-async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+async def login(
+    request: Request, response: Response,
+    form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db),
+):
     """OAuth2PasswordRequestForm expects `username` + `password` fields
     (standard OAuth2 field names) -- `username` is the user's email here,
     there's no separate username concept."""
@@ -37,9 +41,21 @@ async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = 
     await db.commit()
 
     token = create_access_token(user.id, user.role)
+    # httpOnly: JS can never read this, closing the XSS-can-steal-the-token
+    # gap a token returned in the JSON body (and stashed in localStorage by
+    # the frontend) had. secure is derived from the live request rather than
+    # a settings flag -- correct behind both plain-HTTP local dev and an
+    # HTTPS deployment with zero config to keep in sync between them.
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        value=token,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=settings.JWT_EXPIRE_MINUTES * 60,
+        path="/",
+    )
     return {
-        "access_token": token,
-        "token_type": "bearer",
         "role": user.role,
         "email": user.email,
         "full_name": user.full_name,
@@ -49,6 +65,15 @@ async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = 
         "scope_rto_code": user.scope_rto_code,
         "scope_rto_name": user.scope_rto_name,
     }
+
+
+@router.post("/logout")
+async def logout(response: Response):
+    # JS can't delete an httpOnly cookie itself -- this is the only way to
+    # actually clear it. Same path as the login cookie; a mismatched path
+    # would leave the browser holding the old cookie forever.
+    response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
+    return {"ok": True}
 
 
 @router.get("/me")

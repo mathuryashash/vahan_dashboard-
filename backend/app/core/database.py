@@ -83,9 +83,27 @@ async def init_db():
     # already exist (confirmed live: 31,620 of them on
     # maker_category_totals, silently double-counted into every SUM(count)
     # that read them -- see ensure_no_duplicate_rows' own docstring).
-    await ensure_no_duplicate_rows(engine, "maker_category_totals", ["rto_code", "year", "maker", "vehicle_class"])
-    await ensure_no_duplicate_rows(engine, "fuel_category_totals", ["rto_code", "year", "fuel_type", "vehicle_class"])
-    await ensure_no_duplicate_rows(engine, "maker_fuel_totals", ["rto_code", "year", "maker", "fuel_type"])
+    await ensure_no_duplicate_rows(
+        engine, "maker_category_totals", ["rto_code", "year", "maker", "vehicle_class"],
+        unique_index_name="idx_mct_natural_key",
+    )
+    await ensure_no_duplicate_rows(
+        engine, "fuel_category_totals", ["rto_code", "year", "fuel_type", "vehicle_class"],
+        unique_index_name="idx_fct_natural_key",
+    )
+    await ensure_no_duplicate_rows(
+        engine, "maker_fuel_totals", ["rto_code", "year", "maker", "fuel_type"],
+        unique_index_name="idx_mft_natural_key",
+    )
+    await ensure_no_duplicate_rows(
+        engine, "registrations",
+        ["rto_code", "year", "month", "is_supplementary", "vehicle_class", "maker", "fuel_type"],
+        unique_index_name="idx_reg_natural_key",
+    )
+    await ensure_no_duplicate_rows(
+        engine, "oem_monthly_sales", ["source", "year", "month", "category", "maker"],
+        unique_index_name="idx_oem_sales_natural_key",
+    )
     await ensure_indexes(engine, Base.metadata)
     await ensure_vehicle_category_backfilled(engine)
     await ensure_analyzed(engine, list(Base.metadata.tables))

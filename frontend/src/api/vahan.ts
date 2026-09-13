@@ -1,27 +1,21 @@
 import axios from 'axios';
-import { getStoredAuth, setStoredAuth } from './auth';
 
+// The session lives in an httpOnly cookie (see api/auth.ts) -- withCredentials
+// makes the browser attach it automatically; there's no token for JS to read
+// or attach as a header anymore.
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
+  withCredentials: true,
 });
 
-api.interceptors.request.use((config) => {
-  const auth = getStoredAuth();
-  if (auth) {
-    config.headers.Authorization = `Bearer ${auth.access_token}`;
-  }
-  return config;
-});
-
-// A rejected/expired token means every subsequent call would also 401 --
-// clear it and reload so App.tsx's auth check falls back to the login page,
-// instead of every widget on the page silently failing one by one.
+// A rejected/expired session means every subsequent call would also 401 --
+// reload so App.tsx's auth check (GET /auth/me) falls back to the login
+// page, instead of every widget on the page silently failing one by one.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      setStoredAuth(null);
       window.location.reload();
     }
     return Promise.reject(error);

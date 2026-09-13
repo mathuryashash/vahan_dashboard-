@@ -19,13 +19,20 @@ const RtoAnalysisPage = lazy(() => import('./pages/RtoAnalysis').then((m) => ({ 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
 import { useScrapeProgress } from './hooks/useIsLiveData';
-import { getStoredAuth, logout } from './api/auth';
+import { fetchCurrentUser, logout } from './api/auth';
 import type { AuthUser } from './api/auth';
 import { AuthContext } from './contexts/AuthContext';
 
 export default function App() {
-  const [auth, setAuth] = useState<AuthUser | null>(getStoredAuth());
+  // undefined = still checking the httpOnly session cookie via GET /me;
+  // null = confirmed logged out. Can't know synchronously anymore since the
+  // token itself is never readable from JS (see api/auth.ts).
+  const [auth, setAuth] = useState<AuthUser | null | undefined>(undefined);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    fetchCurrentUser().then(setAuth);
+  }, []);
 
   // Overview ("/") is the one page every post-login visit hits immediately --
   // prefetching its chunk during idle time (works whether auth is already
@@ -48,12 +55,15 @@ export default function App() {
 
   const { data: scrapeProgress } = useScrapeProgress(!!auth);
 
-  if (!auth) {
+  if (auth === undefined) {
+    return <div className="h-screen flex items-center justify-center bg-[var(--bg-app)]" />;
+  }
+  if (auth === null) {
     return <LoginPage onLogin={setAuth} />;
   }
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     queryClient.clear();
     setAuth(null);
   };

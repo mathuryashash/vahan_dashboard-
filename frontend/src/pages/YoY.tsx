@@ -245,7 +245,7 @@ export function YoYPage() {
             const delta = b - a;
             const pct = Number(d.growth) || 0;
             return (
-              <div key={i} className="grid grid-cols-6 gap-3 items-center px-1 py-1.5 rounded-lg hover:bg-[var(--bg-card-hover)] transition-colors">
+              <div key={d.name} className="grid grid-cols-6 gap-3 items-center px-1 py-1.5 rounded-lg hover:bg-[var(--bg-card-hover)] transition-colors">
                 <span className="text-xs font-mono text-[var(--text-secondary)] font-semibold">{d.name}</span>
                 <span className="font-mono text-xs text-[var(--text-muted)]">{a.toLocaleString('en-IN')}</span>
                 <span className="font-mono text-xs font-semibold" style={{ color: colorB }}>{b.toLocaleString('en-IN')}</span>

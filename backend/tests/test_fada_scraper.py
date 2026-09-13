@@ -1,6 +1,100 @@
 import pathlib
 
+import pytest
+
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+
+class _FakeResponse:
+    def __init__(self, text: str):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeClient:
+    """Minimal stand-in for httpx.AsyncClient -- discover_releases only ever
+    calls `await client.get(url, params={"page": n})` and reads `.text`."""
+    def __init__(self, page_html: dict[int, str]):
+        self._page_html = page_html
+
+    async def get(self, url, params=None):
+        return _FakeResponse(self._page_html.get(params["page"], ""))
+
+
+async def test_discover_releases_raises_when_page_one_is_empty():
+    # The archive can never genuinely be empty on page 1 -- this must mean
+    # fada.in's markup changed, not "nothing published yet". Regression test
+    # for the silent-failure bug: this used to return [] with only an INFO
+    # log, indistinguishable from a real empty result.
+    from scraper.fada_scraper import discover_releases
+
+    client = _FakeClient({1: "<html><body>no entries here</body></html>"})
+    with pytest.raises(RuntimeError, match="page 1"):
+        await discover_releases(client)
+
+
+async def test_persist_oem_sales_duplicate_is_recoverable_after_rollback(db_session):
+    """Regression test for the run_fada_scheduler_loop/backfill_fada.py fix:
+    once oem_monthly_sales has a natural-key unique constraint, a PDF that
+    parses a duplicate row for the same period/maker collides at commit
+    time. Without a rollback in the caller's except block, that leaves the
+    shared session's transaction aborted -- every subsequent release in the
+    same loop would then also fail (PendingRollbackError), never getting a
+    FadaScrapeAttempt row, so it's re-fetched and re-parsed forever."""
+    from sqlalchemy.exc import IntegrityError
+
+    from scraper.fada_scraper import persist_oem_sales
+
+    dupe_rows = [
+        {"category": "PV", "maker": "TOYOTA", "year": 2026, "month": 6, "count": 100, "share_percent": 10.0},
+        {"category": "PV", "maker": "TOYOTA", "year": 2026, "month": 6, "count": 100, "share_percent": 10.0},
+    ]
+    with pytest.raises(IntegrityError):
+        await persist_oem_sales(db_session, dupe_rows, source="FADA", source_document="release-1")
+        await db_session.commit()
+
+    await db_session.rollback()
+
+    other_row = {"category": "PV", "maker": "HONDA", "year": 2026, "month": 6, "count": 50, "share_percent": 5.0}
+    await persist_oem_sales(db_session, [other_row], source="FADA", source_document="release-2")
+    await db_session.commit()  # must not raise -- the rollback above must have fully cleared the aborted transaction
+
+
+def _fake_archive_page(n: int) -> str:
+    """n press-release cards, each a real "Vehicle Retail Data" entry with
+    its own PDF link, matching _ENTRY_RE's actual shape."""
+    from scraper.fada_scraper import _ENTRY_MARKER
+    return "".join(
+        f'{_ENTRY_MARKER}FADA Releases Month{i} Vehicle Retail Data</h3>'
+        f'<a href="release{i}.pdf">link</a>'
+        for i in range(n)
+    )
+
+
+async def test_discover_releases_stops_normally_when_a_later_page_is_empty():
+    # A later page being empty is the real "end of archive" signal and must
+    # NOT raise -- only page 1 being empty/near-empty is anomalous.
+    from scraper.fada_scraper import MIN_EXPECTED_ENTRIES_PAGE_1, discover_releases
+
+    client = _FakeClient({
+        1: _fake_archive_page(MIN_EXPECTED_ENTRIES_PAGE_1),
+        2: "<html><body>no entries here</body></html>",
+    })
+    releases = await discover_releases(client)
+    assert len(releases) == MIN_EXPECTED_ENTRIES_PAGE_1
+
+
+async def test_discover_releases_raises_when_page_one_is_near_empty_not_just_zero():
+    # A narrower markup drift (most, not all, cards stop matching) must be
+    # caught too -- a strict "!= 0" check would silently accept this as
+    # "just a quiet month" instead of "fada.in's markup is drifting".
+    from scraper.fada_scraper import MIN_EXPECTED_ENTRIES_PAGE_1, discover_releases
+
+    client = _FakeClient({1: _fake_archive_page(MIN_EXPECTED_ENTRIES_PAGE_1 - 1)})
+    with pytest.raises(RuntimeError, match="page 1"):
+        await discover_releases(client)
 
 
 def test_parse_release_list_page_filters_to_vehicle_retail_data_only():

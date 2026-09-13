@@ -235,6 +235,108 @@ async def test_ensure_no_duplicate_rows_is_idempotent():
     await engine.dispose()
 
 
+async def test_ensure_no_duplicate_rows_handles_null_key_columns():
+    # registrations.maker/fuel_type are NULL for 2 of its 3 scrape dimensions
+    # -- plain `=` never matches NULL against NULL, so a naive self-join
+    # would silently fail to dedupe exactly these rows. Regression test for
+    # that NULL-unsafe join bug.
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, rto_code TEXT, year INT, maker TEXT)"
+        ))
+        # Two exact duplicates with maker NULL, plus one unrelated non-NULL row.
+        await conn.execute(text(
+            f"INSERT INTO {table_name} (rto_code, year, maker) VALUES "
+            f"('DL1', 2026, NULL), ('DL1', 2026, NULL), ('DL1', 2026, 'HONDA')"
+        ))
+
+    await ensure_no_duplicate_rows(engine, table_name, ["rto_code", "year", "maker"])
+
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text(f"SELECT rto_code, maker FROM {table_name} ORDER BY maker NULLS FIRST"))).all()
+    assert rows == [("DL1", None), ("DL1", "HONDA")]
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_ensure_no_duplicate_rows_skips_the_scan_once_the_unique_index_exists():
+    # Once a unique index on exactly `key_columns` exists, the DB itself
+    # already guarantees no duplicate can exist -- re-scanning the whole
+    # table on every startup to re-confirm that is pure overhead (confirmed
+    # live: ~3 minutes on registrations' 26M rows). This must short-circuit
+    # instead of running the GROUP BY at all.
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, rto_code TEXT, year INT)"
+        ))
+        await conn.execute(text(f"INSERT INTO {table_name} (rto_code, year) VALUES ('DL1', 2026)"))
+        await conn.execute(text(
+            f"CREATE UNIQUE INDEX {table_name}_natural_key ON {table_name} (rto_code, year)"
+        ))
+
+    original_execute = AsyncConnection.execute
+    saw_group_by = False
+
+    async def spying_execute(self, statement, *args, **kwargs):
+        nonlocal saw_group_by
+        if "GROUP BY" in str(statement):
+            saw_group_by = True
+        return await original_execute(self, statement, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(AsyncConnection, "execute", spying_execute)
+        await ensure_no_duplicate_rows(
+            engine, table_name, ["rto_code", "year"], unique_index_name=f"{table_name}_natural_key",
+        )
+
+    assert not saw_group_by, "should have returned early instead of running the dedup query"
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_coalesce_expression_index_rejects_null_key_duplicates():
+    # Regression test for the bug this technique fixes: a plain multi-column
+    # UNIQUE index never treats two NULLs as conflicting, so
+    # Index("...", "rto_code", "maker", unique=True) would accept unlimited
+    # duplicate rows wherever maker is NULL (exactly the shape of
+    # idx_reg_natural_key/idx_oem_sales_natural_key in models.py). Wrapping
+    # the nullable column in COALESCE(...) inside the index, as those two
+    # indexes do, must make it a real constraint again.
+    from sqlalchemy.exc import IntegrityError
+
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE {table_name} (id SERIAL PRIMARY KEY, rto_code TEXT, maker TEXT)"))
+        await conn.execute(text(
+            f"CREATE UNIQUE INDEX {table_name}_key ON {table_name} (rto_code, COALESCE(maker, ''))"
+        ))
+        await conn.execute(text(f"INSERT INTO {table_name} (rto_code, maker) VALUES ('DL1', NULL)"))
+
+    # A failed statement aborts its own transaction at the DB level -- each
+    # attempt needs its own engine.begin() rather than continuing to use a
+    # connection whose transaction already failed.
+    with pytest.raises(IntegrityError):
+        async with engine.begin() as conn:
+            await conn.execute(text(f"INSERT INTO {table_name} (rto_code, maker) VALUES ('DL1', NULL)"))
+
+    # A genuinely different row (different rto_code) must still be allowed.
+    async with engine.begin() as conn:
+        await conn.execute(text(f"INSERT INTO {table_name} (rto_code, maker) VALUES ('UP1', NULL)"))
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
 async def test_ensure_no_duplicate_rows_rejects_invalid_identifiers():
     engine = create_async_engine(TEST_DATABASE_URL, future=True)
     with pytest.raises(ValueError):

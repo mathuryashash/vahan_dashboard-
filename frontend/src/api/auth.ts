@@ -1,8 +1,6 @@
 import axios from 'axios';
 
 export interface AuthUser {
-  access_token: string;
-  token_type: string;
   role: 'admin' | 'analyst' | 'viewer';
   email: string;
   full_name: string | null;
@@ -13,22 +11,17 @@ export interface AuthUser {
   scope_rto_name: string | null;
 }
 
-const STORAGE_KEY = 'vahan_auth';
-
-export function getStoredAuth(): AuthUser | null {
+// The JWT itself lives only in an httpOnly cookie the backend sets on login
+// (see auth.py) -- JS never sees or stores it, closing the XSS-can-steal-
+// the-token gap a localStorage-held token had. Session state is rehydrated
+// by asking the backend (the cookie, if any, goes along automatically),
+// not by reading anything client-side.
+export async function fetchCurrentUser(): Promise<AuthUser | null> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
+    const { data } = await axios.get<AuthUser>('/api/v1/auth/me', { withCredentials: true });
+    return data;
   } catch {
     return null;
-  }
-}
-
-export function setStoredAuth(auth: AuthUser | null) {
-  if (auth) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(auth));
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
   }
 }
 
@@ -37,11 +30,12 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   const body = new URLSearchParams({ username: email, password });
   const { data } = await axios.post<AuthUser>('/api/v1/auth/login', body, {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    withCredentials: true,
   });
-  setStoredAuth(data);
   return data;
 }
 
-export function logout() {
-  setStoredAuth(null);
+export async function logout(): Promise<void> {
+  // JS can't delete an httpOnly cookie itself -- only the backend can.
+  await axios.post('/api/v1/auth/logout', null, { withCredentials: true }).catch(() => {});
 }

@@ -161,7 +161,7 @@ export function CategoryDetailPage() {
                 const share = totalFuelCount > 0 ? ((f.count / totalFuelCount) * 100).toFixed(1) : '0.0';
                 const color = chart.seriesColor(f.fuel_type);
                 return (
-                  <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all hover:scale-105" style={{ backgroundColor: `${color}18`, borderColor: `${color}40` }}>
+                  <div key={f.fuel_type} className="flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all hover:scale-105" style={{ backgroundColor: `${color}18`, borderColor: `${color}40` }}>
                     <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: color }} />
                     <span className="text-[11px] font-semibold" style={{ color }}>{f.fuel_type}</span>
                     <span className="font-mono text-[10px] text-[var(--text-muted)]">{f.count?.toLocaleString('en-IN')}</span>

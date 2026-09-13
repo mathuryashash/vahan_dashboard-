@@ -31,8 +31,8 @@ async def test_login_with_correct_credentials_returns_a_token(client, db_session
     assert response.status_code == 200
     data = response.json()
     assert data["role"] == UserRole.ADMIN
-    assert data["token_type"] == "bearer"
-    assert data["access_token"]
+    assert "access_token" not in data  # issued as an httpOnly cookie, not in the body
+    assert response.cookies.get("access_token")
 
 
 async def test_login_with_wrong_password_is_rejected(client, db_session):
@@ -66,16 +66,34 @@ async def test_protected_endpoint_accepts_a_real_token(client, db_session):
     await _seed_user(db_session, email="analyst@example.com", password="pw123456", role=UserRole.ANALYST)
     del app.dependency_overrides[get_current_user]
     try:
-        login = await client.post(
+        await client.post(
             "/api/v1/auth/login", data={"username": "analyst@example.com", "password": "pw123456"}
         )
-        token = login.json()["access_token"]
-
-        response = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        # No manual header needed -- the AsyncClient fixture persists the
+        # Set-Cookie from login and resends it automatically, same as a
+        # real browser would.
+        response = await client.get("/api/v1/auth/me")
         assert response.status_code == 200
         data = response.json()
         assert data["email"] == "analyst@example.com"
         assert data["role"] == UserRole.ANALYST
+    finally:
+        _restore_admin_override()
+
+
+async def test_logout_clears_the_session_cookie(client, db_session):
+    await _seed_user(db_session, email="logout@example.com", password="pw123456")
+    del app.dependency_overrides[get_current_user]
+    try:
+        await client.post(
+            "/api/v1/auth/login", data={"username": "logout@example.com", "password": "pw123456"}
+        )
+        assert (await client.get("/api/v1/auth/me")).status_code == 200
+
+        logout_response = await client.post("/api/v1/auth/logout")
+        assert logout_response.status_code == 200
+
+        assert (await client.get("/api/v1/auth/me")).status_code == 401
     finally:
         _restore_admin_override()
 
@@ -86,12 +104,10 @@ async def test_admin_only_endpoint_rejects_a_viewer_token(client, db_session):
     await _seed_user(db_session, email="viewer@example.com", password="pw123456", role=UserRole.VIEWER)
     del app.dependency_overrides[get_current_user]
     try:
-        login = await client.post(
+        await client.post(
             "/api/v1/auth/login", data={"username": "viewer@example.com", "password": "pw123456"}
         )
-        token = login.json()["access_token"]
-
-        response = await client.get("/api/v1/users/", headers={"Authorization": f"Bearer {token}"})
+        response = await client.get("/api/v1/users/")
         assert response.status_code == 403
     finally:
         _restore_admin_override()
