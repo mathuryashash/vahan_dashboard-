@@ -76,6 +76,34 @@ async def ensure_indexes(engine: AsyncEngine, metadata) -> None:
         logger.info("Index check complete.")
 
 
+async def ensure_bigint_id(engine: AsyncEngine, table_name: str) -> None:
+    """Widen `id` from int4 to int8 if it's still the narrower type.
+
+    SQLite-only concern in reverse: skipped there entirely, since SQLite's
+    INTEGER PRIMARY KEY is always a 64-bit rowid alias regardless of the
+    declared type name -- there's nothing to widen. On Postgres, a fresh
+    install already gets bigint straight from the model (Base.metadata.
+    create_all has nothing to migrate), so this only ever does real work
+    once, on a deployment that predates the model's own type change --
+    every run after that is a single fast catalog lookup.
+    """
+    if not _IDENTIFIER_RE.match(table_name):
+        raise ValueError(f"Invalid table name: {table_name!r}")
+    if str(engine.url).startswith("sqlite"):
+        return
+    async with engine.begin() as conn:
+        current_type = (await conn.execute(
+            text("SELECT data_type FROM information_schema.columns WHERE table_name = :t AND column_name = 'id'"),
+            {"t": table_name},
+        )).scalar()
+        if current_type != "integer":
+            return
+        logger.info("Widening %s.id from integer to bigint (rewrites the table, can take a while on a large one)...", table_name)
+        t0 = time.monotonic()
+        await conn.execute(text(f"ALTER TABLE {table_name} ALTER COLUMN id TYPE BIGINT"))
+        logger.info("  %s.id widened to bigint in %.1fs", table_name, time.monotonic() - t0)
+
+
 async def drop_orphaned_indexes(engine: AsyncEngine, index_names: list[str]) -> None:
     """Drop indexes that no longer appear in any model's __table_args__.
 

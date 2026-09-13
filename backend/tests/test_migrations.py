@@ -302,6 +302,37 @@ async def test_ensure_no_duplicate_rows_skips_the_scan_once_the_unique_index_exi
     await engine.dispose()
 
 
+async def test_ensure_bigint_id_widens_integer_column_and_is_idempotent():
+    from app.core.migrations import ensure_bigint_id
+
+    table_name = _table_name()
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE {table_name} (id INTEGER PRIMARY KEY, val TEXT)"))
+
+    await ensure_bigint_id(engine, table_name)
+    async with engine.connect() as conn:
+        col_type = (await conn.execute(text(
+            "SELECT data_type FROM information_schema.columns WHERE table_name = :t AND column_name = 'id'"
+        ), {"t": table_name})).scalar()
+    assert col_type == "bigint"
+
+    await ensure_bigint_id(engine, table_name)  # idempotent -- must not raise on an already-bigint column
+
+    async with engine.begin() as conn:
+        await conn.execute(text(f"DROP TABLE {table_name}"))
+    await engine.dispose()
+
+
+async def test_ensure_bigint_id_rejects_invalid_identifier():
+    from app.core.migrations import ensure_bigint_id
+
+    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    with pytest.raises(ValueError):
+        await ensure_bigint_id(engine, "registrations; DROP TABLE registrations")
+    await engine.dispose()
+
+
 async def test_coalesce_expression_index_rejects_null_key_duplicates():
     # Regression test for the bug this technique fixes: a plain multi-column
     # UNIQUE index never treats two NULLs as conflicting, so

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Boolean, Index, text
+from sqlalchemy import BigInteger, Column, Integer, String, Float, Date, DateTime, Boolean, Index, text
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -44,7 +44,13 @@ class RTODistrict(Base):
 class Registration(Base):
     __tablename__ = "registrations"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    # BigInteger, not Integer: this table's own delete-then-insert write
+    # pattern burns a fresh id on every scrape/backfill rewrite, not just on
+    # net row growth -- max(id) was already 80.6M against ~21.6M live rows
+    # when checked. Free to set correctly now; a live ALTER on this table
+    # once it's actually approaching Integer's ~2.1B ceiling would cost far
+    # more than this one-line change does today.
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     state_code = Column(String(5), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), nullable=True)
@@ -146,7 +152,9 @@ class MakerCategoryTotal(Base):
     dimension."""
     __tablename__ = "maker_category_totals"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    # BigInteger -- see Registration.id's comment; same delete-then-insert
+    # write pattern burns ids on every rewrite, not just net growth.
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     state_code = Column(String(5), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), nullable=True)
@@ -193,7 +201,8 @@ class FuelCategoryTotal(Base):
     never both)."""
     __tablename__ = "fuel_category_totals"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    # BigInteger -- see Registration.id's comment.
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     state_code = Column(String(5), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), nullable=True)
@@ -232,7 +241,8 @@ class MakerFuelTotal(Base):
     ICE/Hybrid/EV at query time via fuel_group(), same as FuelCategoryTotal."""
     __tablename__ = "maker_fuel_totals"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    # BigInteger -- see Registration.id's comment.
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     state_code = Column(String(5), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), nullable=True)

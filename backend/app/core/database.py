@@ -60,7 +60,7 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     from app.core.migrations import (
-        drop_orphaned_indexes, ensure_analyzed, ensure_columns, ensure_indexes,
+        drop_orphaned_indexes, ensure_analyzed, ensure_bigint_id, ensure_columns, ensure_indexes,
         ensure_no_duplicate_rows, ensure_vehicle_category_backfilled,
     )
     await ensure_columns(engine, {
@@ -71,6 +71,13 @@ async def init_db():
             "commercial_tier": "VARCHAR(15)",
         },
     })
+    # The 4 tables that actually grow at scale (millions of rows, burning
+    # ids on every delete-then-insert rewrite, not just net growth) -- see
+    # Registration.id's comment in models.py. The small reference/lookup
+    # tables (states, rtos, users, ...) stay Integer; there's no realistic
+    # path to 2.1B rows for any of them.
+    for table in ["registrations", "maker_category_totals", "fuel_category_totals", "maker_fuel_totals"]:
+        await ensure_bigint_id(engine, table)
     # Made redundant by a wider index covering the same leading columns, or
     # found to have zero query-side use -- see the removed Index() calls'
     # git history / the comments left in their place in models.py.
