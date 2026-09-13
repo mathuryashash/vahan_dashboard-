@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, engine
+from app.core.scrape_lock import scrape_write_lock
 from app.services.scraper_service import run_scraper
 from scraper.fada_scraper import discover_releases, parse_release_pdf, persist_oem_sales
 from app.core.config import settings
@@ -81,7 +82,9 @@ async def run_fada_scheduler_loop() -> None:
                 follow_redirects=True,
             ) as client:
                 releases = await discover_releases(client)
-                async with AsyncSessionLocal() as db:
+                # Same lock key as backfill_fada.py so a manual backfill run
+                # and this scheduled loop can't overlap on oem_monthly_sales.
+                async with scrape_write_lock(engine, "oem_monthly_sales"), AsyncSessionLocal() as db:
                     from sqlalchemy import select
                     from app.models.models import FadaScrapeAttempt, OEMMonthlySales
 

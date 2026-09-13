@@ -10,7 +10,8 @@ import logging
 
 import httpx
 
-from app.core.database import AsyncSessionLocal, init_db
+from app.core.database import AsyncSessionLocal, engine, init_db
+from app.core.scrape_lock import scrape_write_lock
 from scraper.fada_scraper import discover_releases, parse_release_pdf, persist_oem_sales
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -30,7 +31,10 @@ async def main() -> None:
         releases = await discover_releases(client)
         logger.info("Found %d Vehicle Retail Data releases", len(releases))
 
-        async with AsyncSessionLocal() as db:
+        # Not year-scoped like the registrations/crosstab locks -- FADA
+        # ingestion processes whatever's new archive-wide, not one year at
+        # a time, so the whole table is the right granularity here.
+        async with scrape_write_lock(engine, "oem_monthly_sales"), AsyncSessionLocal() as db:
             for release in releases:
                 try:
                     resp = await client.get(release["pdf_url"])

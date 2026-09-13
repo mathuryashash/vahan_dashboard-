@@ -17,7 +17,8 @@ from typing import Awaitable, Callable
 
 from sqlalchemy import select
 
-from app.core.database import AsyncSessionLocal, init_db
+from app.core.database import AsyncSessionLocal, engine, init_db
+from app.core.scrape_lock import scrape_write_lock
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal
 from app.services.scraper_service import (
     _state_code_lookup, persist_fuel_category_batch, persist_maker_category_batch, persist_maker_fuel_batch,
@@ -65,7 +66,8 @@ async def main(dimension: str, year: int, force: bool = False) -> None:
     logger.info("Starting %s scrape (year=%s, force=%s) at %s", dim.label, year, force, datetime.now(timezone.utc))
     await init_db()
 
-    async with AsyncSessionLocal() as db:
+    lock_key = f"{dim.model.__tablename__}:{year}"
+    async with scrape_write_lock(engine, lock_key), AsyncSessionLocal() as db:
         state_codes = await _state_code_lookup(db)
         skip_rtos = {} if force else await _already_done_rtos(db, dim.model, year)
         if skip_rtos:

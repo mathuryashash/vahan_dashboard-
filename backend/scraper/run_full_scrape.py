@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 
-from app.core.database import AsyncSessionLocal, init_db
+from app.core.database import AsyncSessionLocal, engine, init_db
+from app.core.scrape_lock import scrape_write_lock
 from app.models.models import Registration
 from app.services.scraper_service import persist_rto_batch, _state_code_lookup
 from scraper.vahan_scraper import DIMENSIONS, scrape_all_india
@@ -104,7 +105,7 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
     )
     await init_db()  # ensures is_supplementary column exists; this script doesn't go through app.main's lifespan
 
-    async with AsyncSessionLocal() as db:
+    async with scrape_write_lock(engine, f"registrations:{dimension}:{year}"), AsyncSessionLocal() as db:
         state_codes = await _state_code_lookup(db)
         # force=True re-scrapes every RTO regardless of existing data -- for
         # refreshing stale numbers, not just resuming an interrupted run.
