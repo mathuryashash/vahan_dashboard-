@@ -6,6 +6,7 @@ from app.core.query_filters import exclude_supplementary
 from app.core.scope import require_rto_code, require_state_code
 from app.core.cache import TTLCache
 from app.models.models import Registration
+from app.schemas.schemas import RtoAnalysis, RtoListItem
 
 router = APIRouter()
 
@@ -29,7 +30,7 @@ def fy_filter(fy_year: int):
     )
 
 
-@router.get("/{state_code}/list")
+@router.get("/{state_code}/list", response_model=list[RtoListItem])
 async def get_rtos_for_state(
     state_code: str = Depends(require_state_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
@@ -62,7 +63,7 @@ async def get_rtos_for_state(
     return response
 
 
-@router.get("/{rto_code}/analysis")
+@router.get("/{rto_code}/analysis", response_model=RtoAnalysis)
 async def get_rto_analysis(
     rto_code: str = Depends(require_rto_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),

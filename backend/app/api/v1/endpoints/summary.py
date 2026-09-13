@@ -8,7 +8,7 @@ from app.core.query_filters import apply_fuel_group_filter, apply_total_filters,
 from app.core.scope import get_effective_state
 from app.core.cache import TTLCache
 from app.models.models import Registration
-from app.schemas.schemas import DashboardKPIs
+from app.schemas.schemas import DashboardKPIs, MonthCount, MonthDetail, StateRankingItem
 from app.core.config import settings
 
 router = APIRouter()
@@ -28,7 +28,7 @@ _available_years_cache: dict = {"years": None, "at": 0.0}
 _AVAILABLE_YEARS_CACHE_TTL_SECONDS = 300
 
 
-@router.get("/available-years")
+@router.get("/available-years", response_model=list[int])
 async def get_available_years(db: AsyncSession = Depends(get_db)):
     """Years that actually have real (non-supplementary) scraped data, newest
     first. The Overview year filter used to hardcode [2024, 2025, 2026]; as
@@ -169,7 +169,7 @@ _TREND_CACHE_TTL_SECONDS = 90
 _trend_cache = TTLCache(_TREND_CACHE_TTL_SECONDS)
 
 
-@router.get("/trend")
+@router.get("/trend", response_model=list[MonthCount])
 async def get_trend(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),
@@ -212,7 +212,7 @@ _STATE_RANKING_CACHE_TTL_SECONDS = 90
 _state_ranking_cache = TTLCache(_STATE_RANKING_CACHE_TTL_SECONDS)
 
 
-@router.get("/state-ranking")
+@router.get("/state-ranking", response_model=list[StateRankingItem])
 async def get_state_ranking(
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
@@ -298,7 +298,7 @@ def _growth_percent(current: float, previous: float | None) -> float | None:
     return round((current - previous) / previous * 100, 2)
 
 
-@router.get("/month-detail")
+@router.get("/month-detail", response_model=MonthDetail)
 async def get_month_detail(
     year: int,
     month: int,

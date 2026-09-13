@@ -4,13 +4,14 @@ from sqlalchemy import select, desc, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.models import OEMMonthlySales, User
+from app.schemas.schemas import OemMakerShare, OemStatus, OemTrendPoint
 
 router = APIRouter()
 
 STALE_AFTER_DAYS = 14
 
 
-@router.get("/status")
+@router.get("/status", response_model=OemStatus)
 async def get_oem_status(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     """When FADA data was last actually ingested, so the frontend can warn
     "this is N days old" instead of silently presenting old numbers as
@@ -46,7 +47,7 @@ async def get_oem_status(db: AsyncSession = Depends(get_db), _user: User = Depen
     }
 
 
-@router.get("/categories")
+@router.get("/categories", response_model=list[str])
 async def get_oem_categories(
     year: int | None = None, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)
 ):
@@ -63,7 +64,7 @@ async def get_oem_categories(
     return [row[0] for row in result.all()]
 
 
-@router.get("/monthly")
+@router.get("/monthly", response_model=list[OemMakerShare])
 async def get_oem_monthly(
     category: str,
     year: int,
@@ -118,7 +119,7 @@ async def get_oem_monthly(
     ]
 
 
-@router.get("/trend")
+@router.get("/trend", response_model=list[OemTrendPoint])
 async def get_oem_trend(
     maker: str,
     category: str,

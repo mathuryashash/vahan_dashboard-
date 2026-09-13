@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import hash_password, require_role
 from app.core.database import get_db
 from app.models.models import User, UserRole, UserScope
+from app.schemas.schemas import UserOut
 
 router = APIRouter()
 
@@ -60,7 +61,7 @@ def _validate_scope(scope_type: str, state_code: str | None, rto_code: str | Non
         raise HTTPException(status_code=400, detail="scope_rto_code is required for rto scope")
 
 
-@router.get("/")
+@router.get("/", response_model=list[UserOut])
 async def list_users(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_role(UserRole.ADMIN)),
@@ -69,7 +70,7 @@ async def list_users(
     return [_serialize(u) for u in result.scalars().all()]
 
 
-@router.post("/")
+@router.post("/", response_model=UserOut)
 async def create_user(
     payload: UserCreate,
     db: AsyncSession = Depends(get_db),
@@ -99,7 +100,7 @@ async def create_user(
     return _serialize(user)
 
 
-@router.patch("/{user_id}")
+@router.patch("/{user_id}", response_model=UserOut)
 async def update_user(
     user_id: int,
     payload: UserUpdate,

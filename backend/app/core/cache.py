@@ -33,7 +33,18 @@ class TTLCache:
         return value
 
     def set(self, key, value) -> None:
-        self._store[key] = (value, time.monotonic())
+        now = time.monotonic()
+        # Opportunistic sweep: without this, _store only ever grows -- an
+        # expired entry whose key is never queried again (a one-off filter
+        # combination, and this cache is explicitly keyed by "expensive,
+        # filter-parameterized" params) sits in memory for the life of the
+        # process. Bounding this to "entries touched within the last
+        # ttl_seconds" instead of "every distinct key ever seen" is what
+        # actually keeps a long-running instance's memory use bounded.
+        expired = [k for k, (_, at) in self._store.items() if now - at >= self.ttl_seconds]
+        for k in expired:
+            del self._store[k]
+        self._store[key] = (value, now)
 
     @classmethod
     def clear_all(cls) -> None:

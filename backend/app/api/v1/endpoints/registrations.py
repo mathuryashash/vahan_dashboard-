@@ -4,11 +4,12 @@ from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.scope import get_effective_state
 from app.models.models import Registration
+from app.schemas.schemas import MonthCount, RegistrationOut
 
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("/", response_model=list[RegistrationOut])
 async def get_registrations(
     state: str | None = Depends(get_effective_state),
     year: int | None = None,
@@ -68,7 +69,7 @@ async def get_registrations(
     ]
 
 
-@router.get("/aggregate/by-month")
+@router.get("/aggregate/by-month", response_model=list[MonthCount])
 async def get_aggregate_by_month(
     year: int, state: str | None = Depends(get_effective_state), db: AsyncSession = Depends(get_db)
 ):

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -78,3 +80,119 @@ class DistrictSchema(BaseModel):
     district_code: str
     district_name: str
     state_code: str
+
+
+class MonthCount(BaseModel):
+    month: int
+    count: int
+
+
+class RegistrationOut(BaseModel):
+    id: int
+    state_code: str
+    state_name: str
+    month: int
+    year: int
+    day: int | None
+    vehicle_class: str
+    count: int
+    maker: str | None
+    vehicle_model: str | None
+    fuel_type: str | None
+
+
+class StateComparisonData(BaseModel):
+    state_a: str
+    state_b: str | None
+    year: int
+    state_a_data: list[MonthCount]
+    state_b_data: list[MonthCount]
+
+
+class StateComparisonRanking(BaseModel):
+    state_name: str
+    count: int
+    share_percent: float
+
+
+class StateRankingItem(BaseModel):
+    state_name: str
+    total_count: int
+    share_percent: float
+
+
+class RtoListItem(BaseModel):
+    rto_code: str
+    rto_name: str
+    total: int
+
+
+class RtoMakerShare(BaseModel):
+    maker: str
+    count: int
+    share_percent: float
+
+
+class RtoAnalysis(BaseModel):
+    rto_code: str
+    rto_name: str | None
+    state_name: str | None
+    year: int
+    total: int
+    avg_monthly: float
+    months_with_data: int
+    makers: list[RtoMakerShare]
+
+
+class CrosstabCoverage(BaseModel):
+    maker_category: list[int]
+    fuel_category: list[int]
+    maker_fuel: list[int]
+
+
+class CrosstabDetail(BaseModel):
+    total: int | None
+    top_state: str | None
+    yoy_growth_percent: float | None
+
+
+class MonthDetail(BaseModel):
+    year: int
+    month: int
+    month_count: int
+    month_yoy_growth_percent: float | None
+    ytd_count: int
+    ytd_yoy_growth_percent: float | None
+
+
+class OemStatus(BaseModel):
+    last_ingested_at: str | None
+    days_stale: int | None
+    is_stale: bool
+
+
+class OemMakerShare(BaseModel):
+    maker: str
+    count: int
+    share_percent: float | None
+
+
+class OemTrendPoint(BaseModel):
+    year: int
+    month: int | None
+    count: int
+    share_percent: float | None
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    full_name: str | None
+    role: str
+    is_active: bool
+    last_login_at: datetime | None
+    scope_type: str
+    scope_state_code: str | None
+    scope_state_name: str | None
+    scope_rto_code: str | None
+    scope_rto_name: str | None

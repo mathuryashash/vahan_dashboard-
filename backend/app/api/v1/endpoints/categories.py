@@ -8,6 +8,7 @@ from app.core.query_filters import apply_common_filters, fuel_category, fuel_gro
 from app.core.scope import get_effective_state
 from app.core.cache import TTLCache
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
+from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
 
 router = APIRouter()
 
@@ -30,7 +31,7 @@ _maker_fuel_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
 _crosstab_detail_cache = TTLCache(_CACHE_TTL_SECONDS)
 
 
-@router.get("/crosstab-coverage")
+@router.get("/crosstab-coverage", response_model=CrosstabCoverage)
 async def get_crosstab_coverage(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     """Which years each of the 3 crosstabs (Maker x Category, Fuel x
     Category, Maker x Fuel) actually has ANY data for -- distinct from
@@ -414,7 +415,7 @@ async def get_maker_fuel_breakdown(
     return response
 
 
-@router.get("/crosstab-detail")
+@router.get("/crosstab-detail", response_model=CrosstabDetail)
 async def get_crosstab_detail(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),

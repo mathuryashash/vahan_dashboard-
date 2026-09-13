@@ -8,6 +8,7 @@ from app.core.query_filters import apply_fuel_group_filter, apply_total_filters
 from app.core.scope import enforce_state
 from app.core.cache import TTLCache
 from app.models.models import Registration, User, UserScope
+from app.schemas.schemas import StateComparisonData, StateComparisonRanking
 
 router = APIRouter()
 
@@ -23,7 +24,7 @@ _ALL_STATES_CACHE_TTL_SECONDS = 90
 _all_states_cache = TTLCache(_ALL_STATES_CACHE_TTL_SECONDS)
 
 
-@router.get("/states")
+@router.get("/states", response_model=StateComparisonData)
 async def compare_states(
     state_a: str,
     state_b: str | None = None,
@@ -73,7 +74,7 @@ async def compare_states(
     }
 
 
-@router.get("/all-states")
+@router.get("/all-states", response_model=list[StateComparisonRanking])
 async def get_all_states_comparison(
     year: int = _DEFAULT_YEAR,
     limit: int = 36,
