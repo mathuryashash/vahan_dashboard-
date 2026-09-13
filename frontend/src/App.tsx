@@ -19,6 +19,7 @@ const RtoAnalysisPage = lazy(() => import('./pages/RtoAnalysis').then((m) => ({ 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
 import { useScrapeProgress } from './hooks/useIsLiveData';
+import { useUrlSyncedFilters } from './hooks/useUrlSyncedFilters';
 import { fetchCurrentUser, logout } from './api/auth';
 import type { AuthUser } from './api/auth';
 import { AuthContext } from './contexts/AuthContext';
@@ -33,6 +34,11 @@ export default function App() {
   useEffect(() => {
     fetchCurrentUser().then(setAuth);
   }, []);
+
+  // Called unconditionally (Rules of Hooks) even though its effect is only
+  // meaningful once auth resolves and the filter bar renders -- see its own
+  // docstring for why this needs to live at the app root, not per-page.
+  useUrlSyncedFilters();
 
   // Overview ("/") is the one page every post-login visit hits immediately --
   // prefetching its chunk during idle time (works whether auth is already
