@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.auth import get_current_user
@@ -13,6 +13,25 @@ from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
 router = APIRouter()
 
 _DEFAULT_YEAR = datetime.now().year
+
+
+def _reject_crosstab_incompatible_filters(**params: str | int | None) -> None:
+    """MakerCategoryTotal/FuelCategoryTotal have no month or maker column
+    (year-only pairwise crosstabs -- see their docstrings). Silently
+    dropping month/maker/vehicle_model once a category filter is picked
+    used to return a real-looking but wrong-scope answer with no signal to
+    the caller (e.g. a full-year, all-makers total for a request that
+    asked for one maker in one month) -- confirmed live. Reject instead."""
+    bad = [name for name, value in params.items() if value]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{'/'.join(bad)} not supported together with vehicle_class/vehicle_category/"
+                f"commercial_tier -- that combination has no month/maker breakdown in the source "
+                f"data. Drop {'/'.join(bad)}, or use the frontend's Maker x Category x Fuel estimate."
+            ),
+        )
 
 # Every endpoint below is fired on Overview/Makers/Categories page load and
 # sums over either the 26M+ row Registration table or the multi-million-row
@@ -171,6 +190,7 @@ async def get_top_makers(
     # the dedicated crosstab built for exactly this (year-only, no month --
     # see docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md).
     if vehicle_class or vehicle_category or commercial_tier:
+        _reject_crosstab_incompatible_filters(month=month, vehicle_model=vehicle_model)
         cross_query = select(
             MakerCategoryTotal.maker, func.sum(MakerCategoryTotal.count).label("total")
         ).where(MakerCategoryTotal.year == year)
@@ -229,6 +249,7 @@ async def get_fuel_breakdown(
     # for every category (found by live click-through QA). FuelCategoryTotal
     # is the dedicated crosstab for exactly this (year-only, no month).
     if vehicle_class or vehicle_category or commercial_tier:
+        _reject_crosstab_incompatible_filters(month=month, maker=maker, vehicle_model=vehicle_model)
         cross_query = select(
             FuelCategoryTotal.fuel_type, func.sum(FuelCategoryTotal.count).label("total")
         ).where(FuelCategoryTotal.year == year)

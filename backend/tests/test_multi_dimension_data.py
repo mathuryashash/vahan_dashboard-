@@ -233,6 +233,33 @@ async def test_fuel_breakdown_filters_by_fuel_group(client, db_session):
     assert rows == {"EV": 10}
 
 
+async def test_fuel_breakdown_rejects_month_or_maker_with_category(client, db_session):
+    # FuelCategoryTotal (used once vehicle_category is set) has no month or
+    # maker column -- used to silently drop both and return a real-looking
+    # but wrong-scope (full-year, all-makers) answer instead of erroring.
+    response = await client.get(
+        "/api/v1/categories/fuel-breakdown",
+        params={"year": 2026, "month": 1, "vehicle_category": "Four-Wheeler"},
+    )
+    assert response.status_code == 400
+
+    response = await client.get(
+        "/api/v1/categories/fuel-breakdown",
+        params={"year": 2026, "maker": "HONDA", "vehicle_category": "Four-Wheeler"},
+    )
+    assert response.status_code == 400
+
+
+async def test_top_makers_rejects_month_with_category(client, db_session):
+    # MakerCategoryTotal (used once vehicle_category is set) has no month
+    # column -- same silent-drop bug as fuel-breakdown above.
+    response = await client.get(
+        "/api/v1/categories/top-makers",
+        params={"year": 2026, "month": 1, "vehicle_category": "Four-Wheeler"},
+    )
+    assert response.status_code == 400
+
+
 async def test_persist_rto_batch_sets_vehicle_category(db_session):
     await _seed_rto(db_session, "DL", "DL1")
     vc_batch = {
