@@ -70,6 +70,7 @@ async def init_db():
             "vehicle_category": "VARCHAR(20)",
             "commercial_tier": "VARCHAR(15)",
         },
+        "users": {"organization_id": "INTEGER"},
     })
     # The 4 tables that actually grow at scale (millions of rows, burning
     # ids on every delete-then-insert rewrite, not just net growth) -- see
@@ -129,4 +130,5 @@ async def init_db():
         await ensure_foreign_key(engine, table, "rto_code", "rtos", "rto_code")
     await ensure_foreign_key(engine, "users", "scope_state_code", "states", "state_code")
     await ensure_foreign_key(engine, "users", "scope_rto_code", "rtos", "rto_code")
+    await ensure_foreign_key(engine, "users", "organization_id", "organizations", "id")
     await ensure_analyzed(engine, list(Base.metadata.tables))

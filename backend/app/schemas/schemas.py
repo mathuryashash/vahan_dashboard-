@@ -196,3 +196,11 @@ class UserOut(BaseModel):
     scope_state_name: str | None
     scope_rto_code: str | None
     scope_rto_name: str | None
+    organization_id: int | None
+
+
+class OrganizationOut(BaseModel):
+    id: int
+    name: str
+    is_active: bool
+    user_count: int

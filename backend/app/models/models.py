@@ -394,6 +394,19 @@ class UserScope:
     ALL = (NATIONAL, STATE, RTO)
 
 
+class Organization(Base):
+    """A paying customer (one company). Purely a billing/tracking label on
+    User below -- NOT a data-isolation boundary. The registrations/crosstab
+    data is shared VAHAN industry data, the same for every organization;
+    only which users belong to which org, for seat counting, lives here."""
+    __tablename__ = "organizations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False, unique=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=func.now())
+
+
 class User(Base):
     """Login + role for the access-hierarchy system. Lives in the same
     Postgres database as everything else -- there's no separate "auth
@@ -408,6 +421,11 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=func.now())
     last_login_at = Column(DateTime, nullable=True)
+    # Nullable at the DB level -- existing users predate this column and
+    # have nothing to backfill it with. The admin-facing API (users.py)
+    # requires it for newly created users; enforcing that in the DB schema
+    # itself would mean guessing a fake organization for pre-existing rows.
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
 
     # Denormalized (code + name stored together, set once at user creation)
     # rather than a foreign key + join: every dashboard filter already

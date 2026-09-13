@@ -163,3 +163,36 @@ async def test_admin_can_deactivate_a_user(client, db_session):
     response = await client.patch(f"/api/v1/users/{user.id}", json={"is_active": False})
     assert response.status_code == 200
     assert response.json()["is_active"] is False
+
+
+async def test_admin_can_create_organization_and_assign_users_to_it(client, db_session):
+    response = await client.post("/api/v1/organizations/", json={"name": "Acme Motors"})
+    assert response.status_code == 200
+    org = response.json()
+    assert org["user_count"] == 0
+
+    response = await client.post(
+        "/api/v1/users/",
+        json={"email": "acme-user@example.com", "password": "pw123456", "organization_id": org["id"]},
+    )
+    assert response.status_code == 200
+    assert response.json()["organization_id"] == org["id"]
+
+    response = await client.get("/api/v1/organizations/")
+    assert response.status_code == 200
+    acme = next(o for o in response.json() if o["id"] == org["id"])
+    assert acme["user_count"] == 1
+
+
+async def test_create_user_rejects_unknown_organization_id(client, db_session):
+    response = await client.post(
+        "/api/v1/users/",
+        json={"email": "orphan@example.com", "password": "pw123456", "organization_id": 999999},
+    )
+    assert response.status_code == 400
+
+
+async def test_create_organization_rejects_duplicate_name(client, db_session):
+    await client.post("/api/v1/organizations/", json={"name": "Duplicate Co"})
+    response = await client.post("/api/v1/organizations/", json={"name": "Duplicate Co"})
+    assert response.status_code == 400
