@@ -5,10 +5,14 @@ months of 2025 vs 7 months of 2026) without capping both periods at the same
 latest month produces a nonsensical, deeply negative "growth" number -- the
 same class of bug summary.get_dashboard_kpis already guards against.
 """
-from app.models.models import Registration
+from app.models.models import RTO, Registration, State
 
 
 async def _seed_month(db_session, year, month, count, state_name="Delhi", rto_code="DL1"):
+    # merge (not add) -- called in a loop with the same state/rto per test,
+    # and merge is a safe upsert instead of a duplicate-primary-key insert.
+    await db_session.merge(State(state_code="DL", state_name=state_name))
+    await db_session.merge(RTO(rto_code=rto_code, rto_name="Test RTO", state_code="DL"))
     db_session.add(Registration(
         state_code="DL", state_name=state_name, rto_code=rto_code, rto_name="Test RTO",
         month=month, year=year, count=count, vehicle_class="All", maker="HONDA", fuel_type=None,

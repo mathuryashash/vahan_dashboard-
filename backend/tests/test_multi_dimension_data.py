@@ -10,15 +10,25 @@ things that would silently corrupt the dashboard if handled wrong:
 2. Category/fuel breakdown endpoints must still show the real breakdown from
    the supplementary rows, not just the 'All' placeholder from the maker pass.
 """
-from app.models.models import Registration
+from app.models.models import RTO, Registration, State
 from app.services.scraper_service import persist_rto_batch
 from scraper.run_full_scrape import _purge_synthetic_for_state
+
+
+async def _seed_rto(db_session, state_code, rto_code, state_name="Test State", rto_name="Test RTO"):
+    # merge (not add) -- several tests seed the same state_code/rto_code more
+    # than once (e.g. a second dimension pass, or a raw Registration added
+    # alongside _seed_real_rto's), and merge is a safe upsert instead of a
+    # duplicate-primary-key insert.
+    await db_session.merge(State(state_code=state_code, state_name=state_name))
+    await db_session.merge(RTO(rto_code=rto_code, rto_name=rto_name, state_code=state_code))
 
 
 async def _seed_real_rto(db_session, state_name="Delhi", state_code="DL", rto_code="DL1", rto_name="Test RTO"):
     """One RTO/month's registrations as the live scraper would actually
     persist them: a maker pass (100 total) plus vehicle_class and fuel
     breakdown passes that independently also sum to 100."""
+    await _seed_rto(db_session, state_code, rto_code, state_name, rto_name)
     maker_batch = {
         "state_name": state_name, "rto_code": rto_code, "rto_name": rto_name,
         "records": [
@@ -127,6 +137,7 @@ async def test_available_years_caches_across_requests(client, db_session):
     # New data for a different year lands, but a second call within the TTL
     # must still return the cached (now stale-looking) result, not re-query.
     await _seed_real_rto(db_session, rto_code="DL2", rto_name="Test RTO 2")
+    await _seed_rto(db_session, "DL", "DL3", "Delhi", "Test RTO 3")
     db_session.add(Registration(
         state_code="DL", state_name="Delhi", rto_code="DL3", rto_name="Test RTO 3",
         vehicle_class="All", vehicle_category="Other", commercial_tier=None,
@@ -163,6 +174,8 @@ async def test_state_ranking_does_not_triple_count(client, db_session):
 
 
 async def test_all_states_comparison_share_uses_national_total(client, db_session):
+    await _seed_rto(db_session, "DL", "DL1", "Delhi")
+    await _seed_rto(db_session, "MH", "MH1", "Maharashtra")
     db_session.add_all([
         Registration(state_code="DL", state_name="Delhi", rto_code="DL1", month=1, year=2026, vehicle_class="All", maker="A", count=100),
         Registration(state_code="MH", state_name="Maharashtra", rto_code="MH1", month=1, year=2026, vehicle_class="All", maker="B", count=300),
@@ -221,6 +234,7 @@ async def test_fuel_breakdown_filters_by_fuel_group(client, db_session):
 
 
 async def test_persist_rto_batch_sets_vehicle_category(db_session):
+    await _seed_rto(db_session, "DL", "DL1")
     vc_batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [{"label": "Heavy Truck", "month": 1, "year": 2026, "count": 5}],
@@ -240,6 +254,7 @@ async def test_persist_rto_batch_maker_pass_classifies_from_placeholder_all(db_s
     # Maker-pass rows always store vehicle_class='All' (see persist_rto_batch
     # docstring) -- classify_vehicle('All') resolves to ("Other", None), same
     # as any other unrecognized/placeholder value.
+    await _seed_rto(db_session, "DL", "DL1")
     maker_batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [{"label": "HONDA", "month": 1, "year": 2026, "count": 5}],

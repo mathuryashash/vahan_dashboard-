@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import app.api.v1.endpoints.refresh as refresh_module
 from app.core.config import settings
-from app.models.models import Registration, State
+from app.models.models import RTO, Registration, State
 
 
 async def test_trigger_refresh_rejects_within_cooldown(client, monkeypatch):
@@ -61,7 +61,8 @@ async def test_scrape_progress_caches_across_requests(client, db_session):
     refresh_module._scrape_progress_cache["value"] = None
     refresh_module._scrape_progress_cache["at"] = 0.0
 
-    db_session.add(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
     db_session.add(Registration(
         state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Test RTO",
         vehicle_class="All", vehicle_category="Other", commercial_tier=None,
@@ -75,7 +76,8 @@ async def test_scrape_progress_caches_across_requests(client, db_session):
 
     # A second state finishes, but a call within the TTL must still return
     # the cached (now stale-looking) result, not re-query.
-    db_session.add(State(state_code="MH", state_name="Maharashtra"))
+    await db_session.merge(State(state_code="MH", state_name="Maharashtra"))
+    await db_session.merge(RTO(rto_code="MH1", rto_name="Test RTO", state_code="MH"))
     db_session.add(Registration(
         state_code="MH", state_name="Maharashtra", rto_code="MH1", rto_name="Test RTO",
         vehicle_class="All", vehicle_category="Other", commercial_tier=None,

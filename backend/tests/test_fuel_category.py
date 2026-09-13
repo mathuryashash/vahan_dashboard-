@@ -2,11 +2,17 @@
 /categories/fuel-category-breakdown endpoint. Same shape as
 test_maker_category.py -- see docs/superpowers/specs/
 2026-08-25-maker-category-crosstab-design.md."""
-from app.models.models import FuelCategoryTotal
+from app.models.models import RTO, FuelCategoryTotal, State
 from app.services.scraper_service import persist_fuel_category_batch
 
 
 async def _seed_fuel_category(db_session):
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so
+    # persist_fuel_category_batch's writes below can hit Postgres before a
+    # still-pending State/RTO row. merge() writes immediately, self-ordering.
+    await db_session.merge(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
     batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [

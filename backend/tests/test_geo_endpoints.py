@@ -2,11 +2,15 @@ from app.models.models import State, Zone, District, RTO, RTODistrict
 
 
 async def _seed_minimal(db_session):
-    db_session.add(Zone(zone_code="SOUTH", zone_name="Southern Zone"))
-    db_session.add(State(state_code="AP", state_name="Andhra Pradesh", zone_code="SOUTH"))
-    db_session.add(District(district_code="AP-GUNTUR", district_name="Guntur", state_code="AP"))
-    db_session.add(RTO(rto_code="AP07", rto_name="Guntur", state_code="AP"))
-    db_session.add(RTODistrict(rto_code="AP07", district_code="AP-GUNTUR"))
+    # merge (not add) -- with no relationship() between these models,
+    # plain add()+commit doesn't order cross-table INSERTs by FK dependency,
+    # so a child row can be sent before its still-pending parent. merge()
+    # writes each row immediately, keeping this chain in dependency order.
+    await db_session.merge(Zone(zone_code="SOUTH", zone_name="Southern Zone"))
+    await db_session.merge(State(state_code="AP", state_name="Andhra Pradesh", zone_code="SOUTH"))
+    await db_session.merge(District(district_code="AP-GUNTUR", district_name="Guntur", state_code="AP"))
+    await db_session.merge(RTO(rto_code="AP07", rto_name="Guntur", state_code="AP"))
+    await db_session.merge(RTODistrict(rto_code="AP07", district_code="AP-GUNTUR"))
     await db_session.commit()
 
 

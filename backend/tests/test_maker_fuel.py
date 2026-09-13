@@ -4,11 +4,17 @@ test_maker_category.py/test_fuel_category.py -- see docs/superpowers/specs/
 2026-08-25-maker-category-crosstab-design.md. Fixes the "engine type +
 brand/OEM" combination showing 0: a maker name and a real fuel_type never
 coexist on the same Registration row (see Registration.is_supplementary)."""
-from app.models.models import MakerFuelTotal
+from app.models.models import RTO, MakerFuelTotal, State
 from app.services.scraper_service import persist_maker_fuel_batch
 
 
 async def _seed_maker_fuel(db_session):
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so
+    # persist_maker_fuel_batch's writes below can hit Postgres before a
+    # still-pending State/RTO row. merge() writes immediately, self-ordering.
+    await db_session.merge(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
     batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [

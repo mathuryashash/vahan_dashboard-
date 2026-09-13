@@ -104,6 +104,83 @@ async def ensure_bigint_id(engine: AsyncEngine, table_name: str) -> None:
         logger.info("  %s.id widened to bigint in %.1fs", table_name, time.monotonic() - t0)
 
 
+async def ensure_rtos_backfilled(engine: AsyncEngine) -> None:
+    """Insert any rto_code seen in real scraped registrations but missing
+    from the `rtos` master table -- a prerequisite for a real FK from
+    registrations.rto_code to rtos.rto_code, not just cosmetic completeness.
+
+    Confirmed live: the seed_geo_hierarchy list was never complete -- 708 of
+    1412 distinct RTO codes actually scraped weren't in `rtos` at all (real
+    named offices, e.g. "Tirupati RTA", not garbage). A further 37 codes
+    that *were* present had a stale name (VAHAN itself changed its RTO
+    naming convention recently, e.g. "BALASORE RTO" -> "RTO BALESHWAR" --
+    confirmed by checking: state_code was identical across every one of
+    these, only the name/format changed, and the new format has far fewer
+    rows, meaning it's the newer of the two). DISTINCT ON ... ORDER BY id
+    DESC picks each rto_code's most recently scraped name/state, so this
+    both fills real gaps and refreshes stale names in one pass -- ON
+    CONFLICT DO UPDATE keeps every existing row in sync with the latest
+    scrape too, not just the ones that didn't exist yet. Safe to run on
+    every startup: once every row already matches the latest scraped
+    values, this is a same-value UPDATE per row -- correct, just not a
+    literal no-op the way the other ensure_* functions' early-return checks
+    are (rtos is small, ~1100 rows, so this stays cheap regardless).
+
+    Postgres-only (DISTINCT ON is Postgres syntax) -- rtos is a small
+    reference table, not a real SQLite dev-mode concern.
+    """
+    if str(engine.url).startswith("sqlite"):
+        return
+    async with engine.begin() as conn:
+        result = await conn.execute(text("""
+            INSERT INTO rtos (rto_code, rto_name, state_code)
+            SELECT DISTINCT ON (r.rto_code) r.rto_code, r.rto_name, r.state_code
+            FROM registrations r
+            WHERE r.rto_code IS NOT NULL
+            ORDER BY r.rto_code, r.id DESC
+            ON CONFLICT (rto_code) DO UPDATE SET rto_name = EXCLUDED.rto_name, state_code = EXCLUDED.state_code
+        """))
+        if result.rowcount:
+            logger.info("rtos backfill: inserted/refreshed %d row(s) from registrations", result.rowcount)
+
+
+async def ensure_foreign_key(engine: AsyncEngine, table_name: str, column_name: str, ref_table: str, ref_column: str) -> None:
+    """Add a FOREIGN KEY constraint if this column doesn't already have one.
+
+    Checked by (table, column), not by a specific constraint name: a fresh
+    install gets this same FK for free from Base.metadata.create_all, under
+    whatever name Postgres auto-assigns it -- checking a name this function
+    made up itself would miss that one and add a second, redundant FK
+    alongside it. Prerequisite: the referenced values must already exist in
+    `ref_table` (run ensure_no_duplicate_rows/ensure_rtos_backfilled first
+    for columns that need it) -- ADD CONSTRAINT fails outright on any row
+    that would violate it, same as CREATE UNIQUE INDEX does for duplicates.
+
+    Postgres-only -- SQLite here is dev-only convenience with no ALTER TABLE
+    ADD CONSTRAINT support worth building for.
+    """
+    for identifier in (table_name, column_name, ref_table, ref_column):
+        if not _IDENTIFIER_RE.match(identifier):
+            raise ValueError(f"Invalid identifier: {identifier!r}")
+    if str(engine.url).startswith("sqlite"):
+        return
+    async with engine.begin() as conn:
+        existing = (await conn.execute(text("""
+            SELECT tc.constraint_name
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+            WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = :table AND kcu.column_name = :column
+        """), {"table": table_name, "column": column_name})).scalar()
+        if existing:
+            return
+        constraint_name = f"{table_name}_{column_name}_fkey"
+        logger.info("Adding FK %s.%s -> %s.%s...", table_name, column_name, ref_table, ref_column)
+        await conn.execute(text(
+            f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} "
+            f"FOREIGN KEY ({column_name}) REFERENCES {ref_table} ({ref_column})"
+        ))
+
+
 async def drop_orphaned_indexes(engine: AsyncEngine, index_names: list[str]) -> None:
     """Drop indexes that no longer appear in any model's __table_args__.
 

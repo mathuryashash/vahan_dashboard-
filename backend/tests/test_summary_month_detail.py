@@ -1,4 +1,14 @@
-from app.models.models import Registration
+import pytest
+
+from app.models.models import Registration, State
+
+
+@pytest.fixture(autouse=True)
+async def _seed_ap(db_session):
+    # Every test here seeds Registration rows against the default state_code
+    # "AP" -- required now that registrations.state_code is a real FK.
+    db_session.add(State(state_code="AP", state_name="Andhra Pradesh"))
+    await db_session.commit()
 
 
 def _reg(year, month, count, state_code="AP", state_name="Andhra Pradesh", vehicle_class="Two-Wheeler"):

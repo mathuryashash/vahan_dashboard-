@@ -4,10 +4,16 @@ same fix summary.py's kpis/trend already needed: the canonical maker-pass
 always stores vehicle_class='All' (never a real category), so a naive
 exclude_supplementary + vehicle_category filter would silently return zero
 rows for every category."""
-from app.models.models import Registration
+from app.models.models import RTO, Registration, State
 
 
 async def _seed_state(db_session, state_name="Delhi", state_code="DL", rto_code="DL1"):
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so
+    # Registration below can be sent to Postgres before its still-pending
+    # State/RTO row. merge() writes immediately, so it self-orders.
+    await db_session.merge(State(state_code=state_code, state_name=state_name))
+    await db_session.merge(RTO(rto_code=rto_code, rto_name="Test RTO", state_code=state_code))
     # Canonical maker-pass: real total, but vehicle_class='All' -- never
     # matches a real vehicle_category filter.
     db_session.add(Registration(

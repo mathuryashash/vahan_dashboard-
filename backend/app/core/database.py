@@ -60,8 +60,8 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     from app.core.migrations import (
-        drop_orphaned_indexes, ensure_analyzed, ensure_bigint_id, ensure_columns, ensure_indexes,
-        ensure_no_duplicate_rows, ensure_vehicle_category_backfilled,
+        drop_orphaned_indexes, ensure_analyzed, ensure_bigint_id, ensure_columns, ensure_foreign_key,
+        ensure_indexes, ensure_no_duplicate_rows, ensure_rtos_backfilled, ensure_vehicle_category_backfilled,
     )
     await ensure_columns(engine, {
         "states": {"zone_code": "VARCHAR(10)"},
@@ -113,4 +113,20 @@ async def init_db():
     )
     await ensure_indexes(engine, Base.metadata)
     await ensure_vehicle_category_backfilled(engine)
+    # Must run before any rto_code FK below -- backfills rto_codes seen in
+    # scraped registrations but missing from the rtos master table (see that
+    # function's docstring for the naming-format history behind this).
+    await ensure_rtos_backfilled(engine)
+    await ensure_foreign_key(engine, "states", "zone_code", "zones", "zone_code")
+    await ensure_foreign_key(engine, "rtos", "state_code", "states", "state_code")
+    await ensure_foreign_key(engine, "districts", "state_code", "states", "state_code")
+    await ensure_foreign_key(engine, "rto_districts", "rto_code", "rtos", "rto_code")
+    await ensure_foreign_key(engine, "rto_districts", "district_code", "districts", "district_code")
+    await ensure_foreign_key(engine, "registrations", "state_code", "states", "state_code")
+    await ensure_foreign_key(engine, "registrations", "rto_code", "rtos", "rto_code")
+    for table in ["maker_category_totals", "fuel_category_totals", "maker_fuel_totals"]:
+        await ensure_foreign_key(engine, table, "state_code", "states", "state_code")
+        await ensure_foreign_key(engine, table, "rto_code", "rtos", "rto_code")
+    await ensure_foreign_key(engine, "users", "scope_state_code", "states", "state_code")
+    await ensure_foreign_key(engine, "users", "scope_rto_code", "rtos", "rto_code")
     await ensure_analyzed(engine, list(Base.metadata.tables))

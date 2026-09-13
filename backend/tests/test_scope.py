@@ -19,6 +19,14 @@ def _login_as(**scope_kwargs):
 
 
 async def _seed_two_states(db_session):
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so the
+    # Registration rows below can be sent before their still-pending
+    # State/RTO rows. merge() writes immediately, so it self-orders.
+    await db_session.merge(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(State(state_code="MH", state_name="Maharashtra"))
+    await db_session.merge(RTO(rto_code="DL1", rto_name="Delhi RTO", state_code="DL"))
+    await db_session.merge(RTO(rto_code="MH1", rto_name="Test RTO MH1", state_code="MH"))
     db_session.add_all([
         Registration(
             state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Delhi RTO",
@@ -48,12 +56,6 @@ async def test_state_scoped_user_cannot_see_another_states_kpis(client, db_sessi
 
 
 async def test_rto_scoped_user_blocked_from_another_rto_analysis(client, db_session):
-    db_session.add_all([
-        State(state_code="DL", state_name="Delhi"),
-        State(state_code="MH", state_name="Maharashtra"),
-        RTO(rto_code="DL1", rto_name="Delhi RTO", state_code="DL"),
-        RTO(rto_code="MH1", rto_name="Test RTO MH1", state_code="MH"),
-    ])
     await _seed_two_states(db_session)
     _login_as(**MH_RTO)
     try:

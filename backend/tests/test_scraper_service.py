@@ -1,9 +1,22 @@
 import time
 import pytest
 from sqlalchemy import select
-from app.models.models import Registration
+from app.models.models import RTO, Registration, State
 from app.core.config import settings
 from app.services.scraper_service import ScrapeFailedError, persist_rto_batch, run_scraper
+
+
+@pytest.fixture(autouse=True)
+async def _seed_rtos(db_session):
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so
+    # persist_rto_batch's writes below can hit Postgres before a still-
+    # pending State/RTO row. merge() writes immediately, self-ordering.
+    await db_session.merge(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
+    await db_session.merge(State(state_code="LD", state_name="Lakshadweep"))
+    await db_session.merge(RTO(rto_code="LD1", rto_name="Test RTO", state_code="LD"))
+    await db_session.commit()
 
 
 async def test_persist_rto_batch_inserts_records(db_session):

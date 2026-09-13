@@ -38,6 +38,9 @@ async def test_export_seed_round_trips_through_psql(db_session, monkeypatch, tmp
         "INSERT INTO states (state_code, state_name, zone_code) VALUES ('DL', 'Delhi', 'N')"
     ))
     await db_session.execute(text(
+        "INSERT INTO rtos (rto_code, rto_name, state_code) VALUES ('DL1', 'Test RTO', 'DL')"
+    ))
+    await db_session.execute(text(
         "INSERT INTO registrations (state_code, state_name, rto_code, rto_name, month, year, "
         "vehicle_class, maker, count, is_supplementary) "
         "VALUES ('DL', 'Delhi', 'DL1', 'Test RTO', 1, 2026, 'All', 'HONDA', 91, false)"

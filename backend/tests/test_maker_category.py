@@ -1,11 +1,21 @@
 """Tests for the Maker x Vehicle Category cross-tab: persistence and the
 /categories/maker-category-breakdown endpoint. See docs/superpowers/specs/
 2026-08-25-maker-category-crosstab-design.md."""
-from app.models.models import MakerCategoryTotal
+from app.models.models import RTO, MakerCategoryTotal, State
 from app.services.scraper_service import persist_maker_category_batch
 
 
+async def _seed_rto_ref(db_session, state_code, rto_code, state_name="Test State"):
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so
+    # persist_maker_category_batch's writes below can hit Postgres before a
+    # still-pending State/RTO row. merge() writes immediately, self-ordering.
+    await db_session.merge(State(state_code=state_code, state_name=state_name))
+    await db_session.merge(RTO(rto_code=rto_code, rto_name="Test RTO", state_code=state_code))
+
+
 async def _seed_maker_category(db_session):
+    await _seed_rto_ref(db_session, "DL", "DL1", "Delhi")
     batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [
@@ -97,6 +107,7 @@ async def test_crosstab_detail_computes_total_top_state_and_yoy(client, db_sessi
     had multi-year, per-state history -- now they're real queries against
     the same table (see /categories/crosstab-detail)."""
     await _seed_maker_category(db_session)
+    await _seed_rto_ref(db_session, "UP", "UP1", "Uttar Pradesh")
     await persist_maker_category_batch(
         db_session,
         {

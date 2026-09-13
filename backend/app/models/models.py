@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, Integer, String, Float, Date, DateTime, Boolean, Index, text
+from sqlalchemy import BigInteger, Column, Integer, String, Float, Date, DateTime, Boolean, ForeignKey, Index, text
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -8,7 +8,7 @@ class State(Base):
 
     state_code = Column(String(5), primary_key=True)
     state_name = Column(String(100), nullable=False)
-    zone_code = Column(String(10), nullable=True)
+    zone_code = Column(String(10), ForeignKey("zones.zone_code"), nullable=True)
 
 
 class RTO(Base):
@@ -16,7 +16,7 @@ class RTO(Base):
 
     rto_code = Column(String(10), primary_key=True)
     rto_name = Column(String(200), nullable=False)
-    state_code = Column(String(5), nullable=False)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False)
 
 
 class Zone(Base):
@@ -31,14 +31,14 @@ class District(Base):
 
     district_code = Column(String(120), primary_key=True)
     district_name = Column(String(200), nullable=False)
-    state_code = Column(String(5), nullable=False, index=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
 
 
 class RTODistrict(Base):
     __tablename__ = "rto_districts"
 
-    rto_code = Column(String(10), primary_key=True)
-    district_code = Column(String(120), primary_key=True)
+    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), primary_key=True)
+    district_code = Column(String(120), ForeignKey("districts.district_code"), primary_key=True)
 
 
 class Registration(Base):
@@ -51,9 +51,9 @@ class Registration(Base):
     # once it's actually approaching Integer's ~2.1B ceiling would cost far
     # more than this one-line change does today.
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    state_code = Column(String(5), nullable=False, index=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
-    rto_code = Column(String(10), nullable=True)
+    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
     month = Column(Integer, nullable=False, index=True)
     year = Column(Integer, nullable=False, index=True)
@@ -155,9 +155,9 @@ class MakerCategoryTotal(Base):
     # BigInteger -- see Registration.id's comment; same delete-then-insert
     # write pattern burns ids on every rewrite, not just net growth.
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    state_code = Column(String(5), nullable=False, index=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
-    rto_code = Column(String(10), nullable=True)
+    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
     year = Column(Integer, nullable=False, index=True)
     maker = Column(String(200), nullable=False, index=True)
@@ -203,9 +203,9 @@ class FuelCategoryTotal(Base):
 
     # BigInteger -- see Registration.id's comment.
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    state_code = Column(String(5), nullable=False, index=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
-    rto_code = Column(String(10), nullable=True)
+    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
     year = Column(Integer, nullable=False, index=True)
     fuel_type = Column(String(100), nullable=False, index=True)
@@ -243,9 +243,9 @@ class MakerFuelTotal(Base):
 
     # BigInteger -- see Registration.id's comment.
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    state_code = Column(String(5), nullable=False, index=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
     state_name = Column(String(100), nullable=False)
-    rto_code = Column(String(10), nullable=True)
+    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
     year = Column(Integer, nullable=False, index=True)
     maker = Column(String(200), nullable=False, index=True)
@@ -415,7 +415,7 @@ class User(Base):
     # query_filters.py), so storing the name alongside the code lets scope
     # enforcement clamp either kind of query param with zero extra joins.
     scope_type = Column(String(20), nullable=False, default=UserScope.NATIONAL)
-    scope_state_code = Column(String(5), nullable=True)
+    scope_state_code = Column(String(5), ForeignKey("states.state_code"), nullable=True)
     scope_state_name = Column(String(100), nullable=True)
-    scope_rto_code = Column(String(10), nullable=True)
+    scope_rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     scope_rto_name = Column(String(200), nullable=True)

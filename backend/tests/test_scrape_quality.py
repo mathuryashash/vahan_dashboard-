@@ -2,10 +2,24 @@
 maker/vehicle_class/fuel passes are three independent scrapes of the same
 underlying registrations for a given (RTO, month), so their totals should
 agree within MAX_PCT_DIFF."""
+import pytest
 import sqlalchemy as sa
 
-from app.models.models import Registration, ScrapeQualityLog
+from app.models.models import RTO, Registration, ScrapeQualityLog, State
 from app.services.scrape_quality import check_scrape_quality
+
+
+@pytest.fixture(autouse=True)
+async def _seed_dl(db_session):
+    # Every test here seeds Registration rows against the same DL/DL1 --
+    # required now that registrations.state_code/rto_code are real FKs.
+    # merge (not add) -- with no relationship() between these models, a
+    # plain add()+commit doesn't order INSERTs by FK dependency, so a test's
+    # Registration rows can be sent before this fixture's still-pending
+    # State/RTO rows. merge() writes immediately, so it self-orders.
+    await db_session.merge(State(state_code="DL", state_name="Delhi"))
+    await db_session.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
+    await db_session.commit()
 
 
 def _row(*, is_supplementary, fuel_type=None, vehicle_class="All", maker=None, count):
