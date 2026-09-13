@@ -42,6 +42,10 @@ export function RtoAnalysisPage() {
   // fighting each other.
   useEffect(() => {
     if (auth.scope_type !== 'national') return;
+    // Syncing local stateCode from the shared state-NAME selection (see
+    // comment above); needs the async `states` list resolved first, which
+    // isn't available during this component's own render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!selectedState) { setStateCodeLocal(''); return; }
     const match = states?.find((s: { state_code: string; state_name: string }) => s.state_name === selectedState);
     if (match) setStateCodeLocal(match.state_code);

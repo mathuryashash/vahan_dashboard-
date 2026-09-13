@@ -37,7 +37,14 @@ export function ComparisonPage() {
   const [focusState, setFocusState] = useState<string | null>(null);
 
   useEffect(() => {
-    if (selectedState && selectedState !== stateA) setStateALocal(selectedState);
+    // Syncing local stateA from the shared Overview-page selection; the
+    // effect's own condition (only fire on a real external change) is
+    // exactly the dependency-gating the render-time alternative would
+    // have to reconstruct anyway.
+    if (selectedState && selectedState !== stateA) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStateALocal(selectedState);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to external (Overview) changes, not stateA's own local edits
   }, [selectedState]);
 

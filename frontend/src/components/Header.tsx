@@ -72,6 +72,11 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, o
     if (!refreshStatus || refreshStatus.status === 'running') {
       return;
     }
+    // Not a prop-sync -- this effect's real job is the external side effect
+    // (invalidateQueries) once a poll confirms the scrape finished;
+    // resetting `starting` is bundled into the same state update rather
+    // than a second effect run.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStarting((wasStarting) => {
       if (wasStarting) {
         queryClient.invalidateQueries();

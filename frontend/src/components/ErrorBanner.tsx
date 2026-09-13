@@ -70,8 +70,12 @@ export function ErrorBanner({
     return () => clearTimeout(timer);
   }, [visible, autoDismiss, onClose]);
 
-  // Update visibility from props
+  // Update visibility from props. Syncing local dismissable state from the
+  // isVisible prop; the render-during-render alternative needs its own
+  // prevIsVisible ref per call site and isn't worth it for a banner that
+  // re-renders rarely.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setVisible(isVisible);
   }, [isVisible]);
 

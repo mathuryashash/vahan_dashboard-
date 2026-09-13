@@ -14,6 +14,11 @@ export function useSettledLayout(isLoading: boolean): boolean {
   const [ready, setReady] = useState(false);
   useEffect(() => {
     if (isLoading) {
+      // This whole hook exists to synchronize with the browser's paint
+      // timing (requestAnimationFrame below), an external system by
+      // definition; there's no render-time equivalent for "one frame
+      // after mount."
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReady(false);
       return;
     }
