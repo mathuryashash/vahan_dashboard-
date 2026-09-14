@@ -10,7 +10,9 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.migrations import vacuum_tables
 from app.core.query_filters import classify_vehicle
-from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State
+from app.models.models import (
+    FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State, StateMonthCategoryTotal,
+)
 from scraper.vahan_scraper import DIMENSIONS
 
 logger = logging.getLogger("scraper_service")
@@ -179,6 +181,35 @@ async def persist_maker_fuel_batch(db: AsyncSession, batch: dict, state_code: st
             year=year,
             maker=record["maker"],
             fuel_type=record["fuel_type"],
+            count=record["count"],
+        ))
+
+
+async def persist_state_month_category_batch(
+    db: AsyncSession, state_code: str, state_name: str, year: int, records: list[dict],
+) -> None:
+    """Replace any existing StateMonthCategoryTotal rows for this
+    (state_code, year) with freshly scraped ones -- one query to the new
+    analytics.parivahan.gov.in site returns the FULL year (every month x
+    every category) in one response, same delete-then-insert scope as
+    persist_maker_category_batch, just state-level instead of RTO-level
+    (that site has no RTO filter -- see StateMonthCategoryTotal's
+    docstring). `category` is stored as the site's own raw label; not run
+    through classify_vehicle(), which is keyed on the OLD site's different
+    vehicle_class vocabulary."""
+    await db.execute(
+        delete(StateMonthCategoryTotal).where(
+            StateMonthCategoryTotal.state_code == state_code,
+            StateMonthCategoryTotal.year == year,
+        )
+    )
+    for record in records:
+        db.add(StateMonthCategoryTotal(
+            state_code=state_code,
+            state_name=state_name,
+            year=year,
+            month=record["month"],
+            category=record["category"],
             count=record["count"],
         ))
 

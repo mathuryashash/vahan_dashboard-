@@ -131,4 +131,9 @@ async def init_db():
     await ensure_foreign_key(engine, "users", "scope_state_code", "states", "state_code")
     await ensure_foreign_key(engine, "users", "scope_rto_code", "rtos", "rto_code")
     await ensure_foreign_key(engine, "users", "organization_id", "organizations", "id")
+    # state_month_category_totals is a brand-new table (its unique index and
+    # FK are declared directly in the model) -- no ensure_no_duplicate_rows
+    # retrofit needed, unlike the older crosstab tables that already had
+    # duplicate rows in production before their constraint was added.
+    await ensure_foreign_key(engine, "state_month_category_totals", "state_code", "states", "state_code")
     await ensure_analyzed(engine, list(Base.metadata.tables))

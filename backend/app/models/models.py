@@ -267,6 +267,41 @@ class MakerFuelTotal(Base):
     )
 
 
+class StateMonthCategoryTotal(Base):
+    """State x Month x Vehicle-Category totals from the NEW
+    analytics.parivahan.gov.in site (yAxis=monthWise, xAxis=
+    vehicleCategoryDescription) -- state-level only, no RTO granularity
+    (that site has no RTO filter), but real month-level, which the old
+    VAHAN4 site (vahan_scraper.py, Registration/MakerCategoryTotal etc.)
+    cannot give at all. `category` is the new site's own raw label text
+    (e.g. 'TWO WHEELER(NT)') -- deliberately NOT run through
+    classify_vehicle(): that lookup table is keyed on the OLD site's
+    different vehicle_class vocabulary ('M-CYCLE/SCOOTER', 'MOTOR CAR', ...)
+    and would silently misclassify every one of these rows into ('Other',
+    None). Plain Integer PK (not BigInteger, see Registration.id's comment
+    for why that one needed it) -- ceiling here is ~36 states x ~24 years x
+    12 months x ~17 categories =~ 176K rows, nowhere near Integer's ~2.1B
+    limit, and writes are delete-then-insert scoped to one (state, year) at
+    a time, not the whole table, so id burn is slow."""
+    __tablename__ = "state_month_category_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    year = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False)
+    category = Column(String(100), nullable=False, index=True)
+    count = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        # No COALESCE needed (unlike Registration/OEMMonthlySales) -- none of
+        # these 4 columns are nullable, so a plain multi-column UNIQUE index
+        # is correct. Also serves "every row for one state+year" lookups via
+        # its leading two columns, so no separate (state_code, year) index.
+        Index("idx_smct_natural_key", "state_code", "year", "month", "category", unique=True),
+    )
+
+
 class DashboardSummary(Base):
     __tablename__ = "dashboard_summary"
 
