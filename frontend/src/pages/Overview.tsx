@@ -794,7 +794,15 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
   // `?? 0` reads as "zero registrations" when the honest answer is "not
   // scraped for this year yet".
   const noDataForYear = !hasYearData;
-  const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
+  // /maker-category-breakdown returns one row keyed by "vehicle_category"
+  // (not "maker") when both maker and vehicle_category are passed together
+  // -- same "both given" response shape as its sibling endpoint, see
+  // MakerFuelPanel's comment below for the identical bug already found and
+  // fixed there. Searching for r.maker here (a field this response shape
+  // never has) always returned undefined -- silently showing 0 regardless
+  // of real data (confirmed live: Honda's real Two-Wheeler total in Bihar
+  // FY2025 is 275,614, this card showed 0).
+  const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
 
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
