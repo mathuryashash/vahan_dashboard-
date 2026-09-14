@@ -4,9 +4,14 @@ Vehicle registration analytics dashboard for India, built on live VAHAN4 data.
 
 ## Run it (Docker, one command)
 
-**Prerequisite:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running,
+and [Git LFS](https://git-lfs.com/) installed *before* you clone (the seed data below is stored via LFS —
+without it, `git clone` silently gives you a small placeholder file instead of the real ~240MB seed, and
+Postgres fails on first run with `gunzip: invalid magic`). If you already cloned without LFS installed:
+install it, then run `git lfs pull` from the repo root, then `docker compose down -v` before retrying below.
 
 ```bash
+git lfs install   # one-time, after installing Git LFS
 cd docker
 docker compose up --build
 ```
