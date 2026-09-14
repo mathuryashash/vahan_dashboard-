@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.models.models import MakerLiveQueryCache, State
 from app.services.live_scrape_service import (
     ALL_FUEL_SENTINEL, UnknownStateCodeError, _normalize, _read_cache, _write_cache, get_or_scrape_maker_query,
+    get_top_makers_leaderboard,
 )
 
 
@@ -89,3 +90,10 @@ async def test_write_cache_is_idempotent_for_repeated_writes_same_key(db_session
 
     result = await _read_cache(db_session, "BR", 2024, "HONDA", "PETROL")
     assert result == [{"month": 1, "category": "TWO WHEELER(NT)", "count": 600}]
+
+
+async def test_leaderboard_raises_for_unknown_state_code_before_any_query(db_session):
+    # Same fast-fail contract as get_or_scrape_maker_query -- no maker
+    # ranking query, no live scrape, for a state_code that isn't real.
+    with pytest.raises(UnknownStateCodeError):
+        await get_top_makers_leaderboard(db_session, "ZZ", 2024)

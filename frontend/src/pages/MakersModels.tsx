@@ -1,4 +1,5 @@
 // frontend/src/pages/MakersModels.tsx
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
@@ -11,12 +12,16 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
-import { LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
+import { LiveMakerLeaderboardPanel, LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function MakersModelsPage() {
   const chart = useChartTheme();
+  // Resolved by LiveMakerQueryPanel's own state selector, shared down into
+  // LiveMakerLeaderboardPanel so both live-query panels below act on the
+  // same state instead of each needing (and confusingly duplicating) one.
+  const [liveStateCode, setLiveStateCode] = useState<string | null>(null);
   // Year/Month/Category/Powertrain/State are shared across every tab (see
   // useAppStore) -- picking Two-Wheeler here or on Overview shows up on both.
   const {
@@ -343,7 +348,8 @@ export function MakersModelsPage() {
         )}
       </div>
 
-      <LiveMakerQueryPanel year={year} />
+      <LiveMakerQueryPanel year={year} onStateCodeChange={setLiveStateCode} />
+      <LiveMakerLeaderboardPanel year={year} stateCode={liveStateCode} />
     </div>
   );
 }

@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { getLiveMakerQuery, getStates } from '../api/vahan';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
+import { getLiveMakerLeaderboard, getLiveMakerQuery, getStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useAuth } from '../contexts/AuthContext';
+import { useChartTheme } from '../hooks/useChartTheme';
+import { TruncatedYAxisTick } from './ChartAxisTick';
 import { LabeledSelect } from './LabeledSelect';
 import { EmptyState } from './EmptyState';
 import { ErrorBanner } from './ErrorBanner';
@@ -39,7 +42,7 @@ function errorMessageFor(error: unknown): string {
   }
 }
 
-export function LiveMakerQueryPanel({ year }: { year: number }) {
+export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number; onStateCodeChange?: (stateCode: string | null) => void }) {
   const auth = useAuth();
   const { selectedState } = useAppStore();
   const { data: states, isLoading: statesLoading } = useQuery({ queryKey: ['states'], queryFn: getStates });
@@ -60,6 +63,14 @@ export function LiveMakerQueryPanel({ year }: { year: number }) {
   }, [selectedState, states, auth.scope_type, localStateCode]);
 
   const stateCode = auth.scope_type !== 'national' ? auth.scope_state_code : (localStateCode || null);
+
+  // Shares this one state selection with the sibling leaderboard panel
+  // below -- two independent "State" dropdowns on the same page would be
+  // confusing (which one applies to what?), so this is the only one; the
+  // parent page passes the resolved code down to the leaderboard panel.
+  useEffect(() => {
+    onStateCodeChange?.(stateCode);
+  }, [stateCode, onStateCodeChange]);
 
   const [makerInput, setMakerInput] = useState('');
   const [fuel, setFuel] = useState('');
@@ -214,6 +225,132 @@ export function LiveMakerQueryPanel({ year }: { year: number }) {
                 </tbody>
               </table>
             </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; stateCode: string | null }) {
+  const chart = useChartTheme();
+  const [fuel, setFuel] = useState('');
+  const [limit, setLimit] = useState(10);
+  // stateCode captured into `submitted`, not read live from the prop in
+  // queryKey/queryFn -- otherwise changing the state dropdown in the
+  // sibling LiveMakerQueryPanel above (after one leaderboard submission)
+  // would silently re-fire this query with the new state, with no button
+  // press here. An uncached call costs up to `limit` (20) real CAPTCHA-
+  // solves server-side -- that should only ever happen on an explicit
+  // "Show Leaderboard" click, same as every other param here.
+  const [submitted, setSubmitted] = useState<{ stateCode: string; fuel: string; limit: number } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  const { data, isFetching, isError, error, refetch } = useQuery({
+    queryKey: ['liveMakerLeaderboard', submitted?.stateCode, year, submitted?.fuel, submitted?.limit],
+    queryFn: () => getLiveMakerLeaderboard({ state_code: submitted!.stateCode, year, fuel: submitted!.fuel || null, limit: submitted!.limit }),
+    enabled: !!submitted,
+    retry: false,
+  });
+
+  const chartData = (data?.makers ?? []).filter((m) => m.total > 0).map((m) => ({ name: m.maker, count: m.total }));
+
+  return (
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
+      <div className="mb-1">
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Live Top Makers — real numbers</h3>
+        <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+          The actual (not modeled) fuel-scoped ranking for this state's real biggest manufacturers — the real-data counterpart to the estimated chart above when a fuel filter alone has no month-level real data.
+        </p>
+      </div>
+
+      <form
+        className="flex items-end gap-3 flex-wrap mt-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (stateCode) setSubmitted({ stateCode, fuel, limit });
+        }}
+      >
+        <LabeledSelect
+          label="Fuel"
+          value={fuel}
+          onChange={(e) => setFuel(e.target.value)}
+          className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer"
+        >
+          <option value="">Any fuel</option>
+          {FUEL_VALUES.map((f) => <option key={f} value={f}>{f}</option>)}
+        </LabeledSelect>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold" htmlFor="leaderboard-limit">Top N</label>
+          <input
+            id="leaderboard-limit"
+            type="number"
+            min={1}
+            max={20}
+            value={limit}
+            onChange={(e) => setLimit(Math.min(20, Math.max(1, Number(e.target.value) || 1)))}
+            className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl w-20 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={!stateCode || isFetching}
+          className="bg-[var(--accent)] text-[var(--accent-contrast)] text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+        >
+          {isFetching ? 'Fetching…' : 'Show Leaderboard'}
+        </button>
+      </form>
+
+      {!stateCode && (
+        <p className="text-xs text-[var(--text-muted)] mt-3">Pick a state in the panel above first.</p>
+      )}
+
+      {isError && (
+        <ErrorBanner
+          key={attempt}
+          title="Couldn't fetch this leaderboard"
+          description={errorMessageFor(error)}
+          action={{ label: 'Retry', onClick: () => { setAttempt((n) => n + 1); refetch(); } }}
+          className="mt-4"
+        />
+      )}
+
+      {isFetching && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mt-4 h-32 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft flex items-center justify-center text-xs text-[var(--text-muted)] text-center px-6"
+        >
+          Fetching up to {submitted?.limit ?? limit} makers live — cached makers are instant, new ones take a few real seconds each (run concurrently, not one at a time).
+        </div>
+      )}
+
+      {!isFetching && submitted && data && (
+        chartData.length === 0 ? (
+          <div className="mt-4" role="status" aria-live="polite">
+            <EmptyState
+              variant="no-data"
+              title="No registrations found"
+              description={`No real data for the top ${submitted.limit} makers${submitted.fuel ? ` × ${submitted.fuel}` : ''} in ${year}.`}
+            />
+          </div>
+        ) : (
+          <div className="mt-4" role="status" aria-live="polite">
+            <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 38)}>
+              <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
+                <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
+                <Tooltip
+                  formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations (real)']}
+                  contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
+                />
+                <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                  {chartData.map((d) => <Cell key={d.name} fill={chart.seriesColor(d.name)} />)}
+                  <LabelList dataKey="count" position="right" formatter={(v: number) => v.toLocaleString('en-IN')} style={{ fill: chart.axisText, fontSize: 10, fontFamily: 'JetBrains Mono' }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         )
       )}

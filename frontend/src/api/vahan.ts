@@ -111,6 +111,18 @@ export const getLiveMakerQuery = (params: { state_code: string; year: number; ma
     records: { month: number; category: string; count: number }[];
   });
 
+// Real ranking of the state's actual biggest makers (from MakerCategoryTotal,
+// not modeled) by their live-scraped fuel-scoped total. Longer timeout than
+// getLiveMakerQuery -- an uncached call here pays up to `limit` real
+// CAPTCHA-solves, not one, even though they run concurrently server-side.
+export const getLiveMakerLeaderboard = (params: { state_code: string; year: number; fuel?: string | null; limit?: number }) =>
+  api.get('/live-query/leaderboard', { params, timeout: 60000 }).then(r => r.data as {
+    state_code: string;
+    year: number;
+    fuel: string | null;
+    makers: { maker: string; total: number }[];
+  });
+
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
 export const getDistrictsForState = (stateCode: string) =>

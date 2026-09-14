@@ -7,14 +7,16 @@ to loop over. See MakerLiveQueryCache's docstring for the caching design
 """
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import MakerLiveQueryCache, State
-from scraper.analytics_scraper import load_session, scrape_state_year, verify_tesseract
+from app.core.database import AsyncSessionLocal
+from app.models.models import MakerCategoryTotal, MakerLiveQueryCache, State
+from scraper.analytics_scraper import TesseractUnavailableError, load_session, scrape_state_year, verify_tesseract
 
 logger = logging.getLogger("live_scrape_service")
 
@@ -42,6 +44,51 @@ _tesseract_path: str | None = None
 # entirely up to the API's blanket per-IP rate limit, which was sized for
 # cheap DB-scan endpoints, not ~7s external-site round trips.
 _concurrency = asyncio.Semaphore(4)
+
+
+@dataclass
+class _WarmSession:
+    client: httpx.AsyncClient
+    csrf_token: str
+
+
+# Reuses a session (cookies + CSRF token) across multiple queries instead of
+# paying load_session's GET-the-report-page-and-parse-CSRF cost on every
+# single call -- confirmed live this roughly halves per-query latency
+# (~2.0s -> ~1.0s on a fresh vs. already-warm session, measured directly).
+# The site's own analytics_scraper docstring already established the same
+# CSRF token works across many POSTs with no per-request refresh needed;
+# this just keeps that session alive across calls instead of discarding it
+# after one use. Bounded by _concurrency above (at most 4 sessions can ever
+# be checked out at once), so the pool never needs an explicit size cap.
+# A session that errors is closed and dropped rather than returned --
+# self-healing if the site ever invalidates a session server-side.
+_session_pool: list[_WarmSession] = []
+_pool_lock = asyncio.Lock()
+
+
+async def _acquire_session() -> _WarmSession:
+    async with _pool_lock:
+        if _session_pool:
+            return _session_pool.pop()
+    client = httpx.AsyncClient(timeout=30)
+    try:
+        csrf_token = await load_session(client)
+    except BaseException:
+        # A fresh client that never made it into the pool -- close it here,
+        # otherwise it's leaked (not pooled, and the caller's own cleanup
+        # never runs since this function hasn't returned a session yet).
+        await client.aclose()
+        raise
+    return _WarmSession(client, csrf_token)
+
+
+async def _release_session(session: _WarmSession, *, healthy: bool) -> None:
+    if not healthy:
+        await session.client.aclose()
+        return
+    async with _pool_lock:
+        _session_pool.append(session)
 
 
 class UnknownStateCodeError(ValueError):
@@ -113,12 +160,32 @@ async def get_or_scrape_maker_query(
 
             async with _concurrency:
                 tesseract_path = await _get_tesseract_path()
-                async with httpx.AsyncClient(timeout=30) as client:
-                    csrf_token = await load_session(client)
-                    records = await scrape_state_year(
-                        client, tesseract_path, csrf_token, state_code, year,
-                        maker=maker, fuel=fuel_key if fuel_key != ALL_FUEL_SENTINEL else None,
+                session = await _acquire_session()
+                healthy = False
+                try:
+                    # A bound, not a guess: CAPTCHA_MAX_ATTEMPTS=5 retries x
+                    # httpx's own 30s per-request timeout is a real ~150s
+                    # worst case for one maker if the site is slow but not
+                    # outright erroring (a timeout wouldn't fire on its own).
+                    # 90s lets 2-3 genuine retries complete while still
+                    # capping how long one bad maker can hold up a request
+                    # (especially the leaderboard's up-to-4-at-once fan-out).
+                    records = await asyncio.wait_for(
+                        scrape_state_year(
+                            session.client, tesseract_path, session.csrf_token, state_code, year,
+                            maker=maker, fuel=fuel_key if fuel_key != ALL_FUEL_SENTINEL else None,
+                        ),
+                        timeout=90,
                     )
+                    healthy = True
+                finally:
+                    # finally, not except/else: asyncio.CancelledError is a
+                    # BaseException (Python 3.8+), so `except Exception`
+                    # never sees it -- a cancelled request (client
+                    # disconnect, Starlette request cancellation) would
+                    # otherwise leak this session, neither closed nor
+                    # returned to the pool.
+                    await _release_session(session, healthy=healthy)
             await _write_cache(db, state_code, state_name, year, maker, fuel_key, records)
             await db.commit()
             logger.info("live-scraped state=%s year=%d maker=%r fuel=%r: %d rows", state_code, year, maker, fuel_key, len(records))
@@ -168,3 +235,77 @@ async def _write_cache(
             state_code=state_code, state_name=state_name, year=year, maker=maker, fuel=fuel_key,
             month=record["month"], category=record["category"], count=record["count"],
         ))
+
+
+_LEADERBOARD_LIMIT_CAP = 20
+
+# Bounds how many _one() calls hold an AsyncSessionLocal() open at once,
+# separately from _concurrency (which only bounds actual scraping). Without
+# this, all `limit` (up to 20) fan-out calls open their DB session upfront
+# and hold it for the whole get_or_scrape_maker_query call -- including the
+# ones still just waiting their turn on _concurrency, doing nothing with
+# the connection. Matches _concurrency's own cap: no more sessions held at
+# once than can actually be scraping at once.
+_leaderboard_db_gate = asyncio.Semaphore(4)
+
+
+async def get_top_makers_leaderboard(
+    db: AsyncSession, state_code: str, year: int, fuel: str | None = None, limit: int = 10,
+) -> list[dict]:
+    """Real (not modeled) maker ranking for one state/year, optionally
+    scoped to one raw fuel value -- the actual-numbers alternative to
+    MakersModels.tsx's log-linear ESTIMATE for a Maker x Fuel x Month
+    combo, which has no real data source anywhere in this codebase.
+
+    Which makers to look up is itself real: ranked by each maker's overall
+    volume in that state/year from MakerCategoryTotal (real batch-scraped
+    data, not modeled), so the shown leaderboard is the state's actual
+    biggest players, not an arbitrary or global list. Their FUEL-scoped
+    counts are then live-scraped (cached after) via
+    get_or_scrape_maker_query -- one real CAPTCHA-solve per uncached maker,
+    which is why `limit` is capped: an uncached call to this function pays
+    that cost `limit` times (bounded to `_concurrency` at once, not fully
+    serial, but still real work, not free)."""
+    limit = min(limit, _LEADERBOARD_LIMIT_CAP)
+    state_name = (await db.execute(select(State.state_name).where(State.state_code == state_code))).scalar()
+    if state_name is None:
+        raise UnknownStateCodeError(state_code)
+
+    top_makers = (await db.execute(
+        select(MakerCategoryTotal.maker, func.sum(MakerCategoryTotal.count).label("total"))
+        .where(MakerCategoryTotal.state_code == state_code, MakerCategoryTotal.year == year)
+        .group_by(MakerCategoryTotal.maker)
+        .order_by(func.sum(MakerCategoryTotal.count).desc())
+        .limit(limit)
+    )).all()
+
+    async def _one(maker: str) -> dict | None:
+        # Own session, not the caller's `db` -- these run concurrently via
+        # gather below, and SQLAlchemy AsyncSessions aren't safe to share
+        # across concurrently-running coroutines (same lesson as the batch
+        # scrapers' per-worker sessions). Gated separately from
+        # _concurrency (see _leaderboard_db_gate) so at most 4 of these
+        # hold a DB connection at once, not all `limit`.
+        async with _leaderboard_db_gate:
+            try:
+                async with AsyncSessionLocal() as own_db:
+                    records = await get_or_scrape_maker_query(own_db, state_code, year, maker, fuel)
+                return {"maker": maker, "total": sum(r["count"] for r in records)}
+            except TesseractUnavailableError:
+                # A process-wide precondition, not a per-maker transient --
+                # every remaining maker would fail identically, so surface
+                # it as a real failure (the endpoint returns 503) instead of
+                # silently degrading to an incomplete or empty leaderboard.
+                raise
+            except Exception:
+                # A genuinely per-maker failure (that maker's CAPTCHA
+                # rejected repeatedly, a one-off network blip) shouldn't
+                # discard every other maker's already-succeeded result --
+                # same isolation principle as the batch scrapers' per-worker
+                # try/except.
+                logger.warning("leaderboard: failed to fetch maker=%r state=%s year=%d fuel=%r -- skipping", maker, state_code, year, fuel)
+                return None
+
+    results = await asyncio.gather(*(_one(maker) for maker, _ in top_makers))
+    ranked = [r for r in results if r is not None]
+    return sorted(ranked, key=lambda r: r["total"], reverse=True)

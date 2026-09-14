@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.core.rate_limit import limiter
 from app.core.scope import require_state_code
 from app.models.models import User
-from app.services.live_scrape_service import UnknownStateCodeError, get_or_scrape_maker_query
+from app.services.live_scrape_service import UnknownStateCodeError, get_or_scrape_maker_query, get_top_makers_leaderboard
 from scraper.analytics_scraper import CaptchaSolveError, TesseractUnavailableError
 
 router = APIRouter()
@@ -58,3 +58,45 @@ async def get_maker_query(
             detail="Could not fetch this data right now. Try again shortly.",
         )
     return {"state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "records": records}
+
+
+@router.get("/leaderboard")
+@limiter.limit("5/minute")
+async def get_leaderboard(
+    request: Request,  # required by @limiter.limit, unused otherwise
+    year: int,
+    fuel: str | None = None,
+    limit: int = Query(10, ge=1, le=20),
+    state_code: str = Depends(require_state_code),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Real (not modeled) top-maker ranking for one state/year, optionally
+    scoped to one fuel type -- the actual-data alternative to
+    MakersModels.tsx's log-linear estimate for a Maker x Fuel combo, which
+    has no real data source. See get_top_makers_leaderboard's docstring for
+    how "top makers" is picked and why this costs more than /maker.
+
+    5/minute, not 10 like /maker: an uncached call here pays up to `limit`
+    (capped at 20) real CAPTCHA-solves, not one -- rarer, heavier requests
+    get a tighter budget."""
+    try:
+        makers = await get_top_makers_leaderboard(db, state_code, year, fuel, limit)
+    except UnknownStateCodeError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown state_code {state_code!r}.")
+    except TesseractUnavailableError:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Live scraping is temporarily unavailable (OCR not ready on the server).",
+        )
+    except CaptchaSolveError:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="Could not fetch this data right now -- the source site rejected an attempt. Try again shortly.",
+        )
+    except Exception:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="Could not fetch this data right now. Try again shortly.",
+        )
+    return {"state_code": state_code, "year": year, "fuel": fuel, "makers": makers}
