@@ -10,6 +10,14 @@ without it, `git clone` silently gives you a small placeholder file instead of t
 Postgres fails on first run with `gunzip: invalid magic`). If you already cloned without LFS installed:
 install it, then run `git lfs pull` from the repo root, then `docker compose down -v` before retrying below.
 
+You also need a real `JWT_SECRET_KEY` — the backend refuses to start with the
+insecure code-level default. Create `docker/.env` (gitignored, never
+committed) with one before first run:
+
+```bash
+echo "JWT_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')" > docker/.env
+```
+
 ```bash
 git lfs install   # one-time, after installing Git LFS
 cd docker

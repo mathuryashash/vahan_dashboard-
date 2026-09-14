@@ -32,6 +32,12 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-vahan}:${POSTGRES_PASSWORD:-vahan}@postgres:5432/${POSTGRES_DB:-vahan}
       - TZ=Asia/Kolkata
+      # No insecure fallback here on purpose -- app/main.py's lifespan refuses
+      # to boot on the code-level default, and a hardcoded compose-level
+      # default would just move that insecurity one file over. Put a real
+      # value in docker/.env (gitignored, never committed): generate one with
+      # `python3 -c "import secrets; print(secrets.token_hex(32))"`.
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in docker/.env -- see README}
     depends_on:
       postgres:
         condition: service_healthy
