@@ -302,6 +302,42 @@ class StateMonthCategoryTotal(Base):
     )
 
 
+class StateMonthCategoryFuelTotal(Base):
+    """Same shape as StateMonthCategoryTotal, one query further scoped to a
+    single fuel type (yAxis=monthWise, xAxis=vehicleCategoryDescription,
+    vehicleFuels=<one of analytics_scraper.FUEL_VALUES>) -- a separate table
+    rather than a nullable `fuel` column on StateMonthCategoryTotal, matching
+    this codebase's existing convention of one table per crosstab dimension
+    (MakerCategoryTotal/FuelCategoryTotal/MakerFuelTotal are separate tables
+    too, not one table with nullable pivot columns).
+
+    Deliberately fuel-only, not maker-only or maker+fuel: the site's fuel
+    list is 34 static values (fully enumerable, see FUEL_VALUES), but its
+    maker list is a 7,733-item long tail behind a lazy-load search endpoint
+    -- looping over "every maker" the way run_analytics_fuel_scrape.py loops
+    over every fuel would be ~6.7M requests, not feasible. If a maker (or
+    maker+fuel) dimension gets added later, it needs its own scoping
+    decision (e.g. top-N by volume) before a table like this makes sense for
+    it. Integer PK: ceiling is 36 states x 24 years x 12 months x ~17
+    categories x 34 fuels =~ 6M rows worst case (most category/fuel
+    combinations are zero and never get a row at all), nowhere near
+    Integer's ~2.1B limit."""
+    __tablename__ = "state_month_category_fuel_totals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    year = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False)
+    category = Column(String(100), nullable=False, index=True)
+    fuel = Column(String(50), nullable=False, index=True)
+    count = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        Index("idx_smcft_natural_key", "state_code", "year", "fuel", "month", "category", unique=True),
+    )
+
+
 class DashboardSummary(Base):
     __tablename__ = "dashboard_summary"
 

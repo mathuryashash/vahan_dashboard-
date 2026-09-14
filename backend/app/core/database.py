@@ -136,4 +136,5 @@ async def init_db():
     # retrofit needed, unlike the older crosstab tables that already had
     # duplicate rows in production before their constraint was added.
     await ensure_foreign_key(engine, "state_month_category_totals", "state_code", "states", "state_code")
+    await ensure_foreign_key(engine, "state_month_category_fuel_totals", "state_code", "states", "state_code")
     await ensure_analyzed(engine, list(Base.metadata.tables))

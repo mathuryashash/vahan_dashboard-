@@ -11,7 +11,8 @@ from app.core.database import engine
 from app.core.migrations import vacuum_tables
 from app.core.query_filters import classify_vehicle
 from app.models.models import (
-    FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State, StateMonthCategoryTotal,
+    FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State, StateMonthCategoryFuelTotal,
+    StateMonthCategoryTotal,
 )
 from scraper.vahan_scraper import DIMENSIONS
 
@@ -210,6 +211,32 @@ async def persist_state_month_category_batch(
             year=year,
             month=record["month"],
             category=record["category"],
+            count=record["count"],
+        ))
+
+
+async def persist_state_month_category_fuel_batch(
+    db: AsyncSession, state_code: str, state_name: str, year: int, fuel: str, records: list[dict],
+) -> None:
+    """Same delete-then-insert-per-scope pattern as
+    persist_state_month_category_batch, scoped to (state_code, year, fuel)
+    instead of just (state_code, year) -- one query to the site already
+    returns the full year for one fuel in one response."""
+    await db.execute(
+        delete(StateMonthCategoryFuelTotal).where(
+            StateMonthCategoryFuelTotal.state_code == state_code,
+            StateMonthCategoryFuelTotal.year == year,
+            StateMonthCategoryFuelTotal.fuel == fuel,
+        )
+    )
+    for record in records:
+        db.add(StateMonthCategoryFuelTotal(
+            state_code=state_code,
+            state_name=state_name,
+            year=year,
+            month=record["month"],
+            category=record["category"],
+            fuel=fuel,
             count=record["count"],
         ))
 

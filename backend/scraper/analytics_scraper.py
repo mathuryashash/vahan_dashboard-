@@ -14,7 +14,11 @@ useful and working -- yAxis=monthWise x xAxis=vehicleCategoryDescription,
 scoped to one state + one year (that state param takes multiple states at
 once too, but one-state-per-request keeps a single request's response
 small and keeps retry/resume granularity at the level run_analytics_scrape.py
-already resumes on). yAxis=vehicleMakerName (Maker) renders through a
+already resumes on), optionally further scoped to one fuel (see FUEL_VALUES
+-- 34 static values, fully enumerable) or one maker (NOT enumerable: the
+site's maker list is a 7,733-item long tail behind a lazy-load search
+endpoint, so no run_analytics_*_scrape.py loops over "every maker" the way
+it does over every fuel). yAxis=vehicleMakerName (Maker) renders through a
 separate client-side-paginated table that requires JS to populate and is
 currently broken server-side even through the real browser UI (confirmed
 live: "Unable to prepare Maker page numbers safely") -- not built against
@@ -52,6 +56,21 @@ _SITE_STATE_CODE_OVERRIDES = {
     "TS": "TG",  # Telangana
     "DN": "DD",  # UT of DNH and DD
 }
+
+# The site's full vehicleFuels list -- a small, static, fully-rendered
+# <select> (unlike vehicleMakers, which is a lazy-loaded 7,733-item long
+# tail behind a separate /lazy/vehicle-makers search endpoint and isn't
+# feasible to backfill exhaustively). Extracted live from the report page;
+# this enum rarely changes, so it's hardcoded rather than fetched per run.
+FUEL_VALUES = [
+    "BIO-CNG/BIO-GAS", "CNG ONLY", "DI-METHYL ETHER", "DIESEL", "DIESEL/HYBRID",
+    "DUAL DIESEL/BIO CNG", "DUAL DIESEL/CNG", "DUAL DIESEL/LNG", "ELECTRIC(BOV)",
+    "ETHANOL(E100)", "FLEX-FUEL(BIO-DIESEL)", "FLEX-FUEL(ETHANOL)", "FUEL CELL HYDROGEN",
+    "HCNG", "HYDROGEN(ICE)", "LNG", "LPG ONLY", "METHANOL", "NOT APPLICABLE", "PETROL",
+    "PETROL(E20)", "PETROL(E20)/CNG", "PETROL(E20)/HYBRID", "PETROL(E20)/HYBRID/CNG",
+    "PETROL(E20)/LPG", "PETROL/CNG", "PETROL/HYBRID", "PETROL/HYBRID/CNG", "PETROL/LPG",
+    "PETROL/METHANOL", "PLUG-IN HYBRID EV", "PURE EV", "SOLAR", "STRONG HYBRID EV",
+]
 
 
 class CaptchaSolveError(RuntimeError):
@@ -267,6 +286,7 @@ def parse_month_category_table(html: str) -> list[dict]:
 
 async def scrape_state_year(
     client: httpx.AsyncClient, tesseract_path: str, csrf_token: str, state_code: str, year: int,
+    *, maker: str | None = None, fuel: str | None = None,
 ) -> list[dict]:
-    html = await submit_query(client, tesseract_path, csrf_token, state_code, year)
+    html = await submit_query(client, tesseract_path, csrf_token, state_code, year, maker=maker, fuel=fuel)
     return parse_month_category_table(html)

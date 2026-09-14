@@ -1,8 +1,8 @@
 import pytest
 from sqlalchemy import select
 
-from app.models.models import State, StateMonthCategoryTotal
-from app.services.scraper_service import persist_state_month_category_batch
+from app.models.models import State, StateMonthCategoryFuelTotal, StateMonthCategoryTotal
+from app.services.scraper_service import persist_state_month_category_batch, persist_state_month_category_fuel_batch
 
 
 @pytest.fixture(autouse=True)
@@ -62,3 +62,41 @@ async def test_persist_state_month_category_batch_keeps_other_years_untouched(db
         select(StateMonthCategoryTotal).where(StateMonthCategoryTotal.state_code == "BR")
     )).scalars().all()
     assert {(r.year, r.count) for r in rows} == {(2023, 500), (2024, 1000)}
+
+
+async def test_persist_state_month_category_fuel_batch_inserts_records(db_session):
+    records = [
+        {"month": 1, "category": "TWO WHEELER(NT)", "count": 300},
+        {"month": 1, "category": "FOUR WHEELER", "count": 40},
+    ]
+    await persist_state_month_category_fuel_batch(db_session, "BR", "Bihar", 2024, "PETROL", records)
+    await db_session.commit()
+
+    rows = (await db_session.execute(
+        select(StateMonthCategoryFuelTotal).where(StateMonthCategoryFuelTotal.state_code == "BR")
+    )).scalars().all()
+    assert len(rows) == 2
+    assert {r.count for r in rows} == {300, 40}
+    assert rows[0].fuel == "PETROL"
+    assert rows[0].year == 2024
+
+
+async def test_persist_state_month_category_fuel_batch_replaces_only_same_fuel(db_session):
+    await persist_state_month_category_fuel_batch(
+        db_session, "BR", "Bihar", 2024, "PETROL", [{"month": 1, "category": "TWO WHEELER(NT)", "count": 300}],
+    )
+    await persist_state_month_category_fuel_batch(
+        db_session, "BR", "Bihar", 2024, "DIESEL", [{"month": 1, "category": "TWO WHEELER(NT)", "count": 50}],
+    )
+    await db_session.commit()
+
+    # Re-scraping PETROL must not touch the DIESEL rows for the same state/year.
+    await persist_state_month_category_fuel_batch(
+        db_session, "BR", "Bihar", 2024, "PETROL", [{"month": 2, "category": "FOUR WHEELER", "count": 10}],
+    )
+    await db_session.commit()
+
+    rows = (await db_session.execute(
+        select(StateMonthCategoryFuelTotal).where(StateMonthCategoryFuelTotal.state_code == "BR")
+    )).scalars().all()
+    assert {(r.fuel, r.month, r.count) for r in rows} == {("DIESEL", 1, 50), ("PETROL", 2, 10)}

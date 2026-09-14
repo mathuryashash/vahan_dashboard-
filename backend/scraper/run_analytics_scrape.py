@@ -99,7 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("--year", type=int, help="Scrape a single year")
     parser.add_argument("--from-year", type=int, help="Start of year range")
     parser.add_argument("--to-year", type=int, help="End of year range (inclusive)")
-    parser.add_argument("--concurrent", type=int, default=4, help="Concurrent states per year")
+    parser.add_argument("--concurrent", type=int, default=8, help="Concurrent states per year")
     parser.add_argument("--force", action="store_true", help="Re-scrape states that already have data")
     args = parser.parse_args()
 
