@@ -40,6 +40,19 @@ CAPTCHA_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456
 
 _TESSERACT_CANDIDATES = ["tesseract", r"C:\Program Files\Tesseract-OCR\tesseract.exe"]
 
+# The new site's own state-code vocabulary differs from this codebase's
+# `states` table (inherited from the old VAHAN4 site) for exactly 3 of 36
+# states -- confirmed live by diffing the new site's <select> dropdown
+# against our states table; every other code matches byte-for-byte. Applied
+# only to the outgoing stateMultiple form value -- our own state_code is
+# still what's logged and persisted, so this stays an internal detail of
+# talking to the site, not a change to what this codebase calls a state.
+_SITE_STATE_CODE_OVERRIDES = {
+    "OD": "OR",  # Odisha
+    "TS": "TG",  # Telangana
+    "DN": "DD",  # UT of DNH and DD
+}
+
 
 class CaptchaSolveError(RuntimeError):
     """Every CAPTCHA attempt for one query was rejected."""
@@ -141,7 +154,7 @@ def _build_form(*, csrf_token: str, state_code: str, year: int, captcha: str,
         "fromYear": str(year),
         "toYear": str(year),
         "reportMonth": "",
-        "stateMultiple": state_code,
+        "stateMultiple": _SITE_STATE_CODE_OVERRIDES.get(state_code, state_code),
         "_stateMultiple": "1",
         "_rtoCodeMultiple": "1",
         "_vehicleEmissions": "1",

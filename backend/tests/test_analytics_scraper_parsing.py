@@ -78,6 +78,17 @@ def test_build_form_returns_a_dict_httpx_can_form_encode():
     assert "vehicleMakers" not in form
 
 
+def test_build_form_translates_state_codes_the_new_site_renamed():
+    # Odisha/Telangana/the DNH&DD UT use different 2-letter codes on the new
+    # site than in this codebase's own states table (inherited from the old
+    # VAHAN4 site) -- confirmed live by diffing the site's dropdown. Every
+    # other code passes through unchanged.
+    assert _build_form(csrf_token="t", state_code="OD", year=2024, captcha="X", maker=None, fuel=None)["stateMultiple"] == "OR"
+    assert _build_form(csrf_token="t", state_code="TS", year=2024, captcha="X", maker=None, fuel=None)["stateMultiple"] == "TG"
+    assert _build_form(csrf_token="t", state_code="DN", year=2024, captcha="X", maker=None, fuel=None)["stateMultiple"] == "DD"
+    assert _build_form(csrf_token="t", state_code="BR", year=2024, captcha="X", maker=None, fuel=None)["stateMultiple"] == "BR"
+
+
 def test_build_form_adds_maker_and_fuel_when_given():
     form = _build_form(
         csrf_token="tok", state_code="BR", year=2024, captcha="ABC123",
