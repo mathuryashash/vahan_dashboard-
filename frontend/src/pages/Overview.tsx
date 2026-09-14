@@ -20,28 +20,8 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import type { MonthDetail } from '../types';
-import { estimateTripleCells } from '../utils/tripleEstimate';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** Thin wrapper around the shared estimateTripleCells (see
- * utils/tripleEstimate.ts) for the single-maker KPI-card case -- runs the
- * full capped-redistribution estimate across every maker (needed for the
- * redistribution math to be correct) and returns just the one requested
- * maker's share. Returns undefined if any input is missing or the target
- * maker isn't present in both cross-tabs -- never a fabricated zero. */
-function rescaledMakerEstimate(
-  mcList: { maker: string; count: number }[] | undefined,
-  mfList: { maker: string; count: number }[] | undefined,
-  myList: { maker: string; count: number }[] | undefined,
-  rCf: number | undefined,
-  targetMaker: string | null,
-): number | undefined {
-  if (!mcList || !mfList || !myList || !rCf || !targetMaker) return undefined;
-  const result = estimateTripleCells({ mcList, mfList, myList, rCf });
-  const value = result.get(targetMaker);
-  return value != null ? Math.round(value) : undefined;
-}
 
 function PeriodStat({ label, count, growth }: { label: string; count: number; growth: number | null }) {
   return (
@@ -140,7 +120,11 @@ export function OverviewPage() {
   const { data: crosstabMakerCategory, isLoading: crosstabMakerCategoryLoading } = useQuery({
     queryKey: ['makerCategoryBreakdown', selectedYear, selectedCategory, selectedMaker, selectedState],
     queryFn: ({ signal }) => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, maker: selectedMaker!, state: selectedState }, signal),
-    enabled: exactlyOnePairActive && !!selectedCategory && !!selectedMaker,
+    // kpiComboImpossible (not exactlyOnePairActive) so this also fires when
+    // all 3 filters are set -- real Maker x Category total, independent of
+    // whether a Powertrain filter is also active. Matches crosstabFuelCategory's
+    // gating below.
+    enabled: kpiComboImpossible && !!selectedCategory && !!selectedMaker,
   });
   const { data: crosstabFuelCategory, isLoading: crosstabFuelCategoryLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', selectedYear, selectedCategory, fuelGroup, selectedState],
@@ -154,29 +138,30 @@ export function OverviewPage() {
   const { data: crosstabMakerFuel, isLoading: crosstabMakerFuelLoading } = useQuery({
     queryKey: ['makerFuelBreakdown', selectedYear, selectedMaker, fuelGroup, selectedState],
     queryFn: ({ signal }) => getMakerFuelBreakdown({ year: selectedYear, maker: selectedMaker!, fuel_group: fuelGroup!, state: selectedState }, signal),
-    enabled: exactlyOnePairActive && !!selectedMaker && !!fuelGroup,
+    // kpiComboImpossible, same reasoning as crosstabMakerCategory above.
+    enabled: kpiComboImpossible && !!selectedMaker && !!fuelGroup,
   });
+
+  // /maker-category-breakdown, /fuel-category-breakdown and
+  // /maker-fuel-breakdown each key their response by whichever of the two
+  // requested dimensions is left unfixed (see categories.py's key_name) --
+  // computed unconditionally here (not just when exactlyOnePairActive) so
+  // the same three real numbers also feed the all-3-filters KPI row below,
+  // instead of a fabricated combined estimate.
+  const mcTotal = (crosstabMakerCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+  const cfTotal = (crosstabFuelCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+  const mfTotal = (crosstabMakerFuel || []).find((r: { maker: string; count: number }) => r.maker === selectedMaker)?.count;
 
   let crosstabTotal: number | undefined;
   let crosstabLoading = false;
   if (exactlyOnePairActive && selectedCategory && selectedMaker) {
-    // /maker-category-breakdown returns one row keyed by "vehicle_category"
-    // (not "maker") when both maker and vehicle_category are passed together
-    // -- the query is already filtered to that one maker server-side, so it
-    // groups by the field left unfixed instead (see categories.py's
-    // key_name). Searching for r.maker here (a field this response shape
-    // never has) always returned undefined -- silently showing "--" for
-    // Total Registrations/Avg Daily even when the real total was 0, not
-    // unknown. Same class of bug MakerFuelPanel/FuelCategoryPanel already
-    // had fixed below -- this was the one remaining case, in the KPI-card
-    // source instead of a panel.
-    crosstabTotal = (crosstabMakerCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+    crosstabTotal = mcTotal;
     crosstabLoading = crosstabMakerCategoryLoading;
   } else if (exactlyOnePairActive && selectedCategory && fuelGroup) {
-    crosstabTotal = (crosstabFuelCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
+    crosstabTotal = cfTotal;
     crosstabLoading = crosstabFuelCategoryLoading;
   } else if (exactlyOnePairActive && selectedMaker && fuelGroup) {
-    crosstabTotal = (crosstabMakerFuel || []).find((r: { maker: string; count: number }) => r.maker === selectedMaker)?.count;
+    crosstabTotal = mfTotal;
     crosstabLoading = crosstabMakerFuelLoading;
   }
   // Cross-tabs are year totals, no day-level granularity to divide by the
@@ -184,46 +169,19 @@ export function OverviewPage() {
   // this page already uses elsewhere for a full-year average.
   const crosstabAvgDaily = crosstabTotal !== undefined ? Math.round(crosstabTotal / 365) : undefined;
 
-  // ---- All 3 filters at once: estimate instead of a hard '--' ----
-  // No VAHAN table pivots on Maker x Category x Fuel together, but all
-  // three PAIRWISE cross-tabs are real -- same "no three-factor
-  // interaction" log-linear model as the Makers tab's ranking estimate
-  // (shipped earlier today). Simplified here versus that version: after
-  // rescaling every maker's raw estimate to sum to the one real number we
-  // have (the Category x Fuel total), the grand-total/category-total/
-  // fuel-total terms all algebraically cancel out (confirmed in that
-  // feature's review) -- so this only needs each maker's real
-  // Maker x Category count, real Maker x Fuel count, and real own-year
-  // total, not the extra totals the Makers-tab version separately fetches.
+  // ---- All 3 filters at once: three real pairwise numbers, not a
+  // combined estimate ----
+  // No VAHAN table pivots on Maker x Category x Fuel together, and there's
+  // no real number for that exact combination to show as a single "Total
+  // Registrations" -- so instead of modeling one (the previous approach),
+  // the KPI row below shows the three real pairwise totals side by side.
   const allThreeActive = kpiComboImpossible && !exactlyOnePairActive;
-  const { data: tripleMcList, isLoading: tripleMcLoading } = useQuery({
-    queryKey: ['tripleMcList', selectedYear, selectedCategory, selectedState],
-    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, state: selectedState, limit: 100 }, signal),
-    enabled: allThreeActive,
-  });
-  const { data: tripleMfList, isLoading: tripleMfLoading } = useQuery({
-    queryKey: ['tripleMfList', selectedYear, fuelGroup, selectedState],
-    queryFn: ({ signal }) => getMakerFuelBreakdown({ year: selectedYear, fuel_group: fuelGroup!, state: selectedState, limit: 100 }, signal),
-    enabled: allThreeActive,
-  });
-  const { data: tripleMyList, isLoading: tripleMyLoading } = useQuery({
-    queryKey: ['tripleMyList', selectedYear, selectedState],
-    queryFn: ({ signal }) => getTopMakers({ year: selectedYear, state: selectedState, limit: 100 }, signal),
-    enabled: allThreeActive,
-  });
-  // crosstabFuelCategory (defined above) already gives the real Category x
-  // Fuel total (rCf) and is maker-independent -- reused as-is here, its
-  // `enabled` was loosened from `exactlyOnePairActive` to `kpiComboImpossible`
-  // above specifically so it also fires in this all-3 case.
-  const rCfForTriple = (crosstabFuelCategory || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
-
-  // Tracks all 4 dependent queries, not just one -- a single query's
-  // isLoading was found (in the Makers-tab version of this same estimate,
-  // reviewed earlier today) to falsely read "done" while sibling queries
-  // keyed on a just-changed filter were still genuinely in flight.
-  const tripleLoading = allThreeActive && (tripleMcLoading || tripleMfLoading || tripleMyLoading || crosstabFuelCategoryLoading);
-  const tripleEstimateTotal = tripleLoading ? undefined : rescaledMakerEstimate(tripleMcList, tripleMfList, tripleMyList, rCfForTriple, selectedMaker);
-  const tripleAvgDaily = tripleEstimateTotal !== undefined ? Math.round(tripleEstimateTotal / 365) : undefined;
+  // hasYearData signal per pairwise cross-tab -- see MakerCategoryPanel's
+  // comment further down for why this (not an empty filtered response)
+  // is what tells "not scraped this year" apart from a real zero.
+  const mcNoData = allThreeActive && crosstabCoverage ? !crosstabCoverage.maker_category.includes(selectedYear) : false;
+  const cfNoData = allThreeActive && crosstabCoverage ? !crosstabCoverage.fuel_category.includes(selectedYear) : false;
+  const mfNoData = allThreeActive && crosstabCoverage ? !crosstabCoverage.maker_fuel.includes(selectedYear) : false;
 
   // YoY Growth and Top State for the same combo -- only became answerable
   // once the crosstab tables got multi-year (2003+), per-state history;
@@ -296,6 +254,23 @@ export function OverviewPage() {
       state: selectedState,
       maker: selectedMaker,
     }, signal),
+    // Guaranteed empty whenever selectedMaker is set (maker and a real
+    // category never coexist on a Registration row -- see the comment
+    // below), so don't bother firing it in that case. Vehicle Mix instead
+    // sources from makerCategoryMix below, the real per-maker crosstab.
+    enabled: !selectedMaker,
+  });
+
+  // Real per-maker category mix, from the same Maker x Vehicle Class
+  // cross-tab MakerCategoryPanel uses (year-only, no month breakdown) --
+  // passing only `maker` (no vehicle_category) groups by vehicle_category,
+  // giving this one maker's full category split. Used instead of `categories`
+  // above whenever a maker is selected, since that query is structurally
+  // guaranteed empty in that case (see its own comment).
+  const { data: makerCategoryMix, isLoading: makerCategoryMixLoading } = useQuery({
+    queryKey: ['makerCategoryMix', selectedYear, selectedMaker, selectedState],
+    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year: selectedYear, maker: selectedMaker!, state: selectedState }, signal),
+    enabled: !!selectedMaker,
   });
 
   // Separate from `categories` above (which drives the Vehicle Mix pie and
@@ -356,12 +331,18 @@ export function OverviewPage() {
     count: d.count,
   }));
 
-  const pieData = capForDonut((categories || []).map((c: { vehicle_category: string; total_count: number }) => ({
-    name: c.vehicle_category,
-    value: c.total_count,
-  })));
+  const pieData = capForDonut(
+    selectedMaker
+      ? (makerCategoryMix || []).map((c: { vehicle_category: string; count: number }) => ({ name: c.vehicle_category, value: c.count }))
+      : (categories || []).map((c: { vehicle_category: string; total_count: number }) => ({ name: c.vehicle_category, value: c.total_count }))
+  );
   const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
-  const vehicleMixReady = useSettledLayout(categoriesLoading);
+  const vehicleMixLoading = selectedMaker ? makerCategoryMixLoading : categoriesLoading;
+  const vehicleMixReady = useSettledLayout(vehicleMixLoading);
+  // See MakerCategoryPanel's comment further down -- hasYearData (not an
+  // empty filtered response) tells "not scraped this year" apart from a
+  // real zero, same distinction applies to this maker's category mix.
+  const vehicleMixNoData = selectedMaker && crosstabCoverage ? !crosstabCoverage.maker_category.includes(selectedYear) : false;
 
   // A state/RTO-scoped analyst can't do anything about missing data (no
   // access to /refresh/, it's admin-only) -- an empty card telling them to
@@ -370,7 +351,7 @@ export function OverviewPage() {
   // ones who could actually trigger a scrape. isStateLocked already covers
   // both state- and RTO-scoped accounts (scope_type !== 'national').
   const showTrendCard = !isStateLocked || trendLoading || chartData.length > 0;
-  const showVehicleMixCard = !isStateLocked || categoriesLoading || !vehicleMixReady || pieData.length > 0;
+  const showVehicleMixCard = !isStateLocked || vehicleMixLoading || !vehicleMixReady || pieData.length > 0;
   const monthDetailUnavailable = selectedMonth != null && !monthDetailLoading && (monthDetailError || !monthDetail);
   const showMonthDetailCard = !isStateLocked || !monthDetailUnavailable;
 
@@ -504,7 +485,7 @@ export function OverviewPage() {
         </div>
       </div>
 
-      {impossibleCrossFilter && (
+      {exactlyOnePairActive && impossibleCrossFilter && (
         <MakerCategoryPanel
           year={selectedYear}
           category={selectedCategory!}
@@ -515,7 +496,7 @@ export function OverviewPage() {
         />
       )}
 
-      {impossibleFuelCategoryFilter && (
+      {exactlyOnePairActive && impossibleFuelCategoryFilter && (
         <FuelCategoryPanel
           year={selectedYear}
           category={selectedCategory!}
@@ -526,7 +507,7 @@ export function OverviewPage() {
         />
       )}
 
-      {impossibleMakerFuelFilter && (
+      {exactlyOnePairActive && impossibleMakerFuelFilter && (
         <MakerFuelPanel
           year={selectedYear}
           maker={selectedMaker!}
@@ -537,59 +518,81 @@ export function OverviewPage() {
         />
       )}
 
-      {kpiComboImpossible && (
-        <div className={`bg-[var(--bg-card)] border rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance ${allThreeActive ? 'border-dashed border-[var(--border)]' : 'border-[var(--border)]'}`}>
-          {exactlyOnePairActive
-            ? <>All four cards below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination.</>
-            : <><span className="font-semibold text-[var(--accent)]">Estimated</span> — no VAHAN table pivots on Maker × Category × Powertrain together, so Total Registrations and Avg Daily below are modeled from the three real pairwise cross-tabs (same technique as the Makers tab's ranking estimate), rescaled to match the one real number available. YoY Growth isn't estimated here yet (would need the same model run again for the prior year) — still shown as "—".</>}
+      {exactlyOnePairActive && (
+        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
+          All four cards below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination.
         </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <KPICard
-          label="Total Registrations"
-          value={allThreeActive ? (tripleEstimateTotal != null ? `~${tripleEstimateTotal.toLocaleString('en-IN')}` : '—') : kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
-          change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent}
-          icon={<Car className="w-4 h-4" />}
-          loading={allThreeActive ? tripleLoading : kpiComboImpossible ? crosstabLoading : kpisLoading}
-          index={0}
-        />
-        <KPICard
-          label="YoY Growth"
-          value={kpiComboImpossible
-            ? (exactlyOnePairActive && crosstabDetail?.yoy_growth_percent != null ? `${crosstabDetail.yoy_growth_percent.toFixed(1)}%` : '—')
-            : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')}
-          change={kpiComboImpossible ? (exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? undefined : undefined) : kpis?.yoy_growth_percent}
-          icon={<TrendingUp className="w-4 h-4" />}
-          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
-          index={1}
-        />
-        <KPICard
-          label="Avg Daily Registrations"
-          value={allThreeActive
-            ? (tripleEstimateTotal == null ? '—' : tripleEstimateTotal > 0 && tripleAvgDaily === 0 ? '< 1' : `~${tripleAvgDaily}`)
-            : kpiComboImpossible
-            ? (crosstabTotal === undefined ? '—' : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : crosstabAvgDaily)
-            : (kpis?.total_registrations_today ?? 0)}
-          icon={<Bike className="w-4 h-4" />}
-          loading={allThreeActive ? tripleLoading : kpiComboImpossible ? crosstabLoading : kpisLoading}
-          index={2}
-        />
-        <KPICard
-          label="Top State"
-          value={allThreeActive
-            // A per-state breakdown of the 3-way estimate would need this
-            // same model re-run 36x (once per state) -- out of scope for
-            // now. When a state filter is already active, "top state" is
-            // trivially that state, so show it instead of a dash.
-            ? (selectedState ?? '—')
-            : kpiComboImpossible
-            ? (exactlyOnePairActive ? (crosstabDetail?.top_state ?? '—') : '—')
-            : (kpis?.top_state ?? '—')}
-          icon={<Award className="w-4 h-4" />}
-          loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
-          index={3}
-        />
+        {allThreeActive ? (
+          <>
+            <KPICard
+              label="Maker × Category"
+              value={mcNoData ? 'Not scraped' : (mcTotal ?? 0)}
+              icon={<Car className="w-4 h-4" />}
+              loading={crosstabMakerCategoryLoading}
+              index={0}
+            />
+            <KPICard
+              label="Maker × Powertrain"
+              value={mfNoData ? 'Not scraped' : (mfTotal ?? 0)}
+              icon={<Bike className="w-4 h-4" />}
+              loading={crosstabMakerFuelLoading}
+              index={1}
+            />
+            <KPICard
+              label="Category × Powertrain"
+              value={cfNoData ? 'Not scraped' : (cfTotal ?? 0)}
+              icon={<TrendingUp className="w-4 h-4" />}
+              loading={crosstabFuelCategoryLoading}
+              index={2}
+            />
+            <KPICard
+              label="Top State"
+              value={selectedState ?? '—'}
+              icon={<Award className="w-4 h-4" />}
+              index={3}
+            />
+          </>
+        ) : (
+          <>
+            <KPICard
+              label="Total Registrations"
+              value={kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
+              change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent}
+              icon={<Car className="w-4 h-4" />}
+              loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+              index={0}
+            />
+            <KPICard
+              label="YoY Growth"
+              value={kpiComboImpossible
+                ? (exactlyOnePairActive && crosstabDetail?.yoy_growth_percent != null ? `${crosstabDetail.yoy_growth_percent.toFixed(1)}%` : '—')
+                : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')}
+              change={kpiComboImpossible ? (exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? undefined : undefined) : kpis?.yoy_growth_percent}
+              icon={<TrendingUp className="w-4 h-4" />}
+              loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+              index={1}
+            />
+            <KPICard
+              label="Avg Daily Registrations"
+              value={kpiComboImpossible
+                ? (crosstabTotal === undefined ? '—' : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : crosstabAvgDaily)
+                : (kpis?.total_registrations_today ?? 0)}
+              icon={<Bike className="w-4 h-4" />}
+              loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+              index={2}
+            />
+            <KPICard
+              label="Top State"
+              value={kpiComboImpossible ? (exactlyOnePairActive ? (crosstabDetail?.top_state ?? '—') : '—') : (kpis?.top_state ?? '—')}
+              icon={<Award className="w-4 h-4" />}
+              loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+              index={3}
+            />
+          </>
+        )}
       </div>
 
       {(showTrendCard || showVehicleMixCard) && (
@@ -631,14 +634,22 @@ export function OverviewPage() {
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '250ms' }}>
           <div className="mb-4">
             <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Vehicle Mix</h3>
-            <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">by category — {selectedYear}</p>
+            <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+              by category — {selectedYear}{selectedMaker && <>, {selectedMaker} (year total, no month breakdown)</>}
+            </p>
           </div>
-          {categoriesLoading || !vehicleMixReady ? (
+          {vehicleMixLoading || !vehicleMixReady ? (
             <div className="h-52 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
           ) : pieData.length === 0 ? (
             <EmptyState
               title="No Category Data"
-              description="Run a sync for 'vehicle_class' to load category breakdowns."
+              description={
+                vehicleMixNoData
+                  ? `Not scraped for FY ${selectedYear} yet.`
+                  : selectedMaker
+                  ? `${selectedMaker} has no registrations in any category for FY ${selectedYear}.`
+                  : "Run a sync for 'vehicle_class' to load category breakdowns."
+              }
               variant="no-data"
               className="py-8"
             />
