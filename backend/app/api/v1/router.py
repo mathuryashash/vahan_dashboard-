@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     auth,
     users,
     organizations,
+    live_query,
 )
 
 api_router = APIRouter()
@@ -32,3 +33,4 @@ api_router.include_router(refresh.router, prefix="/refresh", tags=["Refresh"])
 api_router.include_router(geo.router, prefix="/geo", tags=["Geo Hierarchy"])
 api_router.include_router(oem_sales.router, prefix="/oem-sales", tags=["OEM Sales"])
 api_router.include_router(rto.router, prefix="/rto", tags=["RTO Analysis"])
+api_router.include_router(live_query.router, prefix="/live-query", tags=["Live Query"])

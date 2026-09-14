@@ -338,6 +338,47 @@ class StateMonthCategoryFuelTotal(Base):
     )
 
 
+class MakerLiveQueryCache(Base):
+    """On-demand cache for maker-filtered (optionally also fuel-filtered)
+    month x category queries against the new analytics site -- the piece
+    StateMonthCategoryTotal/StateMonthCategoryFuelTotal deliberately don't
+    cover, because maker is a 7,733-item long tail with no static enum to
+    loop over the way FUEL_VALUES lets the fuel backfill (see that table's
+    docstring). Rather than pre-scrape an infeasible cross product, this
+    table only ever holds combos a real user actually asked for: scraped
+    live on first request (see app/services/live_scrape_service.py), served
+    from here on every request after.
+
+    `fuel` is a required column, not nullable -- consistent with this
+    codebase's no-nullable-pivot-column convention -- but takes the
+    sentinel value "ALL" for a maker-only query (no fuel filter), so the
+    natural-key unique index stays a plain non-null composite instead of
+    needing COALESCE-based uniqueness handling for a NULL case.
+
+    A row with category="__EMPTY__" (month=0, count=0) is a confirmed-empty
+    marker, not real data: distinguishes "scraped this combo and found
+    nothing" from "never scraped this combo" so a genuinely-zero combo
+    (e.g. Honda + Pure EV, confirmed live) is served instantly from cache
+    instead of live-rescraping (with its CAPTCHA-solve latency) on every
+    single request for it."""
+    __tablename__ = "maker_live_query_cache"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
+    state_name = Column(String(100), nullable=False)
+    year = Column(Integer, nullable=False, index=True)
+    maker = Column(String(200), nullable=False, index=True)
+    fuel = Column(String(50), nullable=False, default="ALL")
+    month = Column(Integer, nullable=False)
+    category = Column(String(100), nullable=False)
+    count = Column(Integer, nullable=False, default=0)
+    scraped_at = Column(DateTime, default=func.now())
+
+    __table_args__ = (
+        Index("idx_mlqc_natural_key", "state_code", "year", "maker", "fuel", "month", "category", unique=True),
+    )
+
+
 class DashboardSummary(Base):
     __tablename__ = "dashboard_summary"
 

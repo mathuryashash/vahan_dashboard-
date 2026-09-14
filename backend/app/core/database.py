@@ -137,4 +137,5 @@ async def init_db():
     # duplicate rows in production before their constraint was added.
     await ensure_foreign_key(engine, "state_month_category_totals", "state_code", "states", "state_code")
     await ensure_foreign_key(engine, "state_month_category_fuel_totals", "state_code", "states", "state_code")
+    await ensure_foreign_key(engine, "maker_live_query_cache", "state_code", "states", "state_code")
     await ensure_analyzed(engine, list(Base.metadata.tables))
