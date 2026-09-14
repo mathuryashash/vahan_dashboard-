@@ -6,7 +6,9 @@ from app.core.database import get_db
 from app.core.rate_limit import limiter
 from app.core.scope import require_state_code
 from app.models.models import User
-from app.services.live_scrape_service import UnknownStateCodeError, get_or_scrape_maker_query, get_top_makers_leaderboard
+from app.services.live_scrape_service import (
+    UnknownStateCodeError, get_or_scrape_maker_query, get_top_makers_leaderboard, search_makers,
+)
 from scraper.analytics_scraper import CaptchaSolveError, TesseractUnavailableError
 
 router = APIRouter()
@@ -100,3 +102,25 @@ async def get_leaderboard(
             detail="Could not fetch this data right now. Try again shortly.",
         )
     return {"state_code": state_code, "year": year, "fuel": fuel, "makers": makers}
+
+
+@router.get("/makers/search")
+async def search_makers_endpoint(
+    q: str = Query(..., min_length=1, max_length=200),
+    _user: User = Depends(get_current_user),
+):
+    """Real maker names matching `q`, straight from the source site --
+    lets the frontend offer an actual autocomplete instead of requiring the
+    caller to already know a manufacturer's exact full legal name (found
+    live: typing "honda" into /maker's free-text field returns a real,
+    genuinely-empty result -- the site needs the exact string "HONDA
+    MOTORCYCLE AND SCOOTER INDIA (P) LTD", and a partial name is
+    indistinguishable from a real zero without this search catching the
+    mismatch first). Not state-scoped (makers aren't per-state) and no
+    CAPTCHA involved, so no require_state_code dependency and no dedicated
+    rate limit beyond the API's blanket default -- unlike /maker and
+    /leaderboard, a miss here costs one cheap GET, not a live scrape."""
+    try:
+        return await search_makers(q)
+    except Exception:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="Could not search makers right now. Try again shortly.")

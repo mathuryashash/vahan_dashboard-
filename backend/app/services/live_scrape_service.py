@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import MakerCategoryTotal, MakerLiveQueryCache, State
-from scraper.analytics_scraper import TesseractUnavailableError, load_session, scrape_state_year, verify_tesseract
+from scraper.analytics_scraper import (
+    TesseractUnavailableError, load_session, scrape_state_year, search_makers as _search_makers_site,
+    verify_tesseract,
+)
 
 logger = logging.getLogger("live_scrape_service")
 
@@ -309,3 +312,32 @@ async def get_top_makers_leaderboard(
     results = await asyncio.gather(*(_one(maker) for maker, _ in top_makers))
     ranked = [r for r in results if r is not None]
     return sorted(ranked, key=lambda r: r["total"], reverse=True)
+
+
+async def search_makers(search_text: str, limit: int = 20) -> list[str]:
+    """Real maker names matching `search_text`, straight from the source
+    site -- lets a caller offer an actual autocomplete instead of requiring
+    exact knowledge of a manufacturer's full legal name up front (confirmed
+    live: "HONDA" alone matches nothing in the site's own vehicleMakers
+    form field; the real entity is "HONDA MOTORCYCLE AND SCOOTER INDIA (P)
+    LTD"). No CAPTCHA needed for this lookup (unlike scrape_state_year), but
+    still gated by _concurrency: without it, a burst of concurrent search
+    requests (search-as-you-type has no server-side rate limit, only the
+    API's blanket 120/minute default) could each independently find the
+    pool empty and bootstrap their own session at once -- unbounded
+    concurrent hits against the same site the CAPTCHA-gated scrape path is
+    otherwise careful to keep to 4 at a time, and _session_pool growing past
+    the size every other comment in this file assumes it's capped at
+    (found in review)."""
+    search_text = search_text.strip()
+    if not search_text:
+        return []
+    async with _concurrency:
+        session = await _acquire_session()
+        healthy = False
+        try:
+            results = await asyncio.wait_for(_search_makers_site(session.client, search_text, size=limit), timeout=15)
+            healthy = True
+            return results
+        finally:
+            await _release_session(session, healthy=healthy)

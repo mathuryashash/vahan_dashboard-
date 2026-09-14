@@ -39,6 +39,7 @@ logger = logging.getLogger("analytics_scraper")
 
 REPORT_URL = "https://analytics.parivahan.gov.in/analytics/vahanpublicreport?lang=en"
 CAPTCHA_URL = "https://analytics.parivahan.gov.in/analytics/captcha-gen"
+MAKER_SEARCH_URL = "https://analytics.parivahan.gov.in/analytics/vahanpublicreport/lazy/vehicle-makers"
 CAPTCHA_MAX_ATTEMPTS = 5
 CAPTCHA_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -290,3 +291,18 @@ async def scrape_state_year(
 ) -> list[dict]:
     html = await submit_query(client, tesseract_path, csrf_token, state_code, year, maker=maker, fuel=fuel)
     return parse_month_category_table(html)
+
+
+async def search_makers(client: httpx.AsyncClient, search_text: str, *, size: int = 20) -> list[str]:
+    """Real-time substring search against the site's own maker lookup --
+    confirmed live this is what the maker's search box itself calls
+    (/lazy/vehicle-makers), a plain GET needing only the session cookie
+    (no CSRF, no CAPTCHA). Exists because the vehicleMakers form field
+    requires an EXACT match against one of these full legal names --
+    confirmed live: submitting "HONDA" alone (not the real entity name
+    "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD") returns a real,
+    genuinely-empty result, indistinguishable from a real zero without
+    this search to catch the mismatch before it ever reaches that form."""
+    resp = await client.get(MAKER_SEARCH_URL, params={"page": 0, "size": size, "search": search_text})
+    resp.raise_for_status()
+    return resp.json()

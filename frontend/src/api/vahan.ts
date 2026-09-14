@@ -123,6 +123,13 @@ export const getLiveMakerLeaderboard = (params: { state_code: string; year: numb
     makers: { maker: string; total: number }[];
   });
 
+// Real maker names matching `q`, straight from the source site -- lets the
+// UI offer an actual autocomplete instead of requiring the exact full legal
+// manufacturer name up front (found live: "honda" alone matches nothing;
+// the real entity is "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD").
+export const searchLiveMakers = (q: string, signal?: AbortSignal): Promise<string[]> =>
+  api.get('/live-query/makers/search', { params: { q }, signal }).then(r => r.data);
+
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
 export const getDistrictsForState = (stateCode: string) =>

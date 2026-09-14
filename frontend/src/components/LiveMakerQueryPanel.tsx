@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getLiveMakerLeaderboard, getLiveMakerQuery, getStates } from '../api/vahan';
+import { getLiveMakerLeaderboard, getLiveMakerQuery, getStates, searchLiveMakers } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useAuth } from '../contexts/AuthContext';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -72,7 +72,25 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
     onStateCodeChange?.(stateCode);
   }, [stateCode, onStateCodeChange]);
 
+  // Free text alone lets a user submit "honda" and get a real, genuinely-
+  // empty result back (confirmed live) -- the source site's maker field
+  // needs the EXACT full legal name ("HONDA MOTORCYCLE AND SCOOTER INDIA
+  // (P) LTD"), indistinguishable in the response from a real zero. This
+  // debounced search-as-you-type against the site's own maker lookup lets
+  // a user find and pick a real name instead of guessing one.
   const [makerInput, setMakerInput] = useState('');
+  const [debouncedMaker, setDebouncedMaker] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMaker(makerInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [makerInput]);
+  const { data: makerSuggestions } = useQuery({
+    queryKey: ['makerSearch', debouncedMaker],
+    queryFn: ({ signal }) => searchLiveMakers(debouncedMaker, signal),
+    enabled: debouncedMaker.length >= 2,
+  });
+
   const [fuel, setFuel] = useState('');
   const [submitted, setSubmitted] = useState<{ maker: string; fuel: string } | null>(null);
   // ErrorBanner hides itself on its own Retry click (before the retry's
@@ -140,15 +158,54 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
             </div>
           </div>
         )}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5 relative">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold" htmlFor="live-maker-input">Maker</label>
           <input
             id="live-maker-input"
             value={makerInput}
-            onChange={(e) => setMakerInput(e.target.value)}
-            placeholder="e.g. HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD"
+            onChange={(e) => { setMakerInput(e.target.value); setShowSuggestions(true); }}
+            onFocus={() => setShowSuggestions(true)}
+            // Delayed so a click on a suggestion below registers before the
+            // list disappears -- a plain onBlur closing immediately would
+            // eat the click.
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            placeholder="Start typing a manufacturer, e.g. Honda"
+            autoComplete="off"
+            role="combobox"
+            aria-expanded={showSuggestions && !!makerSuggestions?.length}
+            aria-controls="live-maker-suggestions"
+            aria-autocomplete="list"
             className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl w-80 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
           />
+          {showSuggestions && debouncedMaker.length >= 2 && (
+            <ul
+              id="live-maker-suggestions"
+              role="listbox"
+              className="absolute top-full mt-1 left-0 w-80 max-h-56 overflow-y-auto bg-[var(--bg-card)] border border-[var(--border)] rounded-xl shadow-lg z-10 text-xs"
+            >
+              {makerSuggestions === undefined ? (
+                <li className="px-3 py-2 text-[var(--text-muted)]">Searching…</li>
+              ) : makerSuggestions.length === 0 ? (
+                <li className="px-3 py-2 text-[var(--text-muted)]">No manufacturer matches "{debouncedMaker}" -- the source site needs the exact full legal name.</li>
+              ) : (
+                makerSuggestions.map((name) => (
+                  <li key={name}>
+                    <button
+                      type="button"
+                      // onMouseDown, not onClick: fires before the input's
+                      // onBlur (which runs on the input losing focus first),
+                      // so the selected value lands after blur's delayed
+                      // close instead of racing it.
+                      onMouseDown={() => { setMakerInput(name); setShowSuggestions(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-[var(--bg-card-hover)] text-[var(--text-primary)]"
+                    >
+                      {name}
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
         </div>
         <LabeledSelect
           label="Fuel"
