@@ -95,6 +95,22 @@ export const getCrosstabDetail = (params: { year: number; state?: string | null;
   yoy_growth_percent: number | null;
 }> => api.get('/categories/crosstab-detail', { params, signal }).then(r => r.data);
 
+// Maker is a 7,733-item long tail with no crosstab table (see backend's
+// MakerLiveQueryCache docstring) -- this hits the live-scrape endpoint
+// instead: instant if already cached, a real ~7s wait (CAPTCHA solve
+// against the source site) on a genuine first request for this exact
+// (state, year, maker, fuel) combo. No AbortSignal: an in-flight live
+// scrape shouldn't be cancelled by a stray unmount/refetch the way a cheap
+// DB-query request can be -- it'd waste the CAPTCHA-solve that already ran.
+export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null }) =>
+  api.get('/live-query/maker', { params, timeout: 30000 }).then(r => r.data as {
+    state_code: string;
+    year: number;
+    maker: string;
+    fuel: string | null;
+    records: { month: number; category: string; count: number }[];
+  });
+
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
 export const getDistrictsForState = (stateCode: string) =>

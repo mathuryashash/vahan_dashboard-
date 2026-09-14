@@ -11,6 +11,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
+import { LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -341,6 +342,8 @@ export function MakersModelsPage() {
           </ResponsiveContainer>
         )}
       </div>
+
+      <LiveMakerQueryPanel year={year} />
     </div>
   );
 }
