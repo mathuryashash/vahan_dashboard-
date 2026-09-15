@@ -90,11 +90,14 @@ export function CategoryDetailPage() {
           <EmptyState title="No Maker Breakdown" description={NO_CROSS_TAB_MESSAGE} variant="no-data" className="py-8" />
         ) : (
           <>
-            <ResponsiveContainer width="100%" height={280}>
+            {/* Height scales with row count, matching every other maker chart.
+                Fixed 280px made Recharts drop every other tick, leaving half
+                the bars (including the top one) unlabeled. */}
+            <ResponsiveContainer width="100%" height={Math.max(280, (makers || []).length * 38)}>
               <BarChart data={(makers || []).map((m: { maker: string; count: number }) => ({ name: m.maker, count: m.count }))} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
+                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} interval={0} />
                 <Tooltip
                   formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
                   contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}

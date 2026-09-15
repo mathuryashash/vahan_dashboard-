@@ -58,10 +58,19 @@ export function YoYPage() {
   // (the API distinguishes "not occurred/scraped" from "zero registrations").
   // Volume charts still show every month so year A's full trend is visible,
   // but growth-rate views should only cover months both years actually have.
+  const _now = new Date();
+  // Months comparisonYearB hasn't reached yet come back as 0, which plots as
+  // a real bar labelled "0.0M" beside a full prior-year bar and drops the
+  // trend line vertically to zero from the current month on (found in review:
+  // an OEM reader sees that as the market collapsing, not as "October hasn't
+  // happened yet"). null instead, with connectNulls={false}, so year B's line
+  // simply ends at the last month that exists. Year A keeps every month, so
+  // its full-year shape is still visible.
+  const _futureFromIdx = comparisonYearB === _now.getFullYear() ? _now.getMonth() : 12;
   const chartData: { name: string; [key: string]: number | string | null }[] = (monthly?.data || []).map((d: { month: number; [key: string]: number | null }) => ({
     name: MONTH_NAMES[d.month - 1],
     [`${comparisonYearA}`]: d[`year_${comparisonYearA}`],
-    [`${comparisonYearB}`]: d[`year_${comparisonYearB}`],
+    [`${comparisonYearB}`]: d.month - 1 > _futureFromIdx ? null : d[`year_${comparisonYearB}`],
     growth: d.growth_percent,
   }));
   // The in-progress month is real but not COMPARABLE: a month that's only
@@ -121,7 +130,7 @@ export function YoYPage() {
                 setStartMonth(v);
                 if (v > endMonth) setEndMonth(v);
               }}
-              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold focus:outline-none cursor-pointer rounded px-1"
+              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
             >
               {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
             </select>
@@ -133,7 +142,7 @@ export function YoYPage() {
                 setEndMonth(v);
                 if (v < startMonth) setStartMonth(v);
               }}
-              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold focus:outline-none cursor-pointer rounded px-1"
+              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
             >
               {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
             </select>
@@ -142,7 +151,7 @@ export function YoYPage() {
             <select
               value={comparisonYearA}
               onChange={(e) => setComparisonYears(Number(e.target.value), comparisonYearB)}
-              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold focus:outline-none cursor-pointer rounded px-1"
+              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
             >
               {SELECTABLE_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
@@ -153,7 +162,7 @@ export function YoYPage() {
             <select
               value={comparisonYearB}
               onChange={(e) => setComparisonYears(comparisonYearA, Number(e.target.value))}
-              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold focus:outline-none cursor-pointer rounded px-1"
+              className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
               style={{ color: 'var(--accent)' }}
             >
               {SELECTABLE_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}

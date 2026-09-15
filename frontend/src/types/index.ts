@@ -107,4 +107,8 @@ export interface RTOAnalysis {
   avg_monthly: number;
   months_with_data: number;
   makers: RTOMakerShare[];
+  // Which window `makers` actually covers -- a segment-scoped account is
+  // served from the calendar-year category crosstab, which can't be cut to
+  // an Apr-Mar financial year. Optional: older responses omit it.
+  maker_period?: 'financial_year' | 'calendar_years_spanned';
 }

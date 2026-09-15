@@ -169,7 +169,9 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 38)}>
-          <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
+          {/* right:76, not 48 -- an 11-character crore figure ("1,59,62,847")
+              overflowed the old margin and rendered clipped as "1,59,62". */}
+          <BarChart data={chartData} layout="vertical" margin={{ right: 76 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
             <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={190} />
@@ -208,7 +210,9 @@ function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: str
         <div className="h-[220px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 38)}>
-          <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
+          {/* right:76, not 48 -- an 11-character crore figure ("1,59,62,847")
+              overflowed the old margin and rendered clipped as "1,59,62". */}
+          <BarChart data={chartData} layout="vertical" margin={{ right: 76 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
             <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={190} />

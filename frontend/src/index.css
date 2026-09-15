@@ -61,6 +61,16 @@ body {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
+/* Keyboard focus was effectively invisible: with no rule here, elements fell
+   back to the browser default ring, which renders near-black against this
+   dark palette -- a keyboard user couldn't tell where they were. Scoped to
+   :focus-visible so it shows for keyboard/AT navigation without outlining
+   everything on mouse click. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 ::selection {
   background: var(--accent);
   color: var(--accent-contrast);

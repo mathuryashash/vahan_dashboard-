@@ -25,3 +25,8 @@ test_screenshots/
 /rtos_dl.json
 /test_api.py
 /_test_api.py
+# Plaintext demo credentials and a captured session cookie. They were
+# untracked but NOT ignored, so any `git add .` would have committed them --
+# and a credential in git history can't be un-shipped.
+/pass.txt
+/cookies.txt

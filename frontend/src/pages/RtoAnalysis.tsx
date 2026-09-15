@@ -130,7 +130,7 @@ export function RtoAnalysisPage() {
             label="State"
             value={stateCode}
             onChange={(e) => { setStateCode(e.target.value); setDistrictCode(''); setRtoCode(null); }}
-            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs"
+            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold cursor-pointer w-full max-w-xs"
           >
             <option value="">Select a state...</option>
             {(states || []).map((s: { state_code: string; state_name: string }) => (
@@ -154,7 +154,7 @@ export function RtoAnalysisPage() {
             value={districtCode}
             onChange={(e) => { setDistrictCode(e.target.value); setRtoCode(null); }}
             disabled={!stateCode}
-            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer w-full max-w-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold cursor-pointer w-full max-w-xs disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <option value="">All Districts</option>
             {(districts || []).map((d) => (
@@ -167,7 +167,7 @@ export function RtoAnalysisPage() {
           label="Financial Year"
           value={fyYear}
           onChange={(e) => setFyYear(Number(e.target.value))}
-          className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold focus:outline-none cursor-pointer"
+          className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold cursor-pointer"
         >
           {(availableYears || [fyYear]).map((y) => (
             <option key={y} value={y}>FY {y}-{String((y + 1) % 100).padStart(2, '0')}</option>
@@ -263,6 +263,17 @@ export function RtoAnalysisPage() {
                   )}
                 </div>
               </div>
+              {analysis?.maker_period === 'calendar_years_spanned' && (
+                // A segment-scoped account's maker figures come from the
+                // category crosstab, which is calendar-year and has no month
+                // column -- so they cover a wider window than the FY label
+                // above. Shares are unaffected; the totals are broader. Say so
+                // rather than letting both render identically.
+                <p className="text-[10px] text-[var(--text-muted)] mb-4 leading-relaxed">
+                  Company figures below cover calendar {fyYear}–{fyYear + 1}, not the exact financial year —
+                  no VAHAN table carries company, segment and month together. Shares are unaffected; the totals are broader.
+                </p>
+              )}
 
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-1">Company Share</h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mb-4">% of this RTO's registrations, top {makerPieData.length} companies</p>
