@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
 import { useState, useEffect } from 'react';
-import { getStatesComparison, compareStates, getCategories } from '../api/vahan';
+import { getStatesComparison, compareStates, getCategories, getStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -60,18 +60,44 @@ export function ComparisonPage() {
     queryFn: () => getCategories({ year: selectedYear }),
   });
 
+  // Category x Powertrain can never be answered from the raw Registration
+  // table: the vehicle_class-dimension pass is the only one carrying a real
+  // vehicle_category and the fuel-dimension pass the only one carrying a real
+  // fuel_type, and the scraper never writes both on one row. Same flag as
+  // Overview's impossibleFuelCategoryFilter. Both queries below return a
+  // structurally-guaranteed empty result for such a combo, so don't fire them
+  // -- the sections they feed are hidden instead of rendering zeros.
+  const comboImpossible = !!(selectedCategory && fuelGroup);
+
   const { data: allStates } = useQuery({
     queryKey: ['states', selectedYear, selectedCategory, fuelGroup],
     queryFn: () => getStatesComparison(selectedYear, 36, selectedCategory, fuelGroup),
+    enabled: !comboImpossible,
+  });
+
+  // The A/B pickers list which states EXIST, not which ones the current
+  // filters happen to return rows for -- sourcing them from the filtered
+  // ranking above left both dropdowns permanently empty whenever that ranking
+  // came back empty (any impossible combo, or a year with no data yet).
+  // /states/ is scope-clamped server-side the same way, so a state-locked
+  // user still can't pick someone else's state.
+  const { data: pickerStates } = useQuery({
+    queryKey: ['states-all'],
+    queryFn: getStates,
   });
 
   const { data: comparison, isError: comparisonError, refetch: refetchComparison } = useQuery({
     queryKey: ['compare', stateA, stateB, selectedYear, selectedCategory, fuelGroup],
     queryFn: () => compareStates(stateA, stateB, selectedYear, selectedCategory, fuelGroup),
-    enabled: !!stateA,
+    enabled: !!stateA && !comboImpossible,
   });
 
   const stateOptions = (allStates || []).map((s: { state_name: string }) => s.state_name);
+  const pickerOptions: string[] = (pickerStates || []).map((s: { state_name: string }) => s.state_name);
+  // Until the list arrives (or if it somehow omits the current selection), the
+  // selected value is still its own option -- a <select> can't display a value
+  // that isn't one of its options, which is what used to render blank.
+  const optionsFor = (value: string) => (pickerOptions.includes(value) ? pickerOptions : [value, ...pickerOptions]);
   const aData: { name: string; [key: string]: string | number }[] = (comparison?.state_a_data || []).map((d: { month: number; count: number }) => ({ name: MONTH_NAMES[d.month - 1], [stateA]: d.count }));
   const bData: { name: string; [key: string]: string | number }[] = (comparison?.state_b_data || []).map((d: { month: number; count: number }) => ({ name: MONTH_NAMES[d.month - 1], [stateB]: d.count }));
 
@@ -100,6 +126,11 @@ export function ComparisonPage() {
             {selectedCategory ? ` · ${selectedCategory}` : ''}
             {fuelGroup ? ` · ${fuelGroup}` : ''}
           </p>
+          {comboImpossible && (
+            <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight mt-1">
+              VAHAN can't cross category × powertrain — drop one filter to compare states
+            </p>
+          )}
         </div>
         <div className="flex items-end gap-3 animate-entrance" style={{ animationDelay: '20ms' }}>
           <LabeledSelect
@@ -131,47 +162,36 @@ export function ComparisonPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-entrance" style={{ animationDelay: '40ms' }}>
-        {[{ label: 'State A', value: stateA, setter: setStateA, color: colorA },
-          { label: 'State B', value: stateB, setter: setStateB, color: colorB },
-          { label: 'States Active', value: `${stateOptions.length || 0} / 36`, setter: () => {}, color: 'var(--success)' }
-        ].map((s, i) => (
+      <div className={`grid grid-cols-1 gap-4 animate-entrance ${comboImpossible ? 'md:grid-cols-2' : 'md:grid-cols-3'}`} style={{ animationDelay: '40ms' }}>
+        {[{ label: 'State A', value: stateA, setter: setStateA },
+          { label: 'State B', value: stateB, setter: setStateB },
+        ].map((s) => (
           <div key={s.label} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
-            <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">{s.label}</p>
-            {i < 2 ? (
-              stateOptions.length === 0 ? (
-                // /comparison/all-states is slow enough (seconds, not
-                // milliseconds) that a plain <select> with zero <option>s
-                // renders with no visible selection during that window --
-                // a browser can't select a value that isn't one of its
-                // options yet, even though stateA/stateB are already
-                // correctly "Maharashtra"/"Gujarat" internally. Found by
-                // live click-through QA as a blank dropdown with no cue of
-                // which states are being compared; a real loading state
-                // is honest about what's actually happening instead of
-                // silently showing an empty control.
-                <div className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text-muted)] animate-pulse-soft">
-                  Loading states…
-                </div>
-              ) : (
-                <select
-                  value={s.value}
-                  onChange={(e) => s.setter(e.target.value)}
-                  className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm font-semibold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-colors"
-                >
-                  {stateOptions.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              )
-            ) : (
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full" style={{ background: s.color }} />
-                <span className="font-mono text-[var(--text-primary)] font-bold">{s.value}</span>
-              </div>
-            )}
+            <LabeledSelect
+              label={s.label}
+              value={s.value}
+              onChange={(e) => s.setter(e.target.value)}
+              className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm font-semibold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-colors"
+            >
+              {optionsFor(s.value).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </LabeledSelect>
           </div>
         ))}
+        {/* States with data under the current filters -- meaningless (and
+            always 0) when the filters can't co-exist, so it goes away with
+            the ranking it summarises. */}
+        {!comboImpossible && (
+          <div className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
+            <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">States Active</p>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full" style={{ background: 'var(--success)' }} />
+              <span className="font-mono text-[var(--text-primary)] font-bold">{stateOptions.length} / 36</span>
+            </div>
+          </div>
+        )}
       </div>
 
+      {!comboImpossible && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-entrance" style={{ animationDelay: '80ms' }}>
         {[{
           label: stateA, total: totalA, color: colorA,
@@ -194,7 +214,9 @@ export function ComparisonPage() {
           </div>
         ))}
       </div>
+      )}
 
+      {!comboImpossible && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '120ms' }}>
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">{stateA} vs {stateB} — Monthly</h3>
         <ResponsiveContainer width="100%" height={280}>
@@ -216,7 +238,9 @@ export function ComparisonPage() {
           <span style={{ color: colorB }}>{stateB}</span>
         </div>
       </div>
+      )}
 
+      {!comboImpossible && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">All States — Ranked</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -245,6 +269,7 @@ export function ComparisonPage() {
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }
