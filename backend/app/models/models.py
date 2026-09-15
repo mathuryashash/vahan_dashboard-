@@ -344,10 +344,13 @@ class MakerLiveQueryCache(Base):
     StateMonthCategoryTotal/StateMonthCategoryFuelTotal deliberately don't
     cover, because maker is a 7,733-item long tail with no static enum to
     loop over the way FUEL_VALUES lets the fuel backfill (see that table's
-    docstring). Rather than pre-scrape an infeasible cross product, this
-    table only ever holds combos a real user actually asked for: scraped
-    live on first request (see app/services/live_scrape_service.py), served
-    from here on every request after.
+    docstring). Rather than pre-scrape the infeasible full cross product,
+    rows come from two sources: scraped live on first request for whatever
+    a real user asks for (see app/services/live_scrape_service.py), and/or
+    pre-warmed in bulk for a bounded top-N makers slice by
+    scraper/run_top_makers_scrape.py -- both write through the same
+    get_or_scrape_maker_query cache path, so a row's origin isn't tracked
+    or distinguishable once written.
 
     `fuel` is a required column, not nullable -- consistent with this
     codebase's no-nullable-pivot-column convention -- but takes the
