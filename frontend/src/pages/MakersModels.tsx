@@ -13,11 +13,14 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
 import { LiveMakerLeaderboardPanel, LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
+import { useScopeLock } from '../hooks/useScopeLock';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function MakersModelsPage() {
   const chart = useChartTheme();
+  // App already runs the pinning effects; this only reads the resulting flags.
+  const { isCategoryLocked, lockedCategory } = useScopeLock();
   // Resolved by LiveMakerQueryPanel's own state selector, shared down into
   // LiveMakerLeaderboardPanel so both live-query panels below act on the
   // same state instead of each needing (and confusingly duplicating) one.
@@ -228,17 +231,28 @@ export function MakersModelsPage() {
             <option key={name} value={idx + 1}>{name}</option>
           ))}
         </LabeledSelect>
-        <LabeledSelect
-          label="Category"
-          value={selectedCategory || ''}
-          onChange={(e) => setSelectedCategory(e.target.value || null)}
-          className={selectClass}
-        >
-          <option value="">All Categories</option>
-          {(categories || []).map((c: { vehicle_category: string }) => (
-            <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
-          ))}
-        </LabeledSelect>
+        {isCategoryLocked ? (
+          // A segment account has no category choice to make -- showing an
+          // editable "All Categories" control over data that is in fact
+          // four-wheeler-only reads as a broken filter. Same locked-value
+          // treatment Overview gives it.
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</span>
+            <div className={`${selectClass} cursor-default text-[var(--text-primary)]`}>{lockedCategory}</div>
+          </div>
+        ) : (
+          <LabeledSelect
+            label="Category"
+            value={selectedCategory || ''}
+            onChange={(e) => setSelectedCategory(e.target.value || null)}
+            className={selectClass}
+          >
+            <option value="">All Categories</option>
+            {(categories || []).map((c: { vehicle_category: string }) => (
+              <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+            ))}
+          </LabeledSelect>
+        )}
         <div className="flex flex-col gap-1.5">
           <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Powertrain</span>
           <PowertrainToggle

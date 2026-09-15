@@ -23,6 +23,14 @@ import { useUrlSyncedFilters } from './hooks/useUrlSyncedFilters';
 import { fetchCurrentUser, logout } from './api/auth';
 import type { AuthUser } from './api/auth';
 import { AuthContext } from './contexts/AuthContext';
+import { useScopeLock } from './hooks/useScopeLock';
+
+/** Renders nothing -- exists only so useScopeLock runs under the auth
+ *  provider on every route. */
+function ScopeLock() {
+  useScopeLock();
+  return null;
+}
 
 export default function App() {
   // undefined = still checking the httpOnly session cookie via GET /me;
@@ -76,6 +84,10 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={auth}>
+      {/* Must sit INSIDE the provider (it reads auth) and outside the Routes,
+          so a scoped account is pinned on whichever page it lands on first --
+          not just Overview, which is where these effects used to live. */}
+      <ScopeLock />
       <div className="flex h-screen overflow-hidden bg-[var(--bg-app)]">
         <Sidebar />
         <div className="flex-1 flex flex-col overflow-hidden bg-[var(--bg-surface)]">

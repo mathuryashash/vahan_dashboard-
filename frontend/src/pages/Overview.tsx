@@ -15,6 +15,7 @@ import { LabeledSelect } from '../components/LabeledSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
 import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
 import { MIN_CATEGORY_SHARE } from '../utils/tripleEstimate';
+import { useScopeLock } from '../hooks/useScopeLock';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -82,24 +83,10 @@ export function OverviewPage() {
   // so every existing state-filtered query on this page (and the "click a
   // state to filter" row below) already reflects the lock with no other
   // changes needed.
-  const isStateLocked = auth.scope_type !== 'national';
-  useEffect(() => {
-    if (isStateLocked && selectedState !== auth.scope_state_name) {
-      setSelectedState(auth.scope_state_name);
-    }
-  }, [isStateLocked, auth.scope_state_name, selectedState, setSelectedState]);
-
-  // Same treatment for a segment account (a four-wheeler customer, say) --
-  // an independent axis from the state lock above, so an account can be
-  // locked to one, the other, or both. Also server-side regardless (see
-  // app/core/scope.py get_effective_category); pinning the shared filter
-  // store here just keeps the UI honest about a choice they don't have.
-  const isCategoryLocked = !!auth.scope_vehicle_category;
-  useEffect(() => {
-    if (isCategoryLocked && selectedCategory !== auth.scope_vehicle_category) {
-      setSelectedCategory(auth.scope_vehicle_category);
-    }
-  }, [isCategoryLocked, auth.scope_vehicle_category, selectedCategory, setSelectedCategory]);
+  // The pinning effects these flags used to own now live in useScopeLock,
+  // called once from App -- they only ran here, so a scoped account landing
+  // directly on another page was never pinned at all.
+  const { isStateLocked, isCategoryLocked } = useScopeLock();
 
   const { data: statesList } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
