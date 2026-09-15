@@ -383,6 +383,14 @@ export function OverviewPage() {
   // "no data" that reads as a bug.
   const activeFilterLabel = [selectedCategory, fuelGroup, selectedMaker].filter(Boolean).join(' × ');
 
+  // These cards fall back to the cross-tab YEAR total for impossible combos,
+  // so their value is identical for every month -- which reads as stale or
+  // broken data when the user switches months and nothing moves (found live:
+  // reported as "exact same data for both months"). The banner above the
+  // cards already said this; saying it on the card itself is what actually
+  // lands, since the card is where the unchanging number is.
+  const kpiPeriodSuffix = kpiComboImpossible && selectedMonth != null ? ' · FY total' : '';
+
   const pieData = capForDonut(
     selectedMaker
       ? (makerCategoryMix || []).map((c: { vehicle_category: string; count: number }) => ({ name: c.vehicle_category, value: c.count }))
@@ -605,7 +613,7 @@ export function OverviewPage() {
         ) : (
           <>
             <KPICard
-              label="Total Registrations"
+              label={`Total Registrations${kpiPeriodSuffix}`}
               value={kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
               change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent}
               icon={<Car className="w-4 h-4" />}
@@ -613,7 +621,7 @@ export function OverviewPage() {
               index={0}
             />
             <KPICard
-              label="YoY Growth"
+              label={`YoY Growth${kpiPeriodSuffix}`}
               value={kpiComboImpossible
                 ? (exactlyOnePairActive && crosstabDetail?.yoy_growth_percent != null ? `${crosstabDetail.yoy_growth_percent.toFixed(1)}%` : '—')
                 : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')}
@@ -623,7 +631,7 @@ export function OverviewPage() {
               index={1}
             />
             <KPICard
-              label="Avg Daily Registrations"
+              label={`Avg Daily Registrations${kpiPeriodSuffix}`}
               value={kpiComboImpossible
                 ? (crosstabTotal === undefined ? '—' : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : crosstabAvgDaily)
                 : (kpis?.total_registrations_today ?? 0)}
@@ -766,6 +774,15 @@ export function OverviewPage() {
           </div>
         ) : monthDetailLoading ? (
           <div className="h-24 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+        ) : kpiComboImpossible ? (
+          // This query is disabled for these combos, so monthDetail is simply
+          // never fetched -- it isn't an error. Without this branch it fell
+          // through to the red "Couldn't load" below, reporting a failure for
+          // a request that was never made (found live: reported as a bug).
+          <div className="h-24 flex flex-col items-center justify-center gap-1 text-[var(--text-muted)] text-xs border border-dashed border-[var(--border)] rounded-xl text-center px-4">
+            <span>No month detail for {activeFilterLabel}</span>
+            <span className="text-[10px]">VAHAN has no month-level table for this combination — see the year total above.</span>
+          </div>
         ) : monthDetailError || !monthDetail ? (
           <div className="h-24 flex items-center justify-center text-[var(--danger)] text-xs border border-dashed border-[var(--border)] rounded-xl">
             Couldn't load detail for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
@@ -884,13 +901,19 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
   const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
 
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <span>
-          <span className="font-semibold text-[var(--accent)]">{maker}</span> in{' '}
-          <span className="font-semibold text-[var(--accent)]">{category}</span>, FY {year}
-          {state && <> · {state}</>}:
-        </span>
+    // Standard card shell, same as Registration Trend / Vehicle Mix / State
+    // Ranking. It used to be an accent-outlined callout box, which read as a
+    // warning or an anomaly rather than as ordinary data (reported live: the
+    // highlighted box gave a wrong impression about the numbers in it).
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
+      <div className="mb-4">
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{maker} in {category}</h3>
+        <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+          FY {year}{state && <> · {state}</>} — year total
+        </p>
+      </div>
+      <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+        <span>Registrations</span>
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
         ) : noDataForYear ? (
@@ -990,12 +1013,16 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
     : undefined;
 
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <span>
-          <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span> {category}, FY {year}
-          {state && <> · {state}</>}:
-        </span>
+    // Standard card shell -- see MakerCategoryPanel's comment above.
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
+      <div className="mb-4">
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{fuelGroup} {category}</h3>
+        <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+          FY {year}{state && <> · {state}</>} — year total
+        </p>
+      </div>
+      <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+        <span>Registrations</span>
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
         ) : noDataForYear ? (
@@ -1073,12 +1100,16 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData }: {
   const count = (data || []).find((r: { maker: string; count: number }) => r.maker === maker)?.count ?? 0;
 
   return (
-    <div className="bg-[var(--bg-card)] border border-[var(--accent)] rounded-xl px-4 py-3 text-xs text-[var(--text-secondary)] animate-entrance">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <span>
-          <span className="font-semibold text-[var(--accent)]">{maker}</span> — <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span>, FY {year}
-          {state && <> · {state}</>}:
-        </span>
+    // Standard card shell -- see MakerCategoryPanel's comment above.
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
+      <div className="mb-4">
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{maker} — {fuelGroup}</h3>
+        <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+          FY {year}{state && <> · {state}</>} — year total
+        </p>
+      </div>
+      <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+        <span>Registrations</span>
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
         ) : noDataForYear ? (
