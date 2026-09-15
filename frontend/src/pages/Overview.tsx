@@ -378,6 +378,11 @@ export function OverviewPage() {
     count: d.count,
   }));
 
+  // "Four-Wheeler × EV", "EV × Tata Motors", etc -- names the exact filter
+  // combination in the cards that can't answer it, instead of a generic
+  // "no data" that reads as a bug.
+  const activeFilterLabel = [selectedCategory, fuelGroup, selectedMaker].filter(Boolean).join(' × ');
+
   const pieData = capForDonut(
     selectedMaker
       ? (makerCategoryMix || []).map((c: { vehicle_category: string; count: number }) => ({ name: c.vehicle_category, value: c.count }))
@@ -652,6 +657,18 @@ export function OverviewPage() {
           </div>
           {trendLoading ? (
             <div className="h-52 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          ) : kpiComboImpossible ? (
+            // The trend query is disabled for these combos (no VAHAN table
+            // crosses them at month level) -- without this the card rendered
+            // bare axes and no explanation, while the KPI cards above did
+            // fall back to the cross-tab year total (found live: user
+            // reported the trend chart as simply missing/not working).
+            <EmptyState
+              variant="no-data"
+              title="No monthly trend for this combination"
+              description={`${activeFilterLabel} has no month-level table in VAHAN — the cards above fall back to a cross-tab year total, but a monthly curve for this combination doesn't exist at the source.`}
+              className="h-52 !py-0"
+            />
           ) : (
             <ResponsiveContainer width="100%" height={208}>
               <AreaChart data={chartData}>
@@ -773,6 +790,15 @@ export function OverviewPage() {
           </div>
           {rankingLoading ? (
             <div className="h-44 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          ) : kpiComboImpossible ? (
+            // Same disabled-query case as the trend card above -- rendered an
+            // empty list with no explanation before.
+            <EmptyState
+              variant="no-data"
+              title="No state ranking for this combination"
+              description={`${activeFilterLabel} can't be ranked by state — VAHAN has no table crossing these filters. Pick a single filter to rank states by it.`}
+              className="h-44 !py-0"
+            />
           ) : (
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
               {(ranking || []).map((s: { state_name: string; total_count: number; share_percent: number }, i: number) => {
