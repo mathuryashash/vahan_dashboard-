@@ -70,7 +70,7 @@ async def init_db():
             "vehicle_category": "VARCHAR(20)",
             "commercial_tier": "VARCHAR(15)",
         },
-        "users": {"organization_id": "INTEGER"},
+        "users": {"organization_id": "INTEGER", "scope_vehicle_category": "VARCHAR(20)"},
     })
     # The 4 tables that actually grow at scale (millions of rows, burning
     # ids on every delete-then-insert rewrite, not just net growth) -- see

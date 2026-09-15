@@ -4,8 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.auth import get_current_user
 from app.core.database import get_db
-from app.core.query_filters import apply_common_filters, fuel_category, fuel_group, latest_month_with_data
-from app.core.scope import get_effective_state
+from app.core.query_filters import (
+    apply_common_filters, category_makers, fuel_category, fuel_group, latest_month_with_data,
+)
+from app.core.scope import get_effective_category, get_effective_state, scoped_category
 from app.core.cache import TTLCache
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
@@ -89,9 +91,16 @@ async def get_categories(
     maker: str | None = None,
     vehicle_model: str | None = None,
     raw: bool = False,
+    # No vehicle_category query param here (this endpoint groups BY category
+    # rather than filtering on it) -- which is exactly why it needs
+    # scoped_category: a category-scoped account must get only its own
+    # category's row back, and this response drives the category dropdown on
+    # Makers/Comparison plus the Categories page grid, so clamping it here
+    # locks those selectors to that one category for free.
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db)
 ):
-    cache_key = (year, month, state, maker, vehicle_model, raw)
+    cache_key = (year, month, state, maker, vehicle_model, raw, user_category)
     cached = _categories_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -131,8 +140,8 @@ async def get_categories(
     elif compare_month:
         q_curr = q_curr.where(Registration.month <= compare_month)
         q_prev = q_prev.where(Registration.month <= compare_month)
-    q_curr = apply_common_filters(q_curr, state=state, maker=maker, vehicle_model=vehicle_model)
-    q_prev = apply_common_filters(q_prev, state=state, maker=maker, vehicle_model=vehicle_model)
+    q_curr = apply_common_filters(q_curr, state=state, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
+    q_prev = apply_common_filters(q_prev, state=state, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
 
     q_curr = q_curr.group_by(group_col).order_by(desc("total"))
     q_prev = q_prev.group_by(group_col)
@@ -166,7 +175,7 @@ async def get_categories(
 @router.get("/top-makers")
 async def get_top_makers(
     vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
@@ -228,7 +237,7 @@ async def get_top_makers(
 @router.get("/fuel-breakdown")
 async def get_fuel_breakdown(
     vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     year: int = _DEFAULT_YEAR,
@@ -300,7 +309,7 @@ async def get_fuel_breakdown(
 async def get_maker_category_breakdown(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -342,7 +351,7 @@ async def get_maker_category_breakdown(
 async def get_fuel_category_breakdown(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -392,6 +401,7 @@ async def get_maker_fuel_breakdown(
     maker: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     limit: int = 20,
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
 ):
     """Real Maker x Fuel totals -- year-only, same limitation and same fix
@@ -404,7 +414,7 @@ async def get_maker_fuel_breakdown(
     Python when ranking by maker, since fuel_group is computed from the raw
     fuel_type column (same reason fuel-category-breakdown does this).
     """
-    cache_key = (year, state, maker, fuel_group_filter, limit)
+    cache_key = (year, state, maker, fuel_group_filter, limit, user_category)
     cached = _maker_fuel_breakdown_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -416,6 +426,13 @@ async def get_maker_fuel_breakdown(
         query = query.where(MakerFuelTotal.state_name == state)
     if maker:
         query = query.where(MakerFuelTotal.maker == maker)
+    # MakerFuelTotal is maker x fuel only -- there is no category column to
+    # filter on, so a four-wheeler account would otherwise get a list of
+    # two-wheeler makers here. Restrict to makers that actually sell in
+    # their category (see category_makers for what this does and doesn't
+    # guarantee about the counts).
+    if user_category:
+        query = query.where(MakerFuelTotal.maker.in_(category_makers(user_category, year=year, state=state)))
 
     result = await db.execute(query)
     totals: dict[str, int] = {}
@@ -440,7 +457,7 @@ async def get_maker_fuel_breakdown(
 async def get_crosstab_detail(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     db: AsyncSession = Depends(get_db),
@@ -454,6 +471,10 @@ async def get_crosstab_detail(
     Requires exactly two of vehicle_category/maker/fuel_group, same combo
     constraint the frontend already enforces before calling this.
     """
+    # A category-scoped account always has vehicle_category set (see
+    # get_effective_category), so its Maker x Fuel combo lands here with all
+    # three active and correctly returns nulls rather than a cross-category
+    # number: MakerFuelTotal has no category dimension to narrow with.
     active = [bool(vehicle_category), bool(maker), bool(fuel_group_filter)]
     if sum(active) != 2:
         return {"total": None, "top_state": None, "yoy_growth_percent": None}

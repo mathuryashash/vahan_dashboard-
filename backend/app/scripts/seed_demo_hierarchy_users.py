@@ -1,9 +1,17 @@
-"""One-off: creates three demo accounts, one per scope tier, so the access
-hierarchy can be clicked through in a browser (admin/analyst/viewer already
-existed as roles -- this exercises the orthogonal scope_type dimension:
-national/state/rto). Picks a real state and a real RTO within it from the
-`states`/`rtos` master tables, so the state-head and RTO-head accounts are
-actually scoped to data that exists.
+"""One-off: creates five demo accounts so the access hierarchy can be
+clicked through in a browser. Three exercise the scope_type dimension
+(national/state/rto -- admin/analyst/viewer already existed as roles, this
+is the orthogonal data-visibility axis), picking a real state and a real RTO
+within it from the `states`/`rtos` master tables so those accounts are
+scoped to data that actually exists.
+
+The other two are the per-segment packages the product sells: a
+four-wheeler customer and a two-wheeler customer (scope_vehicle_category,
+a third axis independent of both role and scope_type -- see
+VehicleCategoryScope). Both are national, which is the point: they prove
+segment scoping is not a geographic restriction in disguise. Logged in as
+either one, every chart, total, maker list and category selector in the app
+shows only that segment.
 
 Password is randomized per install, not a fixed literal -- this script runs
 unconditionally on every setup-native.sh (including customer installs), so a
@@ -30,7 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 from app.core.auth import hash_password
 from app.core.database import AsyncSessionLocal, init_db
-from app.models.models import RTO, Registration, State, User, UserRole, UserScope
+from app.models.models import RTO, Registration, State, User, UserRole, UserScope, VehicleCategoryScope
 
 
 async def _upsert(db, email: str, full_name: str, role: str, scope_type: str, password: str, **scope) -> tuple[User, bool]:
@@ -43,6 +51,7 @@ async def _upsert(db, email: str, full_name: str, role: str, scope_type: str, pa
         existing.scope_state_name = None
         existing.scope_rto_code = None
         existing.scope_rto_name = None
+        existing.scope_vehicle_category = None
         for k, v in scope.items():
             setattr(existing, k, v)
         existing.is_active = True
@@ -111,9 +120,19 @@ async def main() -> None:
                 scope_rto_code=rto.rto_code, scope_rto_name=rto.rto_name,
             )
 
+        # Segment customers: national reach, one vehicle category each.
+        _fw, fw_new = await _upsert(
+            db, "fourwheeler@vahan.demo", "Four-Wheeler OEM", UserRole.ANALYST, UserScope.NATIONAL, password,
+            scope_vehicle_category=VehicleCategoryScope.FOUR_WHEELER,
+        )
+        _tw, tw_new = await _upsert(
+            db, "twowheeler@vahan.demo", "Two-Wheeler OEM", UserRole.ANALYST, UserScope.NATIONAL, password,
+            scope_vehicle_category=VehicleCategoryScope.TWO_WHEELER,
+        )
+
         await db.commit()
 
-        any_new = india_new or state_new or rto_new
+        any_new = india_new or state_new or rto_new or fw_new or tw_new
         if any_new:
             print(f"Password for newly-created accounts below: {password}\n")
         else:
@@ -121,7 +140,7 @@ async def main() -> None:
 
         def line(email: str, is_new: bool, desc: str) -> str:
             tag = "(new)" if is_new else "(already existed, password unchanged)"
-            return f"  {email:<26} {tag:<38} -- {desc}"
+            return f"  {email:<28} {tag:<38} -- {desc}"
 
         print(line("india.head@vahan.demo", india_new, "national admin, sees every state, can drill to any RTO"))
         print(line("state.head@vahan.demo", state_new, f"state analyst, locked to {state.state_name}"))
@@ -129,6 +148,8 @@ async def main() -> None:
             print(line("rto.head@vahan.demo", rto_new, f"RTO viewer, locked to {rto.rto_name} ({state.state_name})"))
         else:
             print("  rto.head@vahan.demo    -- skipped, no RTO rows found for that state")
+        print(line("fourwheeler@vahan.demo", fw_new, "national analyst, sees ONLY Four-Wheeler data"))
+        print(line("twowheeler@vahan.demo", tw_new, "national analyst, sees ONLY Two-Wheeler data"))
 
 
 if __name__ == "__main__":

@@ -1,14 +1,49 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
-from app.models.models import OEMMonthlySales, User
+from app.models.models import OEMMonthlySales, User, VehicleCategoryScope
 from app.schemas.schemas import OemMakerShare, OemStatus, OemTrendPoint
 
 router = APIRouter()
 
 STALE_AFTER_DAYS = 14
+
+# FADA labels its own categories ("Two-Wheeler", "PV", "Tractor", ...) and
+# has added/renamed them across the archive (see OEMMonthlySales.category) --
+# a different vocabulary from the vehicle_category buckets a user is scoped
+# to, so the two need an explicit bridge. Aliases are matched
+# case-insensitively and anything NOT listed is denied to a scoped account
+# rather than defaulted in: a future FADA category nobody has mapped yet
+# must not quietly become visible to every segment customer.
+_FADA_ALIASES: dict[str, set[str]] = {
+    VehicleCategoryScope.TWO_WHEELER: {"two-wheeler", "two wheeler", "2w"},
+    VehicleCategoryScope.THREE_WHEELER: {"three-wheeler", "three wheeler", "3w"},
+    VehicleCategoryScope.FOUR_WHEELER: {"pv", "passenger vehicle", "passenger vehicles", "four-wheeler"},
+    VehicleCategoryScope.COMMERCIAL: {"cv", "commercial vehicle", "commercial vehicles", "lcv", "mcv", "hcv"},
+    # The Other bucket's members, checked against the labels actually
+    # present in this database: FADA publishes the same construction-
+    # equipment table under three spellings across the archive.
+    VehicleCategoryScope.OTHER: {
+        "tractor", "trac", "ce", "construction equipment",
+        "wheeled construction equipment", "wheeled - construction equipment",
+    },
+}
+
+
+def _category_allowed(user: User, category: str) -> bool:
+    if not user.scope_vehicle_category:
+        return True
+    return category.strip().lower() in _FADA_ALIASES.get(user.scope_vehicle_category, set())
+
+
+def _require_category(user: User, category: str) -> None:
+    if not _category_allowed(user, category):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail=f"Not permitted to view {category!r} -- this account covers {user.scope_vehicle_category}.",
+        )
 
 
 @router.get("/status", response_model=OemStatus)
@@ -49,7 +84,7 @@ async def get_oem_status(db: AsyncSession = Depends(get_db), _user: User = Depen
 
 @router.get("/categories", response_model=list[str])
 async def get_oem_categories(
-    year: int | None = None, db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)
+    year: int | None = None, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ):
     """Categories with real FADA data. Filtered to `year` when given, so the
     dropdown doesn't offer a category (e.g. one FADA only started breaking
@@ -61,7 +96,9 @@ async def get_oem_categories(
     if year is not None:
         query = query.where(OEMMonthlySales.year == year)
     result = await db.execute(query)
-    return [row[0] for row in result.all()]
+    # Filtered, not 403'd: this is the IndustrySales page's own dropdown, so
+    # a category-scoped account simply never sees the other segments listed.
+    return [row[0] for row in result.all() if _category_allowed(user, row[0])]
 
 
 @router.get("/monthly", response_model=list[OemMakerShare])
@@ -70,8 +107,11 @@ async def get_oem_monthly(
     year: int,
     month: int | None = None,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    # A required param with no "omitted" case to narrow, so a mismatch is a
+    # hard 403 -- same shape as require_state_code in app.core.scope.
+    _require_category(user, category)
     if month is not None:
         query = (
             select(OEMMonthlySales)
@@ -124,8 +164,9 @@ async def get_oem_trend(
     maker: str,
     category: str,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
+    _require_category(user, category)
     query = (
         select(OEMMonthlySales)
         .where(OEMMonthlySales.maker == maker, OEMMonthlySales.category == category)

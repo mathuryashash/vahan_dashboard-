@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
-from app.core.scope import get_effective_state
+from app.core.query_filters import apply_total_filters
+from app.core.scope import get_effective_state, scoped_category
 from app.models.models import Registration
 from app.schemas.schemas import MonthCount, RegistrationOut
 
@@ -20,10 +21,16 @@ async def get_registrations(
     vehicle_model: str | None = None,
     fuel_type: str | None = None,
     limit: int = Query(default=500, le=5000),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Registration)
     filters = []
+    # Raw rows, so this has to be clamped here too -- a category-scoped
+    # account asking for vehicle_class='M-CYCLE/SCOOTER' would otherwise get
+    # real two-wheeler rows straight out of the table.
+    if user_category:
+        filters.append(Registration.vehicle_category == user_category)
     if state:
         filters.append(Registration.state_name == state)
     if year:
@@ -71,7 +78,10 @@ async def get_registrations(
 
 @router.get("/aggregate/by-month", response_model=list[MonthCount])
 async def get_aggregate_by_month(
-    year: int, state: str | None = Depends(get_effective_state), db: AsyncSession = Depends(get_db)
+    year: int,
+    state: str | None = Depends(get_effective_state),
+    user_category: str | None = Depends(scoped_category),
+    db: AsyncSession = Depends(get_db),
 ):
     query = (
         select(Registration.month, func.sum(Registration.count).label("total"))
@@ -82,6 +92,14 @@ async def get_aggregate_by_month(
 
     if state:
         query = query.where(Registration.state_name == state)
+    # Applied only when actually scoped, so an unscoped caller's totals are
+    # byte-for-byte what they were. apply_total_filters (not a bare where)
+    # because a category filter has to read the vehicle_class-dimension pass
+    # -- the only rows carrying a real category -- and must NOT then also
+    # exclude supplementary rows, which would strip out exactly those rows
+    # and silently zero the result.
+    if user_category:
+        query = apply_total_filters(query, vehicle_category=user_category)
 
     result = await db.execute(query)
     rows = result.all()

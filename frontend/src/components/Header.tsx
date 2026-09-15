@@ -176,7 +176,11 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, o
               {auth.full_name ?? auth.email}
             </div>
             <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">
+              {/* Category scope is a separate axis from the geographic one
+                  (an account can be both), so it appends rather than
+                  replaces -- "analyst · All India · Four-Wheeler". */}
               {auth.role} · {SCOPE_LABEL[auth.scope_type](auth)}
+              {auth.scope_vehicle_category ? ` · ${auth.scope_vehicle_category}` : ''}
             </div>
           </div>
           <button

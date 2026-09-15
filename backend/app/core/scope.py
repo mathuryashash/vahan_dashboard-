@@ -1,7 +1,9 @@
-"""Geographic data-scoping for the access hierarchy (see UserScope in
-app.models.models). Each helper is a drop-in FastAPI dependency: swap an
+"""Data-scoping for the access hierarchy: geographic (see UserScope in
+app.models.models) and vehicle-category (see VehicleCategoryScope), two
+independent axes. Each helper is a drop-in FastAPI dependency: swap an
 endpoint's `state: str | None = None` for `state: str | None =
-Depends(get_effective_state)`, or a path param's plain type for
+Depends(get_effective_state)`, its `vehicle_category: str | None = None` for
+`Depends(get_effective_category)`, or a path param's plain type for
 `Depends(require_state_code)` / `Depends(require_rto_code)`, and the
 endpoint body needs no other change -- auth + clamping happen before the
 route function ever runs.
@@ -57,6 +59,29 @@ async def require_rto_code(
     if owner_state != user.scope_state_code:
         raise _FORBIDDEN
     return rto_code
+
+
+async def get_effective_category(
+    vehicle_category: str | None = None, user: User = Depends(get_current_user)
+) -> str | None:
+    """The `vehicle_category` filter every category-aware endpoint already
+    accepts, clamped to a category-scoped user's own category. Exactly the
+    shape of get_effective_state above, for the same reason: omitting the
+    param from a scoped account means "my category", never "every category",
+    so a scoped user can neither widen by passing another value nor by
+    passing none at all. Unscoped users (scope_vehicle_category NULL) pass
+    through untouched."""
+    return user.scope_vehicle_category or vehicle_category
+
+
+def scoped_category(user: User = Depends(get_current_user)) -> str | None:
+    """A category-scoped user's category (else None), for endpoints that
+    have NO vehicle_category param but still return data spanning every
+    category -- the category breakdown itself, raw registration rows, YoY
+    totals, per-RTO totals. Those are the actual leak paths: an endpoint
+    that never asked for a category can't be clamped by clamping a param it
+    doesn't have."""
+    return user.scope_vehicle_category
 
 
 def enforce_state(user: User, state: str | None) -> str | None:

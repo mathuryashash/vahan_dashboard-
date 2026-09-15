@@ -509,6 +509,33 @@ class UserScope:
     ALL = (NATIONAL, STATE, RTO)
 
 
+class VehicleCategoryScope:
+    """The vehicle-category half of data visibility -- a SEPARATE axis from
+    UserScope above, not another tier of it. The product sells per-segment
+    packages (a four-wheeler OEM buys 4W data), and a segment customer is
+    independently either national or state-scoped, so folding this into
+    scope_type would turn that enum into a cross product
+    (national_4w/state_4w/...) and force every existing national/state check
+    to be rewritten. A nullable User.scope_vehicle_category column keeps the
+    two axes orthogonal: NULL = every category (the existing behavior every
+    current user keeps), a value = clamped to exactly that category.
+
+    Values are the friendly buckets query_filters.classify_vehicle already
+    writes into Registration.vehicle_category / the crosstab tables -- this
+    is deliberately the same vocabulary the `vehicle_category` filter param
+    has always used, so scoping is the same WHERE clause the API already
+    supports, not a new one. Enforced server-side in app.core.scope -- a
+    category-scoped user cannot widen results by passing a different
+    vehicle_category, or by omitting it.
+    """
+    TWO_WHEELER = "Two-Wheeler"
+    THREE_WHEELER = "Three-Wheeler"
+    FOUR_WHEELER = "Four-Wheeler"
+    COMMERCIAL = "Commercial Vehicle"
+    OTHER = "Other"
+    ALL = (TWO_WHEELER, THREE_WHEELER, FOUR_WHEELER, COMMERCIAL, OTHER)
+
+
 class Organization(Base):
     """A paying customer (one company). Purely a billing/tracking label on
     User below -- NOT a data-isolation boundary. The registrations/crosstab
@@ -552,3 +579,10 @@ class User(Base):
     scope_state_name = Column(String(100), nullable=True)
     scope_rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     scope_rto_name = Column(String(200), nullable=True)
+
+    # Independent of scope_type above (see VehicleCategoryScope): NULL means
+    # every category, a value clamps every category-aware query to it. Plain
+    # String, not an FK -- vehicle_category is a derived label
+    # (classify_vehicle), not a row in a reference table there's anything to
+    # point at.
+    scope_vehicle_category = Column(String(20), nullable=True)

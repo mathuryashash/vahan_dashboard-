@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.selectable import Select
-from app.models.models import Registration
+from app.models.models import MakerCategoryTotal, Registration
 
 
 def apply_common_filters(
@@ -31,6 +31,42 @@ def apply_common_filters(
         query = query.where(Registration.maker == maker)
     if vehicle_model:
         query = query.where(Registration.vehicle_model == vehicle_model)
+    return query
+
+
+def category_makers(
+    category: str, *, year: int | None = None, years: list[int] | None = None,
+    state: str | None = None, rto_code: str | None = None,
+):
+    """Subquery of the maker names that actually sell in `category` (in that
+    year/state/RTO, when given).
+
+    For the maker-level endpoints whose own source table has no category
+    dimension at all: Registration's canonical maker-pass always stores
+    vehicle_class='All' (see is_supplementary), and MakerFuelTotal has maker
+    x fuel only -- so neither can be filtered to a category directly, and
+    both would otherwise hand a four-wheeler-scoped account a list of
+    two-wheeler makers. MakerCategoryTotal is the one table that knows which
+    makers belong to which category, so it decides membership here.
+
+    ponytail: this clamps WHICH makers appear, not what their counts cover
+    -- a maker selling in several categories still reports its all-category
+    total on those endpoints, because no Maker x Category x Month (or Maker
+    x Category x Fuel) source exists anywhere in this data. Endpoints that
+    DO have a category-aware source (top-makers, fuel-breakdown, every
+    /summary aggregate) are clamped properly by filtering, not by this.
+    """
+    query = select(MakerCategoryTotal.maker).where(
+        MakerCategoryTotal.vehicle_category == category
+    ).distinct()
+    if year is not None:
+        query = query.where(MakerCategoryTotal.year == year)
+    if years is not None:
+        query = query.where(MakerCategoryTotal.year.in_(years))
+    if state:
+        query = query.where(MakerCategoryTotal.state_name == state)
+    if rto_code:
+        query = query.where(MakerCategoryTotal.rto_code == rto_code)
     return query
 
 
@@ -234,6 +270,33 @@ _VEHICLE_CATEGORY_MAP: dict[str, tuple[str, str | None]] = {
 
 def classify_vehicle(raw_vehicle_class: str) -> tuple[str, str | None]:
     return _VEHICLE_CATEGORY_MAP.get(raw_vehicle_class.upper(), ("Other", None))
+
+
+# The live analytics site (analytics.parivahan.gov.in, see
+# scraper/analytics_scraper.py) reports a THIRD taxonomy of its own -- its
+# own "vehicle category" axis: TWO WHEELER(NT), FOUR WHEELER (Invalid
+# Carriage), LIGHT/MEDIUM/HEAVY GOODS|PASSENGER VEHICLE, ... -- neither the
+# 89 raw VAHAN4 vehicle_class values above nor our own buckets. Substring
+# rules, not an exact-value table: the labels carry suffixes ((T)/(NT)/
+# (Invalid Carriage)) that vary per state/year and would each need their own
+# row otherwise. Matches _VEHICLE_CATEGORY_MAP's own judgment calls (LIGHT
+# MOTOR VEHICLE -> Four-Wheeler, buses/goods carriers -> Commercial);
+# anything unmatched ("OTHER THAN MENTIONED ABOVE") is Other, never guessed
+# into a real category.
+_LIVE_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Two-Wheeler", ("TWO WHEELER",)),
+    ("Three-Wheeler", ("THREE WHEELER",)),
+    ("Four-Wheeler", ("FOUR WHEELER", "LIGHT MOTOR VEHICLE")),
+    ("Commercial Vehicle", ("GOODS VEHICLE", "PASSENGER VEHICLE", "MEDIUM MOTOR VEHICLE", "HEAVY MOTOR VEHICLE")),
+)
+
+
+def classify_live_category(live_label: str) -> str:
+    upper = live_label.upper()
+    for bucket, substrings in _LIVE_CATEGORY_RULES:
+        if any(s in upper for s in substrings):
+            return bucket
+    return "Other"
 
 
 # ICE/Hybrid/EV is a coarser regrouping of fuel_category's own buckets, not a

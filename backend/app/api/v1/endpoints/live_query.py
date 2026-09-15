@@ -3,8 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
 from app.core.database import get_db
+from app.core.query_filters import category_makers, classify_live_category
 from app.core.rate_limit import limiter
-from app.core.scope import require_state_code
+from app.core.scope import require_state_code, scoped_category
 from app.models.models import User
 from app.services.live_scrape_service import (
     UnknownStateCodeError, get_or_scrape_maker_query, get_top_makers_leaderboard, search_makers,
@@ -22,6 +23,7 @@ async def get_maker_query(
     maker: str = Query(..., max_length=200),
     fuel: str | None = Query(None, max_length=50),
     state_code: str = Depends(require_state_code),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
@@ -59,6 +61,12 @@ async def get_maker_query(
             status.HTTP_502_BAD_GATEWAY,
             detail="Could not fetch this data right now. Try again shortly.",
         )
+    if user_category:
+        # Every record is one (month, live-site category) cell -- returned
+        # whole, this hands a four-wheeler account the maker's two-wheeler
+        # months as well. classify_live_category bridges the live site's own
+        # category vocabulary onto the buckets a user is scoped to.
+        records = [r for r in records if classify_live_category(r["category"]) == user_category]
     return {"state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "records": records}
 
 
@@ -70,6 +78,7 @@ async def get_leaderboard(
     fuel: str | None = None,
     limit: int = Query(10, ge=1, le=20),
     state_code: str = Depends(require_state_code),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
@@ -83,7 +92,7 @@ async def get_leaderboard(
     (capped at 20) real CAPTCHA-solves, not one -- rarer, heavier requests
     get a tighter budget."""
     try:
-        makers = await get_top_makers_leaderboard(db, state_code, year, fuel, limit)
+        makers = await get_top_makers_leaderboard(db, state_code, year, fuel, limit, vehicle_category=user_category)
     except UnknownStateCodeError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown state_code {state_code!r}.")
     except TesseractUnavailableError:
@@ -107,6 +116,8 @@ async def get_leaderboard(
 @router.get("/makers/search")
 async def search_makers_endpoint(
     q: str = Query(..., min_length=1, max_length=200),
+    user_category: str | None = Depends(scoped_category),
+    db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
     """Real maker names matching `q`, straight from the source site --
@@ -121,6 +132,15 @@ async def search_makers_endpoint(
     rate limit beyond the API's blanket default -- unlike /maker and
     /leaderboard, a miss here costs one cheap GET, not a live scrape."""
     try:
-        return await search_makers(q)
+        results = await search_makers(q)
+        if user_category:
+            # The source site's maker list has no category dimension, so an
+            # unfiltered autocomplete names two-wheeler manufacturers to a
+            # four-wheeler account. Keep only makers our own crosstab knows
+            # sell in their category -- deny-by-default: a maker we have no
+            # category evidence for is dropped, not shown.
+            allowed = {m.upper() for m in (await db.execute(category_makers(user_category))).scalars().all()}
+            results = [m for m in results if m.upper() in allowed]
+        return results
     except Exception:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="Could not search makers right now. Try again shortly.")

@@ -89,6 +89,18 @@ export function OverviewPage() {
     }
   }, [isStateLocked, auth.scope_state_name, selectedState, setSelectedState]);
 
+  // Same treatment for a segment account (a four-wheeler customer, say) --
+  // an independent axis from the state lock above, so an account can be
+  // locked to one, the other, or both. Also server-side regardless (see
+  // app/core/scope.py get_effective_category); pinning the shared filter
+  // store here just keeps the UI honest about a choice they don't have.
+  const isCategoryLocked = !!auth.scope_vehicle_category;
+  useEffect(() => {
+    if (isCategoryLocked && selectedCategory !== auth.scope_vehicle_category) {
+      setSelectedCategory(auth.scope_vehicle_category);
+    }
+  }, [isCategoryLocked, auth.scope_vehicle_category, selectedCategory, setSelectedCategory]);
+
   const { data: statesList } = useQuery({ queryKey: ['states'], queryFn: getStates });
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
   // Which years each cross-tab actually has ANY data for -- fetched once
@@ -412,7 +424,10 @@ export function OverviewPage() {
   // dashboard look broken. The single banner above the KPI cards carries the
   // explanation instead; the dead sections just collapse.
   const showTrendCard = !kpiComboImpossible && (!isStateLocked || trendLoading || chartData.length > 0);
-  const showVehicleMixCard = !isStateLocked || vehicleMixLoading || !vehicleMixReady || pieData.length > 0;
+  // A segment account's vehicle mix is by definition one slice at 100% --
+  // an honest chart, but it reads as a rendering bug, so drop the card
+  // rather than ship a pie of one.
+  const showVehicleMixCard = !isCategoryLocked && (!isStateLocked || vehicleMixLoading || !vehicleMixReady || pieData.length > 0);
   const monthDetailUnavailable = selectedMonth != null && !monthDetailLoading && (monthDetailError || !monthDetail);
   const showMonthDetailCard = !kpiComboImpossible && (!isStateLocked || !monthDetailUnavailable);
   const showStateRankingCard = !kpiComboImpossible;
@@ -512,12 +527,19 @@ export function OverviewPage() {
           ))}
         </LabeledSelect>
 
-        <LabeledSelect label="Category" value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
-          <option value="">All Categories</option>
-          {(categoryOptions || []).map((c: { vehicle_category: string }) => (
-            <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
-          ))}
-        </LabeledSelect>
+        {isCategoryLocked ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</span>
+            <div className={`${selectClass} cursor-default hover:border-[var(--border)]`}>{auth.scope_vehicle_category}</div>
+          </div>
+        ) : (
+          <LabeledSelect label="Category" value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
+            <option value="">All Categories</option>
+            {(categoryOptions || []).map((c: { vehicle_category: string }) => (
+              <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+            ))}
+          </LabeledSelect>
+        )}
 
         <div className="flex flex-col gap-1.5">
           {/* span, not label: PowertrainToggle is a button group, not a

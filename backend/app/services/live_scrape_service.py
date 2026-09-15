@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
+from app.core.query_filters import classify_live_category
 from app.models.models import MakerCategoryTotal, MakerLiveQueryCache, State
 from scraper.analytics_scraper import (
     TesseractUnavailableError, load_session, scrape_state_year, search_makers as _search_makers_site,
@@ -254,6 +255,7 @@ _leaderboard_db_gate = asyncio.Semaphore(4)
 
 async def get_top_makers_leaderboard(
     db: AsyncSession, state_code: str, year: int, fuel: str | None = None, limit: int = 10,
+    vehicle_category: str | None = None,
 ) -> list[dict]:
     """Real (not modeled) maker ranking for one state/year, optionally
     scoped to one raw fuel value -- the actual-numbers alternative to
@@ -274,9 +276,19 @@ async def get_top_makers_leaderboard(
     if state_name is None:
         raise UnknownStateCodeError(state_code)
 
-    top_makers = (await db.execute(
+    # vehicle_category narrows both halves of this for a category-scoped
+    # caller: which makers get ranked (below) and which of each maker's
+    # live-scraped month/category cells count toward its total (in _one) --
+    # ranking 2W makers for a 4W account, or crediting a mixed maker with
+    # its 2W volume, would both leak across the segment boundary.
+    ranking_query = (
         select(MakerCategoryTotal.maker, func.sum(MakerCategoryTotal.count).label("total"))
         .where(MakerCategoryTotal.state_code == state_code, MakerCategoryTotal.year == year)
+    )
+    if vehicle_category:
+        ranking_query = ranking_query.where(MakerCategoryTotal.vehicle_category == vehicle_category)
+    top_makers = (await db.execute(
+        ranking_query
         .group_by(MakerCategoryTotal.maker)
         .order_by(func.sum(MakerCategoryTotal.count).desc())
         .limit(limit)
@@ -293,6 +305,8 @@ async def get_top_makers_leaderboard(
             try:
                 async with AsyncSessionLocal() as own_db:
                     records = await get_or_scrape_maker_query(own_db, state_code, year, maker, fuel)
+                if vehicle_category:
+                    records = [r for r in records if classify_live_category(r["category"]) == vehicle_category]
                 return {"maker": maker, "total": sum(r["count"] for r in records)}
             except TesseractUnavailableError:
                 # A process-wide precondition, not a per-maker transient --

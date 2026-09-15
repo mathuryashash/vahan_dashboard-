@@ -64,6 +64,7 @@ async def login(
         "scope_state_name": user.scope_state_name,
         "scope_rto_code": user.scope_rto_code,
         "scope_rto_name": user.scope_rto_name,
+        "scope_vehicle_category": user.scope_vehicle_category,
     }
 
 
@@ -88,4 +89,5 @@ async def me(user: User = Depends(get_current_user)):
         "scope_state_name": user.scope_state_name,
         "scope_rto_code": user.scope_rto_code,
         "scope_rto_name": user.scope_rto_name,
+        "scope_vehicle_category": user.scope_vehicle_category,
     }

@@ -196,6 +196,7 @@ class UserOut(BaseModel):
     scope_state_name: str | None
     scope_rto_code: str | None
     scope_rto_name: str | None
+    scope_vehicle_category: str | None
     organization_id: int | None
 
 

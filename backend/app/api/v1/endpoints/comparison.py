@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters
-from app.core.scope import enforce_state
+from app.core.scope import enforce_state, get_effective_category
 from app.core.cache import TTLCache
 from app.models.models import Registration, User, UserScope
 from app.schemas.schemas import StateComparisonData, StateComparisonRanking
@@ -29,7 +29,7 @@ async def compare_states(
     state_a: str,
     state_b: str | None = None,
     year: int = _DEFAULT_YEAR,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     fuel_group: str | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -78,7 +78,7 @@ async def compare_states(
 async def get_all_states_comparison(
     year: int = _DEFAULT_YEAR,
     limit: int = 36,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     fuel_group: str | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),

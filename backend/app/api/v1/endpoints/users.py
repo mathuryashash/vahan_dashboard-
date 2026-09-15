@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import hash_password, require_role
 from app.core.database import get_db
-from app.models.models import Organization, User, UserRole, UserScope
+from app.models.models import Organization, User, UserRole, UserScope, VehicleCategoryScope
 from app.schemas.schemas import UserOut
 
 router = APIRouter()
@@ -25,6 +25,10 @@ class UserCreate(BaseModel):
     scope_state_name: str | None = None
     scope_rto_code: str | None = None
     scope_rto_name: str | None = None
+    # Independent of scope_type (see VehicleCategoryScope) -- a four-wheeler
+    # customer is still separately national or state-scoped. None = every
+    # category.
+    scope_vehicle_category: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -36,6 +40,7 @@ class UserUpdate(BaseModel):
     scope_state_name: str | None = None
     scope_rto_code: str | None = None
     scope_rto_name: str | None = None
+    scope_vehicle_category: str | None = None
 
 
 def _serialize(user: User) -> dict:
@@ -51,6 +56,7 @@ def _serialize(user: User) -> dict:
         "scope_state_name": user.scope_state_name,
         "scope_rto_code": user.scope_rto_code,
         "scope_rto_name": user.scope_rto_name,
+        "scope_vehicle_category": user.scope_vehicle_category,
         "organization_id": user.organization_id,
     }
 
@@ -62,6 +68,16 @@ def _validate_scope(scope_type: str, state_code: str | None, rto_code: str | Non
         raise HTTPException(status_code=400, detail="scope_state_code is required for state/rto scope")
     if scope_type == UserScope.RTO and not rto_code:
         raise HTTPException(status_code=400, detail="scope_rto_code is required for rto scope")
+
+
+def _validate_vehicle_category(category: str | None) -> None:
+    """A typo'd category ("4-Wheeler") would match no row in any table, so
+    the account would silently see nothing at all rather than the segment it
+    was sold -- reject at creation time instead."""
+    if category is not None and category not in VehicleCategoryScope.ALL:
+        raise HTTPException(
+            status_code=400, detail=f"scope_vehicle_category must be one of {VehicleCategoryScope.ALL}"
+        )
 
 
 async def _validate_organization(db: AsyncSession, organization_id: int | None) -> None:
@@ -94,6 +110,7 @@ async def create_user(
     if payload.role not in UserRole.ALL:
         raise HTTPException(status_code=400, detail=f"role must be one of {UserRole.ALL}")
     _validate_scope(payload.scope_type, payload.scope_state_code, payload.scope_rto_code)
+    _validate_vehicle_category(payload.scope_vehicle_category)
     await _validate_organization(db, payload.organization_id)
     existing = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
     if existing is not None:
@@ -110,6 +127,7 @@ async def create_user(
         scope_state_name=payload.scope_state_name,
         scope_rto_code=payload.scope_rto_code,
         scope_rto_name=payload.scope_rto_name,
+        scope_vehicle_category=payload.scope_vehicle_category,
     )
     db.add(user)
     await db.commit()
@@ -150,6 +168,9 @@ async def update_user(
         user.scope_rto_code = payload.scope_rto_code
     if payload.scope_rto_name is not None:
         user.scope_rto_name = payload.scope_rto_name
+    if payload.scope_vehicle_category is not None:
+        _validate_vehicle_category(payload.scope_vehicle_category)
+        user.scope_vehicle_category = payload.scope_vehicle_category
 
     await db.commit()
     return _serialize(user)

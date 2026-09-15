@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
-from app.core.query_filters import exclude_supplementary
-from app.core.scope import require_rto_code, require_state_code
+from app.core.query_filters import apply_total_filters, category_makers, exclude_supplementary
+from app.core.scope import require_rto_code, require_state_code, scoped_category
 from app.core.cache import TTLCache
 from app.models.models import Registration
 from app.schemas.schemas import RtoAnalysis, RtoListItem
@@ -34,24 +34,30 @@ def fy_filter(fy_year: int):
 async def get_rtos_for_state(
     state_code: str = Depends(require_state_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
 ):
     """RTOs with real registration data for this state/FY, ranked by
     volume. Reads from `registrations` directly (not the `rtos` master
     table) so the list only ever shows RTOs that actually have data.
     """
-    cache_key = (state_code, year)
+    cache_key = (state_code, year, user_category)
     cached = _rto_list_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    query = exclude_supplementary(
+    # apply_total_filters is exclude_supplementary when no category is in
+    # play (identical query for an unscoped caller) and swaps to the
+    # category-carrying vehicle_class rows when there is one -- these totals
+    # would otherwise be every category's, not the one the account bought.
+    query = apply_total_filters(
         select(
             Registration.rto_code,
             Registration.rto_name,
             func.sum(Registration.count).label("total"),
         )
-        .where(Registration.state_code == state_code, fy_filter(year))
+        .where(Registration.state_code == state_code, fy_filter(year)),
+        vehicle_category=user_category,
     ).group_by(Registration.rto_code, Registration.rto_name).order_by(desc("total"))
 
     result = await db.execute(query)
@@ -67,12 +73,13 @@ async def get_rtos_for_state(
 async def get_rto_analysis(
     rto_code: str = Depends(require_rto_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
 ):
     """Company (maker) % breakdown for one RTO/FY, plus an overview:
     total registrations and average per active month.
     """
-    cache_key = (rto_code, year)
+    cache_key = (rto_code, year, user_category)
     cached = _rto_analysis_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -85,6 +92,15 @@ async def get_rto_analysis(
         select(Registration.maker, func.sum(Registration.count).label("count"))
         .where(Registration.rto_code == rto_code, fy_filter(year))
     ).group_by(Registration.maker).order_by(desc("count"))
+    # The maker-pass rows this reads carry no category at all (always
+    # vehicle_class='All'), so a four-wheeler account would otherwise see
+    # every two-wheeler maker operating in the RTO. Restrict to makers that
+    # actually sell in their category, across both calendar years the FY
+    # spans -- see category_makers for the count-side ceiling.
+    if user_category:
+        maker_query = maker_query.where(
+            Registration.maker.in_(category_makers(user_category, years=[year, year + 1], rto_code=rto_code))
+        )
 
     overview_query = exclude_supplementary(
         select(

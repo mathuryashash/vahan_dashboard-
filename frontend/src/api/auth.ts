@@ -9,6 +9,12 @@ export interface AuthUser {
   scope_state_name: string | null;
   scope_rto_code: string | null;
   scope_rto_name: string | null;
+  // Independent of scope_type: a segment customer (four-wheeler,
+  // two-wheeler, ...) is still separately national or state-scoped. null =
+  // every category. The backend clamps regardless of what the UI sends --
+  // this is only so the UI can show the lock rather than a filter that
+  // silently does nothing.
+  scope_vehicle_category: string | null;
 }
 
 // The JWT itself lives only in an httpOnly cookie the backend sets on login

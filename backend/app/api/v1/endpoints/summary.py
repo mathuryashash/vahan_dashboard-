@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.database import get_db
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, exclude_supplementary, latest_month_with_data
-from app.core.scope import get_effective_state
+from app.core.scope import get_effective_category, get_effective_state
 from app.core.cache import TTLCache
 from app.models.models import Registration
 from app.schemas.schemas import DashboardKPIs, MonthCount, MonthDetail, StateRankingItem
@@ -71,7 +71,7 @@ async def get_dashboard_kpis(
     month: int | None = None,
     state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     fuel_group: str | None = None,
     maker: str | None = None,
@@ -174,7 +174,7 @@ async def get_trend(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     fuel_group: str | None = None,
     maker: str | None = None,
@@ -218,7 +218,7 @@ async def get_state_ranking(
     month: int | None = None,
     state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     fuel_group: str | None = None,
     maker: str | None = None,
@@ -304,7 +304,7 @@ async def get_month_detail(
     month: int,
     state: str | None = Depends(get_effective_state),
     vehicle_class: str | None = None,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     fuel_group: str | None = None,
     maker: str | None = None,

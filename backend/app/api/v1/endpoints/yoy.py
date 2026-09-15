@@ -3,9 +3,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
-from app.core.query_filters import exclude_supplementary, latest_month_with_data
+from app.core.query_filters import apply_total_filters, latest_month_with_data
 from app.core.auth import get_current_user
-from app.core.scope import get_effective_state
+from app.core.scope import get_effective_state, scoped_category
 from app.models.models import Registration, User
 
 router = APIRouter()
@@ -20,19 +20,28 @@ async def get_yoy_monthly(
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
 ):
     # start_month/end_month default to the full year (unchanged behavior) --
     # passing e.g. 4/7 restricts both years to Apr-Jul, the same "same
     # timeline, different years" custom-range comparison as /summary below.
-    query_a = exclude_supplementary(
+    #
+    # apply_total_filters rather than the bare exclude_supplementary this
+    # used before: with no category it IS exclude_supplementary (identical
+    # query), and with one it swaps to the vehicle_class-dimension rows that
+    # actually carry a category instead of stripping them out. Without this
+    # clamp a four-wheeler account's YoY chart is the whole market's.
+    query_a = apply_total_filters(
         select(Registration.month, func.sum(Registration.count).label("count"))
-        .where(Registration.year == year_a, Registration.month >= start_month, Registration.month <= end_month)
+        .where(Registration.year == year_a, Registration.month >= start_month, Registration.month <= end_month),
+        vehicle_category=user_category,
     ).group_by(Registration.month)
 
-    query_b = exclude_supplementary(
+    query_b = apply_total_filters(
         select(Registration.month, func.sum(Registration.count).label("count"))
-        .where(Registration.year == year_b, Registration.month >= start_month, Registration.month <= end_month)
+        .where(Registration.year == year_b, Registration.month >= start_month, Registration.month <= end_month),
+        vehicle_category=user_category,
     ).group_by(Registration.month)
 
     if state:
@@ -74,6 +83,7 @@ async def get_yoy_summary(
     year_b: int = Query(default=_DEFAULT_YEAR),
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
+    user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
@@ -94,12 +104,12 @@ async def get_yoy_summary(
     # Same fix already applied to summary.get_dashboard_kpis.
     effective_end = min([end_month, *candidates]) if candidates else end_month
 
-    q_a = exclude_supplementary(select(func.sum(Registration.count)).where(
+    q_a = apply_total_filters(select(func.sum(Registration.count)).where(
         Registration.year == year_a, Registration.month >= start_month, Registration.month <= effective_end
-    ))
-    q_b = exclude_supplementary(select(func.sum(Registration.count)).where(
+    ), vehicle_category=user_category)
+    q_b = apply_total_filters(select(func.sum(Registration.count)).where(
         Registration.year == year_b, Registration.month >= start_month, Registration.month <= effective_end
-    ))
+    ), vehicle_category=user_category)
 
     result_a = await db.execute(q_a)
     result_b = await db.execute(q_b)
