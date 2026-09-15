@@ -99,7 +99,12 @@ if __name__ == "__main__":
     parser.add_argument("--year", type=int, help="Scrape a single year")
     parser.add_argument("--from-year", type=int, help="Start of year range")
     parser.add_argument("--to-year", type=int, help="End of year range (inclusive)")
-    parser.add_argument("--concurrent", type=int, default=8, help="Concurrent states per year")
+    # 6, not 8+: benchmarked, the bottleneck is local tesseract OCR, not the
+    # server. Concurrency 12 returned identical throughput to 6 (1.96
+    # combos/s both) while raising requests per combo from 2.25 to 3.39 --
+    # the extra requests are just CAPTCHA retries from OCR contention, so
+    # higher settings hammer VAHAN harder for no gain.
+    parser.add_argument("--concurrent", type=int, default=6, help="Concurrent states per year")
     parser.add_argument("--force", action="store_true", help="Re-scrape states that already have data")
     args = parser.parse_args()
 

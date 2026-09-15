@@ -97,6 +97,17 @@ class Registration(Base):
         Index("idx_reg_year_month_supp_count", "year", "month", "is_supplementary", "count"),
         Index("idx_reg_state_year_month_count", "state_name", "year", "month", "count"),
         Index("idx_reg_year_class_month_count", "year", "vehicle_class", "month", "count"),
+        # vehicle_CATEGORY's mirror of the vehicle_class index above. The
+        # dashboard's filter bar drives vehicle_category, not vehicle_class,
+        # so every category-filtered aggregate fell through to a parallel seq
+        # scan -- EXPLAIN ANALYZE showed 5.16s for one category SUM, reading
+        # ~2.9GB off disk and discarding 6.8M rows per worker, which is what
+        # made a first category click take 12-13s (three such queries fire
+        # together). The plain ix_registrations_vehicle_category can't serve
+        # these: they also need `count`, so it meant ~1.15M random heap
+        # lookups and the planner rightly refused it. Covering index turns it
+        # into an Index Only Scan: 5.16s -> 0.17s, 177MB.
+        Index("idx_reg_year_category_month_count", "year", "vehicle_category", "month", "count"),
         Index("idx_reg_class_state_rto", "vehicle_class", "state_name", "rto_code"),
         Index("idx_reg_rto_year_supp_month_maker_count", "rto_code", "year", "is_supplementary", "month", "maker", "count"),
         # None of the above leads with the column these three queries actually
