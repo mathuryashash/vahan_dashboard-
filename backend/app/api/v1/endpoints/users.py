@@ -4,7 +4,7 @@ very first one) and assigns its role + geographic scope."""
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,10 +18,17 @@ router = APIRouter()
 
 class UserCreate(BaseModel):
     email: str
-    # 12 minimum, and capped at bcrypt's real limit: bcrypt silently ignores
-    # everything past 72 bytes, so a longer password is not the password the
-    # admin thinks they set.
-    password: str = Field(min_length=12, max_length=72)
+    password: str = Field(min_length=12)
+
+    @field_validator("password")
+    @classmethod
+    def _password_fits_bcrypt(cls, v: str) -> str:
+        # bcrypt's 72 limit is BYTES, not characters, and bcrypt>=4 raises on
+        # anything longer -- so a 72-character Devanagari password passed a
+        # max_length=72 check and then 500'd inside hash_password.
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("password must be at most 72 bytes (bcrypt's limit)")
+        return v
     full_name: str | None = None
     role: str = UserRole.VIEWER
     organization_id: int | None = None
@@ -66,11 +73,18 @@ def _serialize(user: User) -> dict:
     }
 
 
-def _validate_scope(scope_type: str, state_code: str | None, rto_code: str | None) -> None:
+def _validate_scope(scope_type: str, state_code: str | None, rto_code: str | None, state_name: str | None = None) -> None:
     if scope_type not in UserScope.ALL:
         raise HTTPException(status_code=400, detail=f"scope_type must be one of {UserScope.ALL}")
     if scope_type in (UserScope.STATE, UserScope.RTO) and not state_code:
         raise HTTPException(status_code=400, detail="scope_state_code is required for state/rto scope")
+    # scope_state_name, not just the code: get_effective_state (core/scope.py)
+    # filters on the NAME, so a state-tier account created without one gets
+    # None back -- i.e. no state filter at all, and national data on every
+    # aggregate endpoint. Only enforce_state (used by /comparison) reads the
+    # code, which is why this wasn't visible there.
+    if scope_type in (UserScope.STATE, UserScope.RTO) and not state_name:
+        raise HTTPException(status_code=400, detail="scope_state_name is required for state/rto scope")
     if scope_type == UserScope.RTO and not rto_code:
         raise HTTPException(status_code=400, detail="scope_rto_code is required for rto scope")
 
@@ -114,7 +128,7 @@ async def create_user(
 ):
     if payload.role not in UserRole.ALL:
         raise HTTPException(status_code=400, detail=f"role must be one of {UserRole.ALL}")
-    _validate_scope(payload.scope_type, payload.scope_state_code, payload.scope_rto_code)
+    _validate_scope(payload.scope_type, payload.scope_state_code, payload.scope_rto_code, payload.scope_state_name)
     _validate_vehicle_category(payload.scope_vehicle_category)
     await _validate_organization(db, payload.organization_id)
     existing = (await db.execute(select(User).where(User.email == payload.email))).scalar_one_or_none()
@@ -165,7 +179,8 @@ async def update_user(
     if payload.scope_type is not None:
         state_code = payload.scope_state_code if payload.scope_state_code is not None else user.scope_state_code
         rto_code = payload.scope_rto_code if payload.scope_rto_code is not None else user.scope_rto_code
-        _validate_scope(payload.scope_type, state_code, rto_code)
+        state_name = payload.scope_state_name if payload.scope_state_name is not None else user.scope_state_name
+        _validate_scope(payload.scope_type, state_code, rto_code, state_name)
         user.scope_type = payload.scope_type
     if payload.scope_state_code is not None:
         user.scope_state_code = payload.scope_state_code

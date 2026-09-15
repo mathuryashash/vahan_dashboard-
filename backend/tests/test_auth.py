@@ -5,7 +5,7 @@ these tests specifically clear that override to exercise the real
 get_current_user/require_role behavior."""
 from app.core.auth import get_current_user, hash_password
 from app.main import app
-from app.models.models import User, UserRole
+from app.models.models import User, UserRole, UserScope
 
 
 def _restore_admin_override():
@@ -146,6 +146,20 @@ async def test_admin_can_create_and_list_users(client, db_session):
     assert response.status_code == 200
     emails = [u["email"] for u in response.json()]
     assert "new@example.com" in emails
+
+
+async def test_create_user_requires_a_state_name_for_state_scope(client, db_session):
+    # get_effective_state filters on scope_state_name, so a state-tier
+    # account created with only the code gets None back -- no state filter at
+    # all, and national data on every aggregate. Must be rejected outright.
+    response = await client.post(
+        "/api/v1/users/",
+        json={
+            "email": "nameless@example.com", "password": "pw123456-long-enough",
+            "scope_type": UserScope.STATE, "scope_state_code": "MH",
+        },
+    )
+    assert response.status_code == 400
 
 
 async def test_create_user_rejects_a_too_short_password(client, db_session):

@@ -134,18 +134,22 @@ export function CategoriesPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <CategoryChart title="Top Makers — All Categories" queryKey="makers" fn={() => getTopMakers({ year: selectedYear })} year={selectedYear} chart={chart} index={0} />
-        <FuelBreakdownChart title="Fuel Type Breakdown — All Categories" year={selectedYear} chart={chart} index={1} />
+        {/* These two carry selectedState as well -- with only the panels
+            above state-filtered, the page showed one geography at the top
+            and all-India underneath, which reads worse than being uniformly
+            national. */}
+        <CategoryChart title="Top Makers — All Categories" queryKey="makers" fn={() => getTopMakers({ year: selectedYear, state: selectedState || undefined })} year={selectedYear} state={selectedState} chart={chart} index={0} />
+        <FuelBreakdownChart title="Fuel Type Breakdown — All Categories" year={selectedYear} state={selectedState} chart={chart} index={1} />
       </div>
     </div>
   );
 }
 
-function FuelBreakdownChart({ title, year, chart, index }: { title: string; year: number; chart: ReturnType<typeof useChartTheme>; index: number }) {
+function FuelBreakdownChart({ title, year, state, chart, index }: { title: string; year: number; state: string | null; chart: ReturnType<typeof useChartTheme>; index: number }) {
   const [fuelGroup, setFuelGroup] = useState<string | null>(null);
   const { data, isLoading } = useQuery({
-    queryKey: ['fuel', year, fuelGroup],
-    queryFn: () => getFuelBreakdown({ year, fuel_group: fuelGroup }),
+    queryKey: ['fuel', year, fuelGroup, state],
+    queryFn: () => getFuelBreakdown({ year, fuel_group: fuelGroup, state: state || undefined }),
   });
 
   const chartData = ((data as { fuel_type?: string; count: number }[]) || []).map((d) => ({
@@ -195,8 +199,10 @@ function FuelBreakdownChart({ title, year, chart, index }: { title: string; year
   );
 }
 
-function CategoryChart({ title, queryKey, fn, year, chart, index }: { title: string; queryKey: string; fn: () => Promise<unknown>; year: number; chart: ReturnType<typeof useChartTheme>; index: number }) {
-  const { data, isLoading } = useQuery({ queryKey: [queryKey, year], queryFn: fn });
+function CategoryChart({ title, queryKey, fn, year, state, chart, index }: { title: string; queryKey: string; fn: () => Promise<unknown>; year: number; state: string | null; chart: ReturnType<typeof useChartTheme>; index: number }) {
+  // state is in the key, not just the fetch: without it, switching states
+  // served the previous state's cached rows.
+  const { data, isLoading } = useQuery({ queryKey: [queryKey, year, state], queryFn: fn });
 
   const chartData = ((data as { maker?: string; fuel_type?: string; count: number }[]) || []).map((d) => ({
     name: d.maker || d.fuel_type || '',

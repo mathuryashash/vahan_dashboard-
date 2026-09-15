@@ -40,9 +40,18 @@ export function IndustrySalesPage() {
   // category out from under the user (was categories?.[0], defaulting to
   // whichever category happened to sort first -- confusing when the page
   // loads pre-filtered to something the user didn't choose).
-  const category = (selectedCategory && categories?.includes(selectedCategory))
-    ? selectedCategory
-    : null;
+  // A locked account can't use selectedCategory here: that's a VAHAN bucket
+  // and this page speaks FADA's vocabulary, which doesn't line up
+  // (Four-Wheeler is "PV"; "Other" is both Tractor and Wheeled -
+  // Construction Equipment). Name-matching a locked account therefore found
+  // nothing and left the page permanently empty. /oem/categories already
+  // returns only the labels this account is allowed (see oem_sales.py), so
+  // the locked selection lives here in local state -- writing it to the
+  // shared store would just be reverted by the scope lock.
+  const [fadaCategory, setFadaCategory] = useState<string | null>(null);
+  const category = isCategoryLocked
+    ? ((fadaCategory && categories?.includes(fadaCategory)) ? fadaCategory : (categories?.[0] ?? null))
+    : ((selectedCategory && categories?.includes(selectedCategory)) ? selectedCategory : null);
 
   const { data: oemStatus } = useQuery({ queryKey: ['oemStatus'], queryFn: getOemStatus });
 
@@ -107,12 +116,25 @@ export function IndustrySalesPage() {
 
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div className="max-w-xs w-full">
-          {isCategoryLocked ? (
-            // Segment accounts have no category choice -- show the locked
-            // value rather than a dropdown the scope lock would just revert.
+          {isCategoryLocked && (categories?.length ?? 0) > 1 ? (
+            // Some scopes map to more than one FADA category ("Other" covers
+            // Tractor and Construction Equipment), so a single pill can't
+            // represent them -- keep a dropdown, over the server-restricted
+            // list only.
+            <LabeledSelect
+              label="Category"
+              value={category || ''}
+              onChange={(e) => { setFadaCategory(e.target.value || null); setSelectedMaker(null); }}
+              className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            >
+              {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+            </LabeledSelect>
+          ) : isCategoryLocked ? (
+            // Exactly one permitted category: no choice to offer. Shows
+            // FADA's own label for it, not the VAHAN bucket name.
             <div className="flex flex-col gap-1.5">
               <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</span>
-              <div className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl cursor-default">{lockedCategory}</div>
+              <div className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl cursor-default">{category ?? lockedCategory}</div>
             </div>
           ) : (
             <LabeledSelect
