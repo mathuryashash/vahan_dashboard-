@@ -9,7 +9,7 @@ import { Link } from 'react-router-dom';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
-import { insidePieLabel } from '../components/ChartAxisTick';
+import { insidePieLabel, TruncatedYAxisTick } from '../components/ChartAxisTick';
 
 // The live VAHAN4 site can only pivot on one Y-axis dimension per visit, so
 // the scraper's maker-pass and fuel-pass rows are never tagged with a real
@@ -94,7 +94,7 @@ export function CategoryDetailPage() {
               <BarChart data={(makers || []).map((m: { maker: string; count: number }) => ({ name: m.maker, count: m.count }))} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
-                <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} width={140} />
+                <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
                 <Tooltip
                   formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
                   contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
