@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
-import { estimateTripleCells } from '../utils/tripleEstimate';
+import { estimateTripleCells, MIN_CATEGORY_SHARE } from '../utils/tripleEstimate';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -139,10 +139,15 @@ export function MakersModelsPage() {
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
     enabled: comboImpossible,
   });
+  // Also enabled for the plain (non-triple) selectedCategory branch below --
+  // makerChartData's negligible-share filter needs the same real per-maker
+  // year totals as the triple estimate does, to catch the identical issue
+  // (a maker with a real but noise-level presence in the selected category)
+  // on the real-data chart too, not just the modeled one.
   const { data: makerYearTotalsList, isLoading: makerYearLoading } = useQuery({
     queryKey: ['tripleMakerYear', year, selectedState],
     queryFn: ({ signal }) => getTopMakers({ year, state: selectedState, limit: 100 }, signal),
-    enabled: comboImpossible,
+    enabled: comboImpossible || !!selectedCategory,
   });
   // Found in review (still applies): tracking only one of these queries'
   // isLoading gave a false "no data" message on the primary way to explore
@@ -170,10 +175,25 @@ export function MakersModelsPage() {
     }
   }
 
-  const makerChartData = (makers || []).map((m: { maker: string; count: number }) => ({
-    name: m.maker,
-    count: isEstimated ? Math.round(m.count * monthRatio!) : m.count,
-  }));
+  // Same negligible-share reasoning as estimateTripleCells (tripleEstimate.ts)
+  // applied to the real (non-estimated) per-category ranking too -- a maker
+  // can have a real but noise-level count in the selected category (e.g. a
+  // two-wheeler maker's handful of real Four-Wheeler registrations) that
+  // shouldn't rank them in that category's leaderboard. Fails open (keeps
+  // the maker) when their own year total isn't in the fetched top-100 list,
+  // rather than hiding a real category specialist just because myTotal is
+  // unknown here.
+  const myTotalMap = new Map<string, number>((makerYearTotalsList || []).map((m: { maker: string; count: number }) => [m.maker, m.count]));
+  const makerChartData = (makers || [])
+    .filter((m: { maker: string; count: number }) => {
+      if (!selectedCategory) return true;
+      const myTotal = myTotalMap.get(m.maker);
+      return !myTotal || m.count / myTotal >= MIN_CATEGORY_SHARE;
+    })
+    .map((m: { maker: string; count: number }) => ({
+      name: m.maker,
+      count: isEstimated ? Math.round(m.count * monthRatio!) : m.count,
+    }));
   const selectClass = "bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer";
 
   return (

@@ -3,9 +3,8 @@
 // Estimates Maker x Category x Fuel cells -- VAHAN has no table that pivots
 // on all three at once, only the three pairwise cross-tabs (Maker x
 // Category, Maker x Fuel, Category x Fuel, each year-only). Used by
-// Overview.tsx (one specific maker, for a KPI card) and MakersModels.tsx
-// (every maker, for a ranking) when a user has Category, Maker, and
-// Powertrain all selected together.
+// MakersModels.tsx (every maker, for a ranking) when a user has Category,
+// Maker, and Powertrain all selected together.
 //
 // Method: the "no three-factor interaction" log-linear model gives a prior
 // share per maker, raw(m) = r_mc(m) * r_mf(m) / m_total(m) (the
@@ -34,6 +33,15 @@ export interface MakerCount {
   count: number;
 }
 
+// A maker's real Category count can be genuinely nonzero (VAHAN's own
+// registration data, not invented) even when that category is a rounding
+// error for them -- e.g. a two-wheeler maker with a handful of real
+// Four-Wheeler registrations nationally. Excluding those from a
+// category-scoped ranking isn't correcting bad data, it's just not
+// surfacing a maker's noise-level presence in a category dominated by
+// someone else. 1% is a judgment call, not derived from anything.
+export const MIN_CATEGORY_SHARE = 0.01;
+
 export interface TripleEstimateInputs {
   /** Maker x Category, all makers, real counts -- category already fixed by the caller's query. */
   mcList: MakerCount[];
@@ -55,6 +63,7 @@ export function estimateTripleCells({ mcList, mfList, myList, rCf }: TripleEstim
       const rMf = mfMap.get(row.maker);
       const mTotal = myMap.get(row.maker);
       if (!rMf || !mTotal) return null;
+      if (row.count / mTotal < MIN_CATEGORY_SHARE) return null;
       return { maker: row.maker, raw: (row.count * rMf) / mTotal, ceiling: Math.min(row.count, rMf) };
     })
     .filter((x): x is Candidate => x !== null);
