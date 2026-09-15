@@ -10,7 +10,7 @@ is a real captured "Invalid CAPTCHA" response with no result table.
 """
 from pathlib import Path
 
-from scraper.analytics_scraper import _build_form, parse_month_category_table
+from scraper.analytics_scraper import _build_form, map_site_rtos, parse_month_category_table
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -97,3 +97,55 @@ def test_build_form_adds_maker_and_fuel_when_given():
     assert form["vehicleMakers"] == "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD"
     assert form["selectedMakersCsv"] == "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD"
     assert form["vehicleFuels"] == "PETROL"
+
+
+def test_build_form_sets_rto_code_multiple_only_when_given():
+    # rtoCodeMultiple is the one date/scope field on this form that REALLY
+    # filters (confirmed live against a control: DL/2024 = 711,071
+    # unfiltered vs. 85,366 with rtoCodeMultiple=9). The _rtoCodeMultiple
+    # field-present marker is always sent regardless -- that's Spring's
+    # convention, not the filter itself.
+    unfiltered = _build_form(csrf_token="t", state_code="DL", year=2024, captcha="X", maker=None, fuel=None)
+    assert "rtoCodeMultiple" not in unfiltered
+    assert unfiltered["_rtoCodeMultiple"] == "1"
+
+    scoped = _build_form(csrf_token="t", state_code="DL", year=2024, captcha="X", maker=None, fuel=None, rto_code="9")
+    assert scoped["rtoCodeMultiple"] == "9"
+
+
+# A real json_rtos response shape for stateCode=DL (trimmed): the site's
+# `id` is NOT what the form wants (id=980 returns nothing; rtoCode=9 is the
+# value that filters), and its rtoName carries our own rto_code as a suffix.
+_DELHI_SITE_RTOS = [
+    {"id": 980, "rtoCode": 9, "rtoName": "DWARKA - DL9", "stateCode": "DL"},
+    {"id": 972, "rtoCode": 1, "rtoName": "MALL ROAD - DL1", "stateCode": "DL"},
+    {"id": 985, "rtoCode": 13, "rtoName": "SOUTH-WEST - DL13", "stateCode": "DL"},
+]
+
+
+def test_map_site_rtos_keys_by_our_rto_code_from_the_name_suffix():
+    # Matched by rtoName's suffix, never by parsing an integer out of our
+    # own rto_code -- the two vocabularies don't line up (see map_site_rtos).
+    assert map_site_rtos(_DELHI_SITE_RTOS) == {"DL9": "9", "DL1": "1", "DL13": "13"}
+
+
+def test_map_site_rtos_splits_on_the_LAST_hyphen_only():
+    # "SOUTH-WEST - DL13" has a hyphen inside the office name too: a plain
+    # split-on-first-hyphen would key this as "WEST - DL13" and the RTO
+    # would silently have no live option.
+    assert map_site_rtos(_DELHI_SITE_RTOS)["DL13"] == "13"
+
+
+def test_map_site_rtos_omits_rtos_the_site_doesnt_list():
+    # Confirmed live for Delhi: we hold 27 RTOs, the site lists 23, 16 map.
+    # DL14 is one of the real gaps, and "DL1L" isn't even numeric -- both
+    # must simply be absent (no live option), not guessed at.
+    mapping = map_site_rtos(_DELHI_SITE_RTOS)
+    assert "DL14" not in mapping
+    assert "DL1L" not in mapping
+
+
+def test_map_site_rtos_skips_entries_with_no_suffix_separator():
+    # Without the guard, a name with no " - " lands in the map under its
+    # whole name, which can never match a real rto_code anyway.
+    assert map_site_rtos([{"id": 1, "rtoCode": 4, "rtoName": "AGRA", "stateCode": "UP"}]) == {}

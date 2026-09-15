@@ -2,7 +2,8 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistrictsForState, getRtosForDistrict } from '../api/vahan';
+import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistrictsForState, getRtosForDistrict, getLiveRtos } from '../api/vahan';
+import { LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
@@ -77,6 +78,16 @@ export function RtoAnalysisPage() {
   const { data: rtos, isLoading: rtosLoading, isError: rtosError, refetch: refetchRtos } = useQuery<RTOListItem[]>({
     queryKey: ['rtoList', stateCode, fyYear],
     queryFn: () => getRtosForState(stateCode, fyYear),
+    enabled: !!stateCode,
+  });
+
+  // Which of this state's RTOs the SOURCE site itself lists -- only those
+  // can be live-looked-up (confirmed live for Delhi: we hold 27 RTOs, the
+  // site lists 23, 16 in common). Cheap and server-cached, so it's fetched
+  // per state rather than gated behind an RTO selection.
+  const { data: liveRtos } = useQuery<string[]>({
+    queryKey: ['liveRtos', stateCode],
+    queryFn: () => getLiveRtos(stateCode),
     enabled: !!stateCode,
   });
 
@@ -292,6 +303,19 @@ export function RtoAnalysisPage() {
             </>
           )}
         </div>
+      )}
+
+      {rtoCode && stateCode && liveRtos && (
+        liveRtos.includes(rtoCode) ? (
+          <LiveMakerQueryPanel
+            year={fyYear}
+            rtoScope={{ stateCode, rtoCode, rtoName: analysis?.rto_name || rtoCode }}
+          />
+        ) : (
+          <p className="text-[10px] text-[var(--text-muted)] font-mono px-1">
+            The source site doesn't list {rtoCode} among its own RTOs, so no live maker lookup is available for it.
+          </p>
+        )
       )}
     </div>
   );

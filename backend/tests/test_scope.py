@@ -68,6 +68,44 @@ async def test_rto_scoped_user_blocked_from_another_rto_analysis(client, db_sess
         app.dependency_overrides[get_current_user] = lambda: User(id=0, role="admin", is_active=True, scope_type=UserScope.NATIONAL)
 
 
+async def test_rto_scoped_user_cannot_widen_live_query_by_omitting_rto(client, db_session, monkeypatch):
+    """Omitting `rto` must mean "my own RTO", never "the whole state". The
+    guard originally only rejected a DIFFERENT rto, so leaving the parameter
+    off entirely skipped the clamp and returned whole-state data (caught in
+    code review) -- the same bypass get_effective_state prevents on the
+    state axis."""
+    seen = {}
+
+    async def _capture(db, state_code, year, maker, fuel=None, rto=None):
+        seen["rto"] = rto
+        return []
+
+    monkeypatch.setattr("app.api.v1.endpoints.live_query.get_or_scrape_maker_query", _capture)
+
+    await _seed_two_states(db_session)
+    _login_as(**MH_RTO)
+    try:
+        # No `rto` given at all -- must be narrowed to the user's own MH1.
+        response = await client.get(
+            "/api/v1/live-query/maker",
+            params={"state_code": "MH", "year": 2026, "maker": "HONDA"},
+        )
+        assert response.status_code == 200
+        assert seen["rto"] == "MH1", (
+            f"expected the clamp to narrow to the user's own RTO, got {seen['rto']!r} "
+            "-- omitting the parameter must not widen scope to the whole state"
+        )
+
+        # Naming someone else's RTO stays a hard refusal.
+        blocked = await client.get(
+            "/api/v1/live-query/maker",
+            params={"state_code": "MH", "year": 2026, "maker": "HONDA", "rto": "DL1"},
+        )
+        assert blocked.status_code == 403
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: User(id=0, role="admin", is_active=True, scope_type=UserScope.NATIONAL)
+
+
 async def test_national_user_is_unrestricted(client, db_session):
     await _seed_two_states(db_session)
     response = await client.get("/api/v1/summary/kpis", params={"year": 2026, "state": "Maharashtra"})

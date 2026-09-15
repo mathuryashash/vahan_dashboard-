@@ -42,7 +42,16 @@ function errorMessageFor(error: unknown): string {
   }
 }
 
-export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number; onStateCodeChange?: (stateCode: string | null) => void }) {
+export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
+  year: number;
+  onStateCodeChange?: (stateCode: string | null) => void;
+  // Set by the RTO Analysis page, which has already picked a state AND an
+  // RTO: the panel then drops its own State dropdown (that page has one
+  // above it -- two would be ambiguous) and scopes every lookup to that one
+  // RTO. One prop, not two, so the state and the RTO can't drift apart.
+  // Undefined (the Makers page) means the whole state, as before.
+  rtoScope?: { stateCode: string; rtoCode: string; rtoName: string };
+}) {
   const auth = useAuth();
   const { selectedState } = useAppStore();
   const { data: states, isLoading: statesLoading } = useQuery({ queryKey: ['states'], queryFn: getStates });
@@ -62,7 +71,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
     if (match) setLocalStateCode(match.state_code);
   }, [selectedState, states, auth.scope_type, localStateCode]);
 
-  const stateCode = auth.scope_type !== 'national' ? auth.scope_state_code : (localStateCode || null);
+  const stateCode = rtoScope ? rtoScope.stateCode : (auth.scope_type !== 'national' ? auth.scope_state_code : (localStateCode || null));
 
   // Shares this one state selection with the sibling leaderboard panel
   // below -- two independent "State" dropdowns on the same page would be
@@ -100,8 +109,11 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
   const [attempt, setAttempt] = useState(0);
 
   const { data, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ['liveMakerQuery', stateCode, year, submitted?.maker, submitted?.fuel],
-    queryFn: () => getLiveMakerQuery({ state_code: stateCode!, year, maker: submitted!.maker, fuel: submitted!.fuel || null }),
+    queryKey: ['liveMakerQuery', stateCode, year, submitted?.maker, submitted?.fuel, rtoScope?.rtoCode],
+    queryFn: () => getLiveMakerQuery({
+      state_code: stateCode!, year, maker: submitted!.maker, fuel: submitted!.fuel || null,
+      rto: rtoScope?.rtoCode ?? null,
+    }),
     enabled: !!stateCode && !!submitted,
     retry: false, // a 502/503/429 is a real answer to show, not a transient glitch to silently retry (each retry re-pays the ~7s cost)
   });
@@ -132,9 +144,12 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
     // (found live: the dropdown rendered visibly behind that section).
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance relative z-20" style={{ animationDelay: '120ms' }}>
       <div className="mb-1">
-        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Live Maker Lookup</h3>
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
+          {rtoScope ? `Live Maker Lookup — ${rtoScope.rtoName}` : 'Live Maker Lookup'}
+        </h3>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
           Look up one manufacturer, optionally by fuel type, directly from the source site — not pre-loaded, fetched on demand.
+          {rtoScope ? ' Scoped to this RTO only, month by month — a breakdown no pre-loaded table in this app holds.' : ''}
         </p>
       </div>
 
@@ -145,7 +160,14 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
           if (canSubmit) setSubmitted({ maker: makerInput.trim(), fuel });
         }}
       >
-        {auth.scope_type === 'national' ? (
+        {rtoScope ? (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">RTO</span>
+            <div className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl">
+              {rtoScope.rtoName}
+            </div>
+          </div>
+        ) : auth.scope_type === 'national' ? (
           <LabeledSelect
             label="State"
             value={localStateCode}

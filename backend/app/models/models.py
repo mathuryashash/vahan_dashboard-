@@ -367,7 +367,11 @@ class MakerLiveQueryCache(Base):
     codebase's no-nullable-pivot-column convention -- but takes the
     sentinel value "ALL" for a maker-only query (no fuel filter), so the
     natural-key unique index stays a plain non-null composite instead of
-    needing COALESCE-based uniqueness handling for a NULL case.
+    needing COALESCE-based uniqueness handling for a NULL case. `rto_code`
+    follows exactly that convention: "ALL" means whole-state (no RTO
+    filter), any other value is one of OUR rto_codes (e.g. "DL9"), not the
+    site's numeric one the scraper actually submits (see map_site_rtos).
+    No FK to `rtos` here, precisely because "ALL" isn't a real RTO.
 
     A row with category="__EMPTY__" (month=0, count=0) is a confirmed-empty
     marker, not real data: distinguishes "scraped this combo and found
@@ -383,13 +387,20 @@ class MakerLiveQueryCache(Base):
     year = Column(Integer, nullable=False, index=True)
     maker = Column(String(200), nullable=False, index=True)
     fuel = Column(String(50), nullable=False, default="ALL")
+    rto_code = Column(String(10), nullable=False, default="ALL")
     month = Column(Integer, nullable=False)
     category = Column(String(100), nullable=False)
     count = Column(Integer, nullable=False, default=0)
     scraped_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
-        Index("idx_mlqc_natural_key", "state_code", "year", "maker", "fuel", "month", "category", unique=True),
+        # Renamed (was idx_mlqc_natural_key) when rto_code joined the key:
+        # ensure_indexes only ever CREATEs, so a same-named index already on
+        # a deployed DB would keep its old, now-too-narrow definition
+        # forever. A new name + the old one in init_db's
+        # drop_orphaned_indexes list makes the swap idempotent on both a
+        # fresh and an existing database.
+        Index("idx_mlqc_natural_key_v2", "state_code", "year", "maker", "fuel", "rto_code", "month", "category", unique=True),
     )
 
 

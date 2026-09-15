@@ -18,14 +18,15 @@ from app.core.database import AsyncSessionLocal
 from app.core.query_filters import classify_live_category
 from app.models.models import MakerCategoryTotal, MakerLiveQueryCache, State
 from scraper.analytics_scraper import (
-    TesseractUnavailableError, load_session, scrape_state_year, search_makers as _search_makers_site,
-    verify_tesseract,
+    TesseractUnavailableError, fetch_site_rtos, load_session, scrape_state_year,
+    search_makers as _search_makers_site, verify_tesseract,
 )
 
 logger = logging.getLogger("live_scrape_service")
 
 _EMPTY_MARKER_CATEGORY = "__EMPTY__"
 ALL_FUEL_SENTINEL = "ALL"
+ALL_RTO_SENTINEL = "ALL"
 
 # Guards against a thundering herd: two concurrent requests for the exact
 # same uncached combo shouldn't both pay a live CAPTCHA-solve (several
@@ -70,6 +71,10 @@ class _WarmSession:
 _session_pool: list[_WarmSession] = []
 _pool_lock = asyncio.Lock()
 
+# state_code -> {our rto_code: the site's numeric rtoCode}, see
+# get_site_rto_codes.
+_rto_code_maps: dict[str, dict[str, str]] = {}
+
 
 async def _acquire_session() -> _WarmSession:
     async with _pool_lock:
@@ -93,6 +98,13 @@ async def _release_session(session: _WarmSession, *, healthy: bool) -> None:
         return
     async with _pool_lock:
         _session_pool.append(session)
+
+
+class UnknownRtoCodeError(ValueError):
+    """This rto_code isn't one the source site lists for its state, so no
+    live lookup is possible for it -- a real gap, not a transient failure.
+    Confirmed live for Delhi: we hold 27 RTOs, the site lists 23, and only
+    16 are common (see map_site_rtos)."""
 
 
 class UnknownStateCodeError(ValueError):
@@ -124,11 +136,15 @@ def _normalize(value: str) -> str:
 
 async def get_or_scrape_maker_query(
     db: AsyncSession, state_code: str, year: int, maker: str, fuel: str | None = None,
+    rto: str | None = None,
 ) -> list[dict]:
     """Returns [{'month': int, 'category': str, 'count': int}, ...] for this
-    (state, year, maker, fuel) combo -- from cache if already scraped,
+    (state, year, maker, fuel, rto) combo -- from cache if already scraped,
     otherwise scraped live from the new site and cached for next time.
-    Raises UnknownStateCodeError if state_code isn't real, and
+    `rto` is OUR rto_code (e.g. "DL9"), translated to the site's own numeric
+    code just before the scrape; None means whole-state. Raises
+    UnknownStateCodeError if state_code isn't real, UnknownRtoCodeError if
+    the source site doesn't list that RTO, and
     CaptchaSolveError/TesseractUnavailableError on a scrape failure (the
     caller, the API endpoint, translates these to HTTP responses).
 
@@ -140,27 +156,38 @@ async def get_or_scrape_maker_query(
     would be a worse bug than paying the scrape cost more than once."""
     maker = _normalize(maker)
     fuel_key = _normalize(fuel) if fuel else ALL_FUEL_SENTINEL
+    rto_key = _normalize(rto) if rto else ALL_RTO_SENTINEL
     is_current_year = year == datetime.now(timezone.utc).year
 
     if not is_current_year:
-        cached = await _read_cache(db, state_code, year, maker, fuel_key)
+        cached = await _read_cache(db, state_code, year, maker, fuel_key, rto_key)
         if cached is not None:
             return cached
 
-    lock_key = (state_code, year, maker, fuel_key)
+    lock_key = (state_code, year, maker, fuel_key, rto_key)
     lock = _locks.setdefault(lock_key, asyncio.Lock())
     try:
         async with lock:
             if not is_current_year:
                 # Re-check after acquiring the lock: another request may
                 # have populated the cache while this one was waiting on it.
-                cached = await _read_cache(db, state_code, year, maker, fuel_key)
+                cached = await _read_cache(db, state_code, year, maker, fuel_key, rto_key)
                 if cached is not None:
                     return cached
 
             state_name = (await db.execute(select(State.state_name).where(State.state_code == state_code))).scalar()
             if state_name is None:
                 raise UnknownStateCodeError(state_code)
+
+            site_rto_code = None
+            if rto_key != ALL_RTO_SENTINEL:
+                # Fails before the CAPTCHA-solve, not after: an RTO the site
+                # doesn't list would otherwise submit an unfiltered
+                # whole-state query and cache that as if it were this RTO's
+                # data -- a silently wrong answer, not a visible failure.
+                site_rto_code = (await get_site_rto_codes(state_code)).get(rto_key)
+                if site_rto_code is None:
+                    raise UnknownRtoCodeError(rto_key)
 
             async with _concurrency:
                 tesseract_path = await _get_tesseract_path()
@@ -178,6 +205,7 @@ async def get_or_scrape_maker_query(
                         scrape_state_year(
                             session.client, tesseract_path, session.csrf_token, state_code, year,
                             maker=maker, fuel=fuel_key if fuel_key != ALL_FUEL_SENTINEL else None,
+                            rto_code=site_rto_code,
                         ),
                         timeout=90,
                     )
@@ -190,21 +218,26 @@ async def get_or_scrape_maker_query(
                     # otherwise leak this session, neither closed nor
                     # returned to the pool.
                     await _release_session(session, healthy=healthy)
-            await _write_cache(db, state_code, state_name, year, maker, fuel_key, records)
+            await _write_cache(db, state_code, state_name, year, maker, fuel_key, rto_key, records)
             await db.commit()
-            logger.info("live-scraped state=%s year=%d maker=%r fuel=%r: %d rows", state_code, year, maker, fuel_key, len(records))
+            logger.info("live-scraped state=%s year=%d maker=%r fuel=%r rto=%r: %d rows",
+                        state_code, year, maker, fuel_key, rto_key, len(records))
             return records
     finally:
         _locks.pop(lock_key, None)
 
 
-async def _read_cache(db: AsyncSession, state_code: str, year: int, maker: str, fuel_key: str) -> list[dict] | None:
+async def _read_cache(
+    db: AsyncSession, state_code: str, year: int, maker: str, fuel_key: str,
+    rto_key: str = ALL_RTO_SENTINEL,
+) -> list[dict] | None:
     rows = (await db.execute(
         select(MakerLiveQueryCache).where(
             MakerLiveQueryCache.state_code == state_code,
             MakerLiveQueryCache.year == year,
             MakerLiveQueryCache.maker == maker,
             MakerLiveQueryCache.fuel == fuel_key,
+            MakerLiveQueryCache.rto_code == rto_key,
         )
     )).scalars().all()
     if not rows:
@@ -215,29 +248,31 @@ async def _read_cache(db: AsyncSession, state_code: str, year: int, maker: str, 
 
 
 async def _write_cache(
-    db: AsyncSession, state_code: str, state_name: str, year: int, maker: str, fuel_key: str, records: list[dict],
+    db: AsyncSession, state_code: str, state_name: str, year: int, maker: str, fuel_key: str,
+    rto_key: str, records: list[dict],
 ) -> None:
     # Delete-then-insert, not a plain add: the current-year path can call
     # this more than once for the same key (see is_current_year above), and
-    # a second plain insert would collide with idx_mlqc_natural_key.
+    # a second plain insert would collide with idx_mlqc_natural_key_v2.
     await db.execute(
         delete(MakerLiveQueryCache).where(
             MakerLiveQueryCache.state_code == state_code,
             MakerLiveQueryCache.year == year,
             MakerLiveQueryCache.maker == maker,
             MakerLiveQueryCache.fuel == fuel_key,
+            MakerLiveQueryCache.rto_code == rto_key,
         )
     )
     if not records:
         db.add(MakerLiveQueryCache(
             state_code=state_code, state_name=state_name, year=year, maker=maker, fuel=fuel_key,
-            month=0, category=_EMPTY_MARKER_CATEGORY, count=0,
+            rto_code=rto_key, month=0, category=_EMPTY_MARKER_CATEGORY, count=0,
         ))
         return
     for record in records:
         db.add(MakerLiveQueryCache(
             state_code=state_code, state_name=state_name, year=year, maker=maker, fuel=fuel_key,
-            month=record["month"], category=record["category"], count=record["count"],
+            rto_code=rto_key, month=record["month"], category=record["category"], count=record["count"],
         ))
 
 
@@ -326,6 +361,30 @@ async def get_top_makers_leaderboard(
     results = await asyncio.gather(*(_one(maker) for maker, _ in top_makers))
     ranked = [r for r in results if r is not None]
     return sorted(ranked, key=lambda r: r["total"], reverse=True)
+
+
+async def get_site_rto_codes(state_code: str) -> dict[str, str]:
+    """{our rto_code -> the site's numeric rtoCode} for one state, cached
+    for the life of the process. The site's RTO list is a slow-moving
+    reference list (a new office appears maybe once a year), and every
+    RTO-scoped scrape needs this translation, so re-fetching it per request
+    would add a round trip to the source site for data that effectively
+    never changes. Gated by _concurrency for the same reason search_makers
+    is: without it, a burst of first-time lookups for different states could
+    each bootstrap their own session at once."""
+    cached = _rto_code_maps.get(state_code)
+    if cached is not None:
+        return cached
+    async with _concurrency:
+        session = await _acquire_session()
+        healthy = False
+        try:
+            mapping = await asyncio.wait_for(fetch_site_rtos(session.client, state_code), timeout=15)
+            healthy = True
+        finally:
+            await _release_session(session, healthy=healthy)
+    _rto_code_maps[state_code] = mapping
+    return mapping
 
 
 async def search_makers(search_text: str, limit: int = 20) -> list[str]:

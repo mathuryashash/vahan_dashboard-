@@ -102,14 +102,22 @@ export const getCrosstabDetail = (params: { year: number; state?: string | null;
 // (state, year, maker, fuel) combo. No AbortSignal: an in-flight live
 // scrape shouldn't be cancelled by a stray unmount/refetch the way a cheap
 // DB-query request can be -- it'd waste the CAPTCHA-solve that already ran.
-export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null }) =>
+export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null; rto?: string | null }) =>
   api.get('/live-query/maker', { params, timeout: 30000 }).then(r => r.data as {
     state_code: string;
     year: number;
     maker: string;
     fuel: string | null;
+    rto: string | null;
     records: { month: number; category: string; count: number }[];
   });
+
+// Our own rto_codes the source site actually lists for this state -- only
+// these can be RTO-scoped in getLiveMakerQuery. Confirmed live for Delhi: we
+// hold 27 RTOs and the site lists 23, of which only 16 are in common, so the
+// UI has to ask rather than assume every RTO has a live option.
+export const getLiveRtos = (stateCode: string): Promise<string[]> =>
+  api.get('/live-query/rtos', { params: { state_code: stateCode } }).then(r => r.data);
 
 // Real ranking of the state's actual biggest makers (from MakerCategoryTotal,
 // not modeled) by their live-scraped fuel-scoped total. Longer timeout than

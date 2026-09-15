@@ -6,9 +6,10 @@ from app.core.database import get_db
 from app.core.query_filters import category_makers, classify_live_category
 from app.core.rate_limit import limiter
 from app.core.scope import require_state_code, scoped_category
-from app.models.models import User
+from app.models.models import User, UserScope
 from app.services.live_scrape_service import (
-    UnknownStateCodeError, get_or_scrape_maker_query, get_top_makers_leaderboard, search_makers,
+    UnknownRtoCodeError, UnknownStateCodeError, get_or_scrape_maker_query, get_site_rto_codes,
+    get_top_makers_leaderboard, search_makers,
 )
 from scraper.analytics_scraper import CaptchaSolveError, TesseractUnavailableError
 
@@ -22,14 +23,17 @@ async def get_maker_query(
     year: int,
     maker: str = Query(..., max_length=200),
     fuel: str | None = Query(None, max_length=50),
+    rto: str | None = Query(None, max_length=10),
     state_code: str = Depends(require_state_code),
     user_category: str | None = Depends(scoped_category),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
     """On-demand month x category breakdown for one maker, optionally also
-    scoped to one fuel type -- the exact combination the old VAHAN4 site's
-    data can never answer jointly (see MakerLiveQueryCache's docstring).
+    scoped to one fuel type and/or one RTO -- the exact combination the old
+    VAHAN4 site's data can never answer jointly (see MakerLiveQueryCache's
+    docstring). `rto` is our own rto_code ("DL9"), and only RTOs the source
+    site actually lists can be looked up (see /live-query/rtos).
     Cache hit: instant. Cache miss: a few real seconds (live CAPTCHA solve
     against the new site), then cached for every request after (except the
     current year, always re-scraped -- see get_or_scrape_maker_query).
@@ -38,10 +42,26 @@ async def get_maker_query(
     costs a real CAPTCHA solve and a live request against the source site,
     not a DB scan -- see live_scrape_service's own asyncio.Semaphore(4) for
     the matching total-concurrency cap across distinct callers."""
+    # require_state_code only clamps the STATE -- an RTO-scoped account would
+    # otherwise reach every other RTO in its own state through this one new
+    # param, the same leak scoped_category closes on the category axis.
+    # Narrowing, not merely rejecting: OMITTING rto has to mean "my own RTO",
+    # never "the whole state", or the clamp is bypassed by simply leaving the
+    # parameter off -- the same contract get_effective_state enforces on the
+    # state axis, and what UserScope's own docstring promises for this one.
+    if user.scope_type == UserScope.RTO:
+        if rto and rto != user.scope_rto_code:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not permitted to view this state/RTO")
+        rto = user.scope_rto_code
     try:
-        records = await get_or_scrape_maker_query(db, state_code, year, maker, fuel)
+        records = await get_or_scrape_maker_query(db, state_code, year, maker, fuel, rto)
     except UnknownStateCodeError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown state_code {state_code!r}.")
+    except UnknownRtoCodeError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"The source site doesn't list RTO {rto!r} -- no live lookup is available for it.",
+        )
     except TesseractUnavailableError:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -67,7 +87,28 @@ async def get_maker_query(
         # months as well. classify_live_category bridges the live site's own
         # category vocabulary onto the buckets a user is scoped to.
         records = [r for r in records if classify_live_category(r["category"]) == user_category]
-    return {"state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "records": records}
+    return {"state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "rto": rto, "records": records}
+
+
+@router.get("/rtos")
+async def list_live_rtos(
+    state_code: str = Depends(require_state_code),
+    user: User = Depends(get_current_user),
+):
+    """Our rto_codes that the source site actually lists for this state --
+    i.e. the ones /maker can be RTO-scoped to. Confirmed live for Delhi: we
+    hold 27 RTOs and the site lists 23, of which only 16 are in common, so
+    the UI has to ask rather than assume every RTO has a live option.
+    Cheap and cached process-side (see get_site_rto_codes), so no dedicated
+    rate limit -- unlike /maker, a miss here costs one plain GET, not a
+    CAPTCHA-solve."""
+    try:
+        codes = sorted(await get_site_rto_codes(state_code))
+    except Exception:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="Could not reach the source site right now.")
+    if user.scope_type == UserScope.RTO:
+        codes = [c for c in codes if c == user.scope_rto_code]
+    return codes
 
 
 @router.get("/leaderboard")

@@ -71,6 +71,12 @@ async def init_db():
             "commercial_tier": "VARCHAR(15)",
         },
         "users": {"organization_id": "INTEGER", "scope_vehicle_category": "VARCHAR(20)"},
+        # NOT NULL DEFAULT 'ALL', not a nullable add: every row that predates
+        # RTO-scoped live queries IS a whole-state result, which is exactly
+        # what the "ALL" sentinel means -- so existing rows are backfilled
+        # correctly by the default itself, and the widened unique index below
+        # can't hit a NULL case.
+        "maker_live_query_cache": {"rto_code": "VARCHAR(10) NOT NULL DEFAULT 'ALL'"},
     })
     # The 4 tables that actually grow at scale (millions of rows, burning
     # ids on every delete-then-insert rewrite, not just net growth) -- see
@@ -85,6 +91,12 @@ async def init_db():
     await drop_orphaned_indexes(engine, [
         "ix_registrations_day", "ix_registrations_recorded_at",
         "idx_mct_year_maker", "idx_mft_year_maker",
+        # Superseded by idx_mlqc_natural_key_v2, which adds rto_code to the
+        # same key -- must be dropped (not just left alongside) or the old,
+        # narrower UNIQUE would reject a legitimate RTO-scoped row for a
+        # (state, year, maker, fuel, month, category) already cached
+        # whole-state. Runs before ensure_indexes, which then creates v2.
+        "idx_mlqc_natural_key",
     ])
     # Must run before ensure_indexes: the unique indexes declared below on
     # each crosstab table's natural key fail outright if duplicate rows

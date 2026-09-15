@@ -40,6 +40,7 @@ logger = logging.getLogger("analytics_scraper")
 REPORT_URL = "https://analytics.parivahan.gov.in/analytics/vahanpublicreport?lang=en"
 CAPTCHA_URL = "https://analytics.parivahan.gov.in/analytics/captcha-gen"
 MAKER_SEARCH_URL = "https://analytics.parivahan.gov.in/analytics/vahanpublicreport/lazy/vehicle-makers"
+RTO_LIST_URL = "https://analytics.parivahan.gov.in/analytics/json_rtos"
 CAPTCHA_MAX_ATTEMPTS = 5
 CAPTCHA_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -159,7 +160,7 @@ async def _solve_captcha(tesseract_path: str, image_bytes: bytes) -> str:
 
 
 def _build_form(*, csrf_token: str, state_code: str, year: int, captcha: str,
-                 maker: str | None, fuel: str | None) -> dict[str, str | list[str]]:
+                 maker: str | None, fuel: str | None, rto_code: str | None = None) -> dict[str, str | list[str]]:
     # Dict, not a list of tuples: httpx 0.28's `data=` only form-encodes a
     # Mapping (a list of tuples is silently treated as raw `content=` instead
     # -- confirmed live this session, it breaks the POST with a
@@ -200,12 +201,22 @@ def _build_form(*, csrf_token: str, state_code: str, year: int, captcha: str,
         data["selectedMakersCsv"] = maker
     if fuel:
         data["vehicleFuels"] = fuel
+    if rto_code:
+        # The site's own NUMERIC rto code (e.g. "9"), NOT the json_rtos
+        # `id` (980 returns nothing) and NOT our own "DL9" -- see
+        # map_site_rtos for how the two vocabularies are bridged. Confirmed
+        # live this field really filters (unlike fromDate/toDate, which are
+        # vestigial): DL/2024 returned 711,071 across months 1-12
+        # unfiltered, 85,366 with rtoCodeMultiple=9, and monthly
+        # granularity survives, as does composition with vehicleMakers
+        # (rto+maker = 19,084, strictly less than either alone).
+        data["rtoCodeMultiple"] = rto_code
     return data
 
 
 async def submit_query(
     client: httpx.AsyncClient, tesseract_path: str, csrf_token: str, state_code: str, year: int,
-    *, maker: str | None = None, fuel: str | None = None,
+    *, maker: str | None = None, fuel: str | None = None, rto_code: str | None = None,
 ) -> str:
     """Solves a fresh CAPTCHA and POSTs the query, retrying (fresh CAPTCHA
     each time) up to CAPTCHA_MAX_ATTEMPTS on a wrong guess -- confirmed live
@@ -220,7 +231,7 @@ async def submit_query(
             resp = await client.post(
                 REPORT_URL,
                 data=_build_form(csrf_token=csrf_token, state_code=state_code, year=year,
-                                  captcha=captcha_text, maker=maker, fuel=fuel),
+                                  captcha=captcha_text, maker=maker, fuel=fuel, rto_code=rto_code),
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
@@ -287,9 +298,10 @@ def parse_month_category_table(html: str) -> list[dict]:
 
 async def scrape_state_year(
     client: httpx.AsyncClient, tesseract_path: str, csrf_token: str, state_code: str, year: int,
-    *, maker: str | None = None, fuel: str | None = None,
+    *, maker: str | None = None, fuel: str | None = None, rto_code: str | None = None,
 ) -> list[dict]:
-    html = await submit_query(client, tesseract_path, csrf_token, state_code, year, maker=maker, fuel=fuel)
+    html = await submit_query(client, tesseract_path, csrf_token, state_code, year,
+                              maker=maker, fuel=fuel, rto_code=rto_code)
     return parse_month_category_table(html)
 
 
@@ -306,3 +318,40 @@ async def search_makers(client: httpx.AsyncClient, search_text: str, *, size: in
     resp = await client.get(MAKER_SEARCH_URL, params={"page": 0, "size": size, "search": search_text})
     resp.raise_for_status()
     return resp.json()
+
+
+def map_site_rtos(site_rtos: list[dict]) -> dict[str, str]:
+    """{our rto_code -> the site's numeric rtoCode}, matched by the SUFFIX of
+    the site's own rtoName ("DWARKA - DL9" -> "DL9").
+
+    Deliberately not parsed out of our own rto_code: the two vocabularies
+    don't line up arithmetically. Confirmed live for Delhi -- we hold 27
+    RTOs, the site lists 23, only 16 are common; DL14-DL18 simply aren't on
+    the site, and "DL1L" isn't even numeric, so int()-ing our code would
+    both crash on some and silently produce a WRONG (but plausible) site
+    code for others. An rto_code missing from this map has no live option
+    at all, which is the honest answer rather than a guessed one.
+
+    Entries whose rtoName has no "-" are skipped rather than mapped under
+    their whole name -- without that guard a name like "AGRA" would land in
+    the map as the key "AGRA" and could never match a real rto_code anyway.
+    """
+    mapped: dict[str, str] = {}
+    for rto in site_rtos:
+        name = str(rto.get("rtoName", ""))
+        if "-" not in name:
+            continue
+        mapped[name.rsplit("-", 1)[-1].strip().upper()] = str(rto["rtoCode"])
+    return mapped
+
+
+async def fetch_site_rtos(client: httpx.AsyncClient, state_code: str) -> dict[str, str]:
+    """The site's RTO list for one state, already mapped onto our own
+    rto_codes (see map_site_rtos). Same shape of lazy lookup as
+    search_makers: a plain GET needing only the session cookie -- no CSRF,
+    no CAPTCHA."""
+    resp = await client.get(
+        RTO_LIST_URL, params={"stateCode": _SITE_STATE_CODE_OVERRIDES.get(state_code, state_code)}
+    )
+    resp.raise_for_status()
+    return map_site_rtos(resp.json())
