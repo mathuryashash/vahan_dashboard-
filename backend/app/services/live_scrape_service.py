@@ -189,6 +189,18 @@ async def get_or_scrape_maker_query(
                 if site_rto_code is None:
                     raise UnknownRtoCodeError(rto_key)
 
+            # Hand the pooled connection back before the scrape. Everything
+            # above is reads, so there's nothing to lose by ending the
+            # transaction -- and without this, the caller's session sits
+            # checked out for the whole CAPTCHA solve (up to the 90s cap
+            # below), idle, while the pool is only pool_size=20 +
+            # max_overflow=40. Flagged independently by a security and a
+            # database review as the same anti-pattern behind this codebase's
+            # documented "QueuePool TimeoutError storm": a handful of
+            # concurrent cache misses could starve every other request. The
+            # write below uses its own short-lived session instead.
+            await db.rollback()
+
             async with _concurrency:
                 tesseract_path = await _get_tesseract_path()
                 session = await _acquire_session()
@@ -218,8 +230,12 @@ async def get_or_scrape_maker_query(
                     # otherwise leak this session, neither closed nor
                     # returned to the pool.
                     await _release_session(session, healthy=healthy)
-            await _write_cache(db, state_code, state_name, year, maker, fuel_key, rto_key, records)
-            await db.commit()
+            # Own session, not the caller's: the caller's was deliberately
+            # released above, and reusing it here would silently re-acquire a
+            # connection for the rest of the request anyway.
+            async with AsyncSessionLocal() as write_db:
+                await _write_cache(write_db, state_code, state_name, year, maker, fuel_key, rto_key, records)
+                await write_db.commit()
             logger.info("live-scraped state=%s year=%d maker=%r fuel=%r rto=%r: %d rows",
                         state_code, year, maker, fuel_key, rto_key, len(records))
             return records

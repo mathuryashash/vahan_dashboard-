@@ -174,6 +174,10 @@ async def get_rto_analysis(
         "total": total,
         "avg_monthly": avg_monthly,
         "months_with_data": months_with_data,
+        # Say which window these maker numbers actually cover instead of
+        # letting both paths render under the same "FY" label -- see the
+        # MakerCategoryTotal branch above and RtoAnalysis.maker_period.
+        "maker_period": "calendar_years_spanned" if user_category else "financial_year",
         "makers": [
             {
                 "maker": m.maker,

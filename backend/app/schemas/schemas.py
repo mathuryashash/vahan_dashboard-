@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -142,6 +143,15 @@ class RtoAnalysis(BaseModel):
     avg_monthly: float
     months_with_data: int
     makers: list[RtoMakerShare]
+    # Which window the maker figures actually cover. A category-scoped account
+    # is served from MakerCategoryTotal, which is scraped per CALENDAR year and
+    # has no month column, so its numbers can't be cut to an Apr-Mar financial
+    # year the way the unscoped maker-pass ones can (no source carries maker AND
+    # category AND month). Shares are unaffected -- a wider window scales every
+    # maker alike -- but the absolute totals are broader than an "FY" label
+    # implies, so the UI has to be able to say which it's showing rather than
+    # quietly labelling both the same.
+    maker_period: Literal["financial_year", "calendar_years_spanned"] = "financial_year"
 
 
 class CrosstabCoverage(BaseModel):
