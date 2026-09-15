@@ -191,6 +191,21 @@ def test_parse_release_pdf_skips_non_oem_pages():
     assert not any("\n" in c for c in categories)
 
 
+def test_parse_release_pdf_raises_rather_than_returning_a_partial_extraction(monkeypatch):
+    from scraper import fada_scraper
+
+    # Raising the bar above what this (complete) fixture yields makes it stand
+    # in for a release whose layout changed and now parses to a fraction of
+    # its real rows. That must not come back as a short list: both callers
+    # branch on `if rows:`, so a partial parse would be persisted and recorded
+    # status="ingested", which permanently stops the release being retried.
+    monkeypatch.setattr(fada_scraper, "MIN_EXPECTED_ROWS", 10_000)
+    pdf_bytes = (FIXTURES / "fada_june2026.pdf").read_bytes()
+
+    with pytest.raises(fada_scraper.PartialExtractionError):
+        fada_scraper.parse_release_pdf(pdf_bytes)
+
+
 async def test_persist_oem_sales_is_idempotent(db_session):
     from scraper.fada_scraper import persist_oem_sales
     from app.models.models import OEMMonthlySales

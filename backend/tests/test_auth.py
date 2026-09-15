@@ -137,7 +137,7 @@ async def test_login_locks_out_after_repeated_failures(client, db_session):
 async def test_admin_can_create_and_list_users(client, db_session):
     response = await client.post(
         "/api/v1/users/",
-        json={"email": "new@example.com", "password": "pw123456", "full_name": "New Person", "role": UserRole.ANALYST},
+        json={"email": "new@example.com", "password": "pw123456-long-enough", "full_name": "New Person", "role": UserRole.ANALYST},
     )
     assert response.status_code == 200
     assert response.json()["role"] == UserRole.ANALYST
@@ -148,11 +148,21 @@ async def test_admin_can_create_and_list_users(client, db_session):
     assert "new@example.com" in emails
 
 
+async def test_create_user_rejects_a_too_short_password(client, db_session):
+    # 422 from validation, not a created account -- an admin fat-fingering a
+    # short password on a customer's login must fail loudly, not silently
+    # ship a weak credential.
+    response = await client.post(
+        "/api/v1/users/", json={"email": "weak@example.com", "password": "short"}
+    )
+    assert response.status_code == 422
+
+
 async def test_create_user_rejects_duplicate_email(client, db_session):
     await _seed_user(db_session, email="dupe@example.com")
 
     response = await client.post(
-        "/api/v1/users/", json={"email": "dupe@example.com", "password": "pw123456"}
+        "/api/v1/users/", json={"email": "dupe@example.com", "password": "pw123456-long-enough"}
     )
     assert response.status_code == 400
 
@@ -173,7 +183,7 @@ async def test_admin_can_create_organization_and_assign_users_to_it(client, db_s
 
     response = await client.post(
         "/api/v1/users/",
-        json={"email": "acme-user@example.com", "password": "pw123456", "organization_id": org["id"]},
+        json={"email": "acme-user@example.com", "password": "pw123456-long-enough", "organization_id": org["id"]},
     )
     assert response.status_code == 200
     assert response.json()["organization_id"] == org["id"]
@@ -187,7 +197,7 @@ async def test_admin_can_create_organization_and_assign_users_to_it(client, db_s
 async def test_create_user_rejects_unknown_organization_id(client, db_session):
     response = await client.post(
         "/api/v1/users/",
-        json={"email": "orphan@example.com", "password": "pw123456", "organization_id": 999999},
+        json={"email": "orphan@example.com", "password": "pw123456-long-enough", "organization_id": 999999},
     )
     assert response.status_code == 400
 

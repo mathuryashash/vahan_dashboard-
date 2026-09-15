@@ -23,25 +23,28 @@ const NO_CROSS_TAB_MESSAGE =
 export function CategoryDetailPage() {
   const { vehicleClass } = useParams<{ vehicleClass: string }>();
   const decoded = decodeURIComponent(vehicleClass || '');
-  const { selectedYear } = useAppStore();
+  const { selectedYear, selectedState } = useAppStore();
   const chart = useChartTheme();
 
+  // Same shared-filter fix as Categories.tsx -- these three queries ignored
+  // selectedState, so drilling into a category after picking a state showed
+  // national numbers under a state-filtered header.
   const { data: cats } = useQuery({
-    queryKey: ['categories', selectedYear],
-    queryFn: () => getCategories({ year: selectedYear }),
+    queryKey: ['categories', selectedYear, selectedState],
+    queryFn: () => getCategories({ year: selectedYear, state: selectedState || undefined }),
   });
 
   const currentCat = (cats || []).find((c: { vehicle_category: string }) => c.vehicle_category === decoded);
 
   const { data: makers, isLoading: makersLoading, isError: makersError, refetch: refetchMakers } = useQuery({
-    queryKey: ['makers', decoded, selectedYear],
-    queryFn: () => getTopMakers({ vehicle_category: decoded, year: selectedYear }),
+    queryKey: ['makers', decoded, selectedYear, selectedState],
+    queryFn: () => getTopMakers({ vehicle_category: decoded, year: selectedYear, state: selectedState || undefined }),
     enabled: !!decoded,
   });
 
   const { data: fuel, isLoading: fuelLoading } = useQuery({
-    queryKey: ['fuel', decoded, selectedYear],
-    queryFn: () => getFuelBreakdown({ vehicle_category: decoded, year: selectedYear }),
+    queryKey: ['fuel', decoded, selectedYear, selectedState],
+    queryFn: () => getFuelBreakdown({ vehicle_category: decoded, year: selectedYear, state: selectedState || undefined }),
     enabled: !!decoded,
   });
 

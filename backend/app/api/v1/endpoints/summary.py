@@ -1,6 +1,6 @@
 import time
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from app.core.auth import get_current_user
@@ -234,7 +234,10 @@ async def get_state_ranking(
     fuel_group: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
-    limit: int = 10,
+    # Bounded: a bare `int` let a negative through to Postgres, which answers
+    # "LIMIT must not be negative" as a 500 rather than a clean 422. Upper
+    # bound sits above the 100 the frontend's widest caller asks for.
+    limit: int = Query(default=10, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     cache_key = (year, month, state, user_rto, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model, limit)

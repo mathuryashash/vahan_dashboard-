@@ -20,7 +20,7 @@ async def get_registrations(
     maker: str | None = None,
     vehicle_model: str | None = None,
     fuel_type: str | None = None,
-    limit: int = Query(default=500, le=5000),
+    limit: int = Query(default=500, ge=1, le=5000),
     user_category: str | None = Depends(scoped_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),

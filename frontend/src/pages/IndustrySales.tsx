@@ -5,6 +5,7 @@ import { BarChart, Bar, LabelList, LineChart, Line, XAxis, YAxis, CartesianGrid,
 import { getOemCategories, getOemMonthly, getOemTrend, getOemStatus } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
+import { useScopeLock } from '../hooks/useScopeLock';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -22,6 +23,7 @@ export function IndustrySalesPage() {
   // mismatched shared value just leaves this page unfiltered instead of
   // erroring or showing nothing.
   const { selectedYear, selectedCategory, setSelectedCategory, selectedMaker, setSelectedMaker } = useAppStore();
+  const { isCategoryLocked, lockedCategory } = useScopeLock();
   // FADA data has no reason to share Overview's month filter -- a month
   // picked there would silently make this page's leaderboard query a
   // single (likely empty) month instead of the intended year-to-date view.
@@ -105,15 +107,24 @@ export function IndustrySalesPage() {
 
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div className="max-w-xs w-full">
-          <LabeledSelect
-            label="Category"
-            value={category || ''}
-            onChange={(e) => { setSelectedCategory(e.target.value); setSelectedMaker(null); }}
-            className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-          >
-            <option value="">Please select a category</option>
-            {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
-          </LabeledSelect>
+          {isCategoryLocked ? (
+            // Segment accounts have no category choice -- show the locked
+            // value rather than a dropdown the scope lock would just revert.
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</span>
+              <div className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl cursor-default">{lockedCategory}</div>
+            </div>
+          ) : (
+            <LabeledSelect
+              label="Category"
+              value={category || ''}
+              onChange={(e) => { setSelectedCategory(e.target.value); setSelectedMaker(null); }}
+              className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            >
+              <option value="">Please select a category</option>
+              {(categories || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+            </LabeledSelect>
+          )}
         </div>
         <button
           onClick={handleExportAllCategories}

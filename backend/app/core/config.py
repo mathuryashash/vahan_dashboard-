@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "dev-only-change-me-in-production"
     JWT_EXPIRE_MINUTES: int = 60 * 24  # 24h
 
+    # /docs, /redoc and /openapi.json are unauthenticated by design -- handy
+    # locally, pure reconnaissance on a customer-facing host (every route,
+    # every field name, every scope dependency, enumerable by anyone who can
+    # reach the API). Default True so local dev is unchanged; set
+    # ENABLE_API_DOCS=false in the production .env. Also controls whether the
+    # CSP has to keep script-src 'unsafe-inline' (see main.py): Swagger UI is
+    # the only inline-script page this API serves, so with docs off the
+    # weakest directive in the policy goes away with them.
+    ENABLE_API_DOCS: bool = True
+
     class Config:
         env_file = ".env"
         case_sensitive = True

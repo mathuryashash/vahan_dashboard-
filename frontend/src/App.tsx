@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { LoginPage } from './pages/Login';
@@ -23,7 +23,8 @@ import { useUrlSyncedFilters } from './hooks/useUrlSyncedFilters';
 import { fetchCurrentUser, logout } from './api/auth';
 import type { AuthUser } from './api/auth';
 import { AuthContext } from './contexts/AuthContext';
-import { useScopeLock } from './hooks/useScopeLock';
+import { useScopeLock, applyScopeToStore } from './hooks/useScopeLock';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 /** Renders nothing -- exists only so useScopeLock runs under the auth
  *  provider on every route. */
@@ -38,10 +39,23 @@ export default function App() {
   // token itself is never readable from JS (see api/auth.ts).
   const [auth, setAuth] = useState<AuthUser | null | undefined>(undefined);
   const queryClient = useQueryClient();
+  const location = useLocation();
 
+  // applyScopeToStore before setAuth, not after: setAuth is what first
+  // mounts the pages, and their queries fire from that very first commit.
+  // Pinning afterwards (in <ScopeLock />'s effect) would already be one
+  // wasted out-of-scope request per query too late.
   useEffect(() => {
-    fetchCurrentUser().then(setAuth);
+    fetchCurrentUser().then((user) => {
+      if (user) applyScopeToStore(user);
+      setAuth(user);
+    });
   }, []);
+
+  const handleLogin = (user: AuthUser) => {
+    applyScopeToStore(user);
+    setAuth(user);
+  };
 
   // Called unconditionally (Rules of Hooks) even though its effect is only
   // meaningful once auth resolves and the filter bar renders -- see its own
@@ -73,7 +87,7 @@ export default function App() {
     return <div className="h-screen flex items-center justify-center bg-[var(--bg-app)]" />;
   }
   if (auth === null) {
-    return <LoginPage onLogin={setAuth} />;
+    return <LoginPage onLogin={handleLogin} />;
   }
 
   const handleLogout = async () => {
@@ -99,6 +113,13 @@ export default function App() {
             onLogout={handleLogout}
           />
           <main className="flex-1 overflow-y-auto">
+            {/* Keyed on the path so the boundary resets when you navigate --
+                otherwise one page throwing would leave every later route
+                stuck on the fallback. Sits inside the chrome, so a broken
+                page keeps the Sidebar and Header usable instead of blanking
+                the whole dashboard (the root boundary in main.tsx stays as
+                the last resort). */}
+            <ErrorBoundary key={location.pathname}>
             <Suspense fallback={<div className="p-6"><div className="h-40 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" /></div>}>
               <Routes>
                 <Route path="/" element={<OverviewPage />} />
@@ -116,6 +137,7 @@ export default function App() {
                 <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
               </Routes>
             </Suspense>
+            </ErrorBoundary>
           </main>
         </div>
       </div>

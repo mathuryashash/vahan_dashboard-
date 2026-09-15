@@ -1,5 +1,5 @@
 // frontend/src/pages/MakersModels.tsx
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
@@ -162,10 +162,14 @@ export function MakersModelsPage() {
   const rCf = (rCfRows || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === selectedCategory)?.count;
   const tripleDataReady = comboImpossible && !!rCf && !!rMcList && !!rMfList && !!makerYearTotalsList;
 
-  let tripleChartData: { name: string; count: number }[] = [];
-  if (tripleDataReady) {
+  // Memoized: estimateTripleCells is an iterative log-linear redistribution
+  // over up to 100 makers, and in the render body it re-ran on every
+  // unrelated re-render of this page (sidebar collapse, theme toggle, each
+  // keystroke in the live-maker lookup below).
+  const tripleChartData = useMemo<{ name: string; count: number }[]>(() => {
+    if (!tripleDataReady) return [];
     const estimates = estimateTripleCells({ mcList: rMcList!, mfList: rMfList!, myList: makerYearTotalsList!, rCf: rCf! });
-    tripleChartData = Array.from(estimates.entries())
+    const ranked = Array.from(estimates.entries())
       .map(([name, count]) => ({ name, count: Math.round(count) }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 20);
@@ -174,9 +178,10 @@ export function MakersModelsPage() {
     // approximation, so this only ever fires when the user has explicitly
     // picked a month too, never silently.
     if (month && monthRatio != null) {
-      tripleChartData = tripleChartData.map((d) => ({ name: d.name, count: Math.round(d.count * monthRatio!) }));
+      return ranked.map((d) => ({ name: d.name, count: Math.round(d.count * monthRatio!) }));
     }
-  }
+    return ranked;
+  }, [tripleDataReady, rMcList, rMfList, makerYearTotalsList, rCf, month, monthRatio]);
 
   // Same negligible-share reasoning as estimateTripleCells (tripleEstimate.ts)
   // applied to the real (non-estimated) per-category ranking too -- a maker

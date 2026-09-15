@@ -4,6 +4,7 @@ import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Respons
 import { useState, useEffect } from 'react';
 import { getStatesComparison, compareStates, getCategories, getStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
+import { useScopeLock } from '../hooks/useScopeLock';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LabeledSelect } from '../components/LabeledSelect';
@@ -31,6 +32,7 @@ export function ComparisonPage() {
   // Category/Powertrain are shared across every tab (see useAppStore) --
   // picking Two-Wheeler on Overview filters this page's comparison too.
   const { selectedYear, selectedState, setSelectedState, selectedCategory, setSelectedCategory, fuelGroup, setFuelGroup } = useAppStore();
+  const { isCategoryLocked, lockedCategory } = useScopeLock();
   // State A mirrors the shared selection (see useAppStore) -- picking Bihar
   // on Overview shows Bihar here as one side of the comparison too. State B
   // has no cross-tab equivalent, always a locally-picked second state.
@@ -133,17 +135,28 @@ export function ComparisonPage() {
           )}
         </div>
         <div className="flex items-end gap-3 animate-entrance" style={{ animationDelay: '20ms' }}>
-          <LabeledSelect
-            label="Category"
-            value={selectedCategory || ''}
-            onChange={(e) => setSelectedCategory(e.target.value || null)}
-            className="bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-          >
-            <option value="">All Categories</option>
-            {(categories || []).map((c: { vehicle_category: string }) => (
-              <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
-            ))}
-          </LabeledSelect>
+          {isCategoryLocked ? (
+            // Segment accounts get the locked value, not a dropdown -- same
+            // treatment as Overview/Makers. Without this the control offered
+            // categories the account can't have, and picking one visibly
+            // snapped back as the scope lock reverted it.
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">Category</span>
+              <div className="bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl cursor-default">{lockedCategory}</div>
+            </div>
+          ) : (
+            <LabeledSelect
+              label="Category"
+              value={selectedCategory || ''}
+              onChange={(e) => setSelectedCategory(e.target.value || null)}
+              className="bg-[var(--bg-sunken)] border border-[var(--border)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            >
+              <option value="">All Categories</option>
+              {(categories || []).map((c: { vehicle_category: string }) => (
+                <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
+              ))}
+            </LabeledSelect>
+          )}
           <div className="flex flex-col gap-1.5">
             {/* span, not label: PowertrainToggle is a button group, not a
                 single form control a <label> can associate with -- its own

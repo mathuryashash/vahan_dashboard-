@@ -327,7 +327,7 @@ async def test_scoped_user_can_still_narrow_within_their_own_category(client, db
 
 async def test_admin_can_create_a_category_scoped_user_and_typos_are_rejected(client, db_session):
     created = await client.post("/api/v1/users/", json={
-        "email": "oem@example.com", "password": "s3cret-pw", "role": UserRole.ANALYST,
+        "email": "oem@example.com", "password": "s3cret-pw-long-enough", "role": UserRole.ANALYST,
         "scope_vehicle_category": "Four-Wheeler",
     })
     assert created.status_code == 200
@@ -336,7 +336,7 @@ async def test_admin_can_create_a_category_scoped_user_and_typos_are_rejected(cl
     # A typo would match no row in any table, silently showing the account
     # nothing at all rather than the segment it was sold.
     rejected = await client.post("/api/v1/users/", json={
-        "email": "typo@example.com", "password": "s3cret-pw", "scope_vehicle_category": "4W",
+        "email": "typo@example.com", "password": "s3cret-pw-long-enough", "scope_vehicle_category": "4W",
     })
     assert rejected.status_code == 400
 

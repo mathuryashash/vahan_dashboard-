@@ -193,7 +193,9 @@ async def get_top_makers(
     month: int | None = None,
     state: str | None = Depends(get_effective_state),
     vehicle_model: str | None = None,
-    limit: int = 10,
+    # Bounded for the same reason as summary.get_state_ranking: a bare int
+    # let a negative reach Postgres as a 500 instead of a 422.
+    limit: int = Query(default=10, ge=1, le=200),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
@@ -329,7 +331,7 @@ async def get_maker_category_breakdown(
     state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=200),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
@@ -424,7 +426,7 @@ async def get_maker_fuel_breakdown(
     state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=200),
     user_category: str | None = Depends(scoped_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),

@@ -1,6 +1,30 @@
 import { useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useAppStore } from './useAppStore';
+import type { AuthUser } from '../api/auth';
+
+/** Pins the store to `auth`'s scope synchronously, outside React.
+ *
+ * Must be called at the moment auth resolves (App's session check, and
+ * login), BEFORE the render that first mounts any page. The effects below
+ * cannot do this job alone: an effect runs after the commit, so on that
+ * first commit every page's TanStack queries have already subscribed and
+ * fired with whatever filter the store happened to hold -- null on a cold
+ * load, or a stale/hand-typed value from useUrlSyncedFilters, which hydrates
+ * from the URL while the app is still showing the session-check spinner.
+ * That cost a wasted out-of-scope request per query per page load and a
+ * visible flicker as cards swapped data. Setting the store first means the
+ * very first render is already correct, so there is nothing to correct.
+ */
+export function applyScopeToStore(auth: AuthUser) {
+  const { selectedState, setSelectedState, selectedCategory, setSelectedCategory } = useAppStore.getState();
+  if (auth.scope_type !== 'national' && selectedState !== auth.scope_state_name) {
+    setSelectedState(auth.scope_state_name);
+  }
+  if (auth.scope_vehicle_category && selectedCategory !== auth.scope_vehicle_category) {
+    setSelectedCategory(auth.scope_vehicle_category);
+  }
+}
 
 /** Pins the shared filter store to whatever this account is scoped to.
  *

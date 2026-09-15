@@ -18,11 +18,14 @@ import { ErrorBanner } from '../components/ErrorBanner';
 export function CategoriesPage() {
   const navigate = useNavigate();
   const chart = useChartTheme();
-  const { selectedYear } = useAppStore();
+  const { selectedYear, selectedState } = useAppStore();
 
+  // selectedState is shared app-wide, and this page used to ignore it: pick
+  // Maharashtra on Overview, come here, and the mix was silently all-India.
+  // CategoryDetail passes the same key/params -- they share this cache entry.
   const { data: categories, isLoading, isError, refetch } = useQuery({
-    queryKey: ['categories', selectedYear],
-    queryFn: () => getCategories({ year: selectedYear }),
+    queryKey: ['categories', selectedYear, selectedState],
+    queryFn: () => getCategories({ year: selectedYear, state: selectedState || undefined }),
   });
 
   const pieData = capForDonut((categories || []).map((c: { vehicle_category: string; total_count: number }) => ({

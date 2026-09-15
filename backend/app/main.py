@@ -29,6 +29,15 @@ async def lifespan(app: FastAPI):
             "JWT_SECRET_KEY is still the insecure default -- set a real one in .env "
             "before starting the server (e.g. `python -c \"import secrets; print(secrets.token_hex(32))\"`)."
         )
+    # Not a hard fail like the JWT secret above: vahan:vahan is the real,
+    # intended credential for local dev and the bundled docker-compose, so
+    # refusing to boot would break every developer. It is still worth saying
+    # out loud on a host where the DB port is reachable.
+    if "://vahan:vahan@" in settings.DATABASE_URL:
+        logging.getLogger("uvicorn.error").warning(
+            "DATABASE_URL is using the shipped default password. Fine locally; "
+            "set a real POSTGRES_PASSWORD before exposing Postgres to anything."
+        )
     await init_db()
     async with AsyncSessionLocal() as session:
         await seed_geo_hierarchy(session)
@@ -48,6 +57,11 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     lifespan=lifespan,
+    # See ENABLE_API_DOCS in config.py -- off in production, where these are
+    # an unauthenticated map of every route and field.
+    docs_url="/docs" if settings.ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if settings.ENABLE_API_DOCS else None,
 )
 
 app.state.limiter = limiter
@@ -71,9 +85,20 @@ async def security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    # Swagger UI is the only page this API serves that needs inline scripts
+    # and the jsdelivr CDN, so that exemption lives and dies with it. With
+    # docs off (production), script-src is a plain 'self' and an injected
+    # inline <script> would be blocked outright rather than allowed by a
+    # directive nothing was using. style-src keeps 'unsafe-inline': Recharts
+    # sets element style attributes at runtime.
+    script_src = (
+        "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+        if settings.ENABLE_API_DOCS
+        else "script-src 'self'; "
+    )
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+        + script_src +
         "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
         "img-src 'self' data:; "
         "frame-ancestors 'none'"

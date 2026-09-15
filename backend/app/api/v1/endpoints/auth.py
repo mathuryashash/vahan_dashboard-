@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -29,7 +30,16 @@ async def login(
         )
 
     user = (await db.execute(select(User).where(User.email == form.username))).scalar_one_or_none()
-    if user is None or not user.is_active or not verify_password(form.password, user.hashed_password):
+    # bcrypt at cost factor 12 is ~370ms of pure CPU. Called inline it would
+    # block this single event loop for that whole time, stalling every other
+    # user's in-flight dashboard query behind one person's login -- so it goes
+    # to a thread. verify_password itself stays sync: create_admin.py,
+    # seed_demo_hierarchy_users.py and the tests all call it (and
+    # hash_password) from plain sync code.
+    password_ok = user is not None and await asyncio.to_thread(
+        verify_password, form.password, user.hashed_password
+    )
+    if user is None or not user.is_active or not password_ok:
         login_rate_limiter.record_failure(form.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
     login_rate_limiter.record_success(form.username)

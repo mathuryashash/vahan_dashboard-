@@ -1,8 +1,10 @@
 """Admin-only user management -- there's no self-registration. An admin
 creates every account (via this API or app/scripts/create_admin.py for the
 very first one) and assigns its role + geographic scope."""
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +18,10 @@ router = APIRouter()
 
 class UserCreate(BaseModel):
     email: str
-    password: str
+    # 12 minimum, and capped at bcrypt's real limit: bcrypt silently ignores
+    # everything past 72 bytes, so a longer password is not the password the
+    # admin thinks they set.
+    password: str = Field(min_length=12, max_length=72)
     full_name: str | None = None
     role: str = UserRole.VIEWER
     organization_id: int | None = None
@@ -118,7 +123,9 @@ async def create_user(
 
     user = User(
         email=payload.email,
-        hashed_password=hash_password(payload.password),
+        # Off the event loop -- same reason as login's verify_password (see
+        # endpoints/auth.py): bcrypt is ~370ms of blocking CPU.
+        hashed_password=await asyncio.to_thread(hash_password, payload.password),
         full_name=payload.full_name,
         role=payload.role,
         organization_id=payload.organization_id,

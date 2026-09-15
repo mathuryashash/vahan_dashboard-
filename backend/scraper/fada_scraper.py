@@ -40,6 +40,24 @@ BASE_URL = "https://www.fada.in/"
 # layout change looks identical to a normal run unless this is checked.
 MIN_EXPECTED_ROWS = 60
 
+
+class PartialExtractionError(RuntimeError):
+    """A release parsed to *some* rows but far too few to be a whole release.
+
+    Raised rather than returned, because both callers branch on `if rows:` --
+    a partial parse would otherwise take the success path, get persisted, and
+    be recorded as status="ingested", which permanently stops that release
+    from ever being retried. Partial OEM data is worse than none: nothing
+    downstream can tell a maker is missing from a month rather than absent
+    from the market. Both callers already catch Exception per-release and
+    roll back, so raising leaves no FadaScrapeAttempt row and the release is
+    simply re-tried on the next cycle.
+
+    Zero rows stays a non-error: that's the existing "failed_extraction" path,
+    which deliberately marks the release attempted so a genuinely unparseable
+    PDF isn't refetched every single cycle.
+    """
+
 # Confirmed live: each archive listing page holds 15 press-release cards
 # (see _ENTRY_RE's own docstring below). A strict "zero entries" check only
 # catches total markup breakage; a narrower change (FADA tweaks the card
@@ -189,12 +207,11 @@ def parse_release_pdf(pdf_bytes: bytes) -> list[dict]:
                         "share_percent": _parse_share_percent(data_row[4] or ""),
                     })
 
-    if len(rows) < MIN_EXPECTED_ROWS:
-        logger.warning(
-            "FADA PDF extraction returned only %d rows (expected >= %d for a standard "
-            "multi-category release) -- FADA's PDF table layout may have changed, "
-            "silently degrading extraction instead of failing outright.",
-            len(rows), MIN_EXPECTED_ROWS,
+    if rows and len(rows) < MIN_EXPECTED_ROWS:
+        raise PartialExtractionError(
+            f"FADA PDF extraction returned only {len(rows)} rows (expected >= "
+            f"{MIN_EXPECTED_ROWS} for a standard multi-category release) -- FADA's "
+            "PDF table layout has probably changed."
         )
     return rows
 

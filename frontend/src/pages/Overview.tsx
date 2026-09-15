@@ -449,9 +449,12 @@ export function OverviewPage() {
   ].filter(Boolean).length;
 
   const handleResetFilters = () => {
-    setSelectedState(null);
+    // Only clear axes this account actually controls. Clearing a locked one
+    // flashed unscoped data for a frame before the scope lock put it back,
+    // which reads as the filter breaking.
+    if (!isStateLocked) setSelectedState(null);
+    if (!isCategoryLocked) setSelectedCategory(null);
     setSelectedMonth(null);
-    setSelectedCategory(null);
     setFuelGroup(null);
     setSelectedMaker(null);
   };
@@ -807,7 +810,11 @@ export function OverviewPage() {
                 return (
                   <button
                     key={s.state_name} type="button"
-                    className="w-full flex items-center gap-3 group cursor-pointer text-left"
+                    // A state-locked account can't switch states, so this row
+                    // is a read-only bar for them -- clicking it only bounced
+                    // off the scope lock.
+                    disabled={isStateLocked}
+                    className={`w-full flex items-center gap-3 group text-left ${isStateLocked ? 'cursor-default' : 'cursor-pointer'}`}
                     onClick={() => setSelectedState(s.state_name)}
                   >
                     <span className="font-mono text-[11px] font-bold text-[var(--text-muted)] w-4 text-right shrink-0">#{i + 1}</span>
