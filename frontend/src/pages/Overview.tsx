@@ -378,11 +378,6 @@ export function OverviewPage() {
     count: d.count,
   }));
 
-  // "Four-Wheeler × EV", "EV × Tata Motors", etc -- names the exact filter
-  // combination in the cards that can't answer it, instead of a generic
-  // "no data" that reads as a bug.
-  const activeFilterLabel = [selectedCategory, fuelGroup, selectedMaker].filter(Boolean).join(' × ');
-
   // These cards fall back to the cross-tab YEAR total for impossible combos,
   // so their value is identical for every month -- which reads as stale or
   // broken data when the user switches months and nothing moves (found live:
@@ -410,10 +405,17 @@ export function OverviewPage() {
   // National users keep the existing empty/error states since they're the
   // ones who could actually trigger a scrape. isStateLocked already covers
   // both state- and RTO-scoped accounts (scope_type !== 'national').
-  const showTrendCard = !isStateLocked || trendLoading || chartData.length > 0;
+  // kpiComboImpossible hides these outright rather than rendering an
+  // explanatory empty state in each: for these combos the trend, the state
+  // ranking and the month detail are ALL unanswerable at once, so spelling
+  // that out three times filled the page with "no data" blocks and made the
+  // dashboard look broken. The single banner above the KPI cards carries the
+  // explanation instead; the dead sections just collapse.
+  const showTrendCard = !kpiComboImpossible && (!isStateLocked || trendLoading || chartData.length > 0);
   const showVehicleMixCard = !isStateLocked || vehicleMixLoading || !vehicleMixReady || pieData.length > 0;
   const monthDetailUnavailable = selectedMonth != null && !monthDetailLoading && (monthDetailError || !monthDetail);
-  const showMonthDetailCard = !isStateLocked || !monthDetailUnavailable;
+  const showMonthDetailCard = !kpiComboImpossible && (!isStateLocked || !monthDetailUnavailable);
+  const showStateRankingCard = !kpiComboImpossible;
 
   // The KPI cards/trend chart above can't combine Category + Maker (the live
   // scraper's maker-pass and vehicle_class-pass never share a row for the
@@ -665,18 +667,6 @@ export function OverviewPage() {
           </div>
           {trendLoading ? (
             <div className="h-52 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
-          ) : kpiComboImpossible ? (
-            // The trend query is disabled for these combos (no VAHAN table
-            // crosses them at month level) -- without this the card rendered
-            // bare axes and no explanation, while the KPI cards above did
-            // fall back to the cross-tab year total (found live: user
-            // reported the trend chart as simply missing/not working).
-            <EmptyState
-              variant="no-data"
-              title="No monthly trend for this combination"
-              description={`${activeFilterLabel} has no month-level table in VAHAN — the cards above fall back to a cross-tab year total, but a monthly curve for this combination doesn't exist at the source.`}
-              className="h-52 !py-0"
-            />
           ) : (
             <ResponsiveContainer width="100%" height={208}>
               <AreaChart data={chartData}>
@@ -774,15 +764,6 @@ export function OverviewPage() {
           </div>
         ) : monthDetailLoading ? (
           <div className="h-24 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
-        ) : kpiComboImpossible ? (
-          // This query is disabled for these combos, so monthDetail is simply
-          // never fetched -- it isn't an error. Without this branch it fell
-          // through to the red "Couldn't load" below, reporting a failure for
-          // a request that was never made (found live: reported as a bug).
-          <div className="h-24 flex flex-col items-center justify-center gap-1 text-[var(--text-muted)] text-xs border border-dashed border-[var(--border)] rounded-xl text-center px-4">
-            <span>No month detail for {activeFilterLabel}</span>
-            <span className="text-[10px]">VAHAN has no month-level table for this combination — see the year total above.</span>
-          </div>
         ) : monthDetailError || !monthDetail ? (
           <div className="h-24 flex items-center justify-center text-[var(--danger)] text-xs border border-dashed border-[var(--border)] rounded-xl">
             Couldn't load detail for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
@@ -796,6 +777,7 @@ export function OverviewPage() {
       </div>
       )}
 
+      {showStateRankingCard && (
       <div className="grid grid-cols-1 gap-4">
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '300ms' }}>
           <div className="flex items-center justify-between mb-4">
@@ -807,15 +789,6 @@ export function OverviewPage() {
           </div>
           {rankingLoading ? (
             <div className="h-44 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
-          ) : kpiComboImpossible ? (
-            // Same disabled-query case as the trend card above -- rendered an
-            // empty list with no explanation before.
-            <EmptyState
-              variant="no-data"
-              title="No state ranking for this combination"
-              description={`${activeFilterLabel} can't be ranked by state — VAHAN has no table crossing these filters. Pick a single filter to rank states by it.`}
-              className="h-44 !py-0"
-            />
           ) : (
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
               {(ranking || []).map((s: { state_name: string; total_count: number; share_percent: number }, i: number) => {
@@ -849,6 +822,7 @@ export function OverviewPage() {
         </div>
 
       </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[

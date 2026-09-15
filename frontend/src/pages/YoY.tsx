@@ -64,7 +64,26 @@ export function YoYPage() {
     [`${comparisonYearB}`]: d[`year_${comparisonYearB}`],
     growth: d.growth_percent,
   }));
-  const growthChartData = chartData.filter((d) => d.growth !== null);
+  // The in-progress month is real but not COMPARABLE: a month that's only
+  // part-way through is measured against a full month of the prior year, so
+  // it always renders as a large fake decline (found live: Sep 2026 showed
+  // -38.6% purely because it was 15 days in -- 1,024,868 registrations
+  // against a complete Sep 2025's 1,931,043). Excluded from the growth bars
+  // and reported separately below with its actual progress, rather than
+  // sitting in the chart as a red bar implying the market is collapsing.
+  const now = new Date();
+  const partialMonthIdx = comparisonYearB === now.getFullYear() ? now.getMonth() : null;
+  const partialMonthName = partialMonthIdx != null ? MONTH_NAMES[partialMonthIdx] : null;
+  const daysInPartialMonth = partialMonthIdx != null
+    ? new Date(now.getFullYear(), partialMonthIdx + 1, 0).getDate()
+    : 0;
+  const partialMonthProgress = partialMonthIdx != null
+    ? Math.round((now.getDate() / daysInPartialMonth) * 100)
+    : 0;
+
+  const growthChartData = chartData
+    .filter((d) => d.growth !== null)
+    .filter((d) => d.name !== partialMonthName);
 
   const growth = summary?.growth_percent ?? 0;
   const colorA = chart.seriesColors[4];
@@ -212,6 +231,13 @@ export function YoYPage() {
             <span style={{ color: chart.success }}>▲ Positive growth</span>
             <span style={{ color: chart.danger }}>▼ Negative growth</span>
           </div>
+          {partialMonthName && (
+            <p className="text-[10px] text-[var(--text-muted)] mt-2 text-center leading-relaxed">
+              {partialMonthName} {comparisonYearB} excluded — month still in progress
+              ({now.getDate()} of {daysInPartialMonth} days, {partialMonthProgress}%).
+              Comparing it against a full {partialMonthName} {comparisonYearA} would show a decline that isn't real.
+            </p>
+          )}
         </div>
 
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
