@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.query_filters import apply_total_filters, latest_month_with_data
 from app.core.auth import get_current_user
-from app.core.scope import get_effective_state, scoped_category
+from app.core.scope import get_effective_state, scoped_category, scoped_rto
 from app.models.models import Registration, User
 
 router = APIRouter()
@@ -21,6 +21,7 @@ async def get_yoy_monthly(
     end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     # start_month/end_month default to the full year (unchanged behavior) --
@@ -35,13 +36,13 @@ async def get_yoy_monthly(
     query_a = apply_total_filters(
         select(Registration.month, func.sum(Registration.count).label("count"))
         .where(Registration.year == year_a, Registration.month >= start_month, Registration.month <= end_month),
-        vehicle_category=user_category,
+        rto_code=user_rto, vehicle_category=user_category,
     ).group_by(Registration.month)
 
     query_b = apply_total_filters(
         select(Registration.month, func.sum(Registration.count).label("count"))
         .where(Registration.year == year_b, Registration.month >= start_month, Registration.month <= end_month),
-        vehicle_category=user_category,
+        rto_code=user_rto, vehicle_category=user_category,
     ).group_by(Registration.month)
 
     if state:
@@ -83,13 +84,17 @@ async def get_yoy_summary(
     year_b: int = Query(default=_DEFAULT_YEAR),
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
+    state: str | None = Depends(get_effective_state),
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
-    # National-only endpoint (no state breakdown exists here) -- still
-    # requires login like every other dashboard read, but there's nothing to
-    # geo-clamp.
+    # Returns no state breakdown, but it does return a TOTAL, and a scoped
+    # account's total must be its own: this was the one YoY endpoint with no
+    # geo-clamp at all (/monthly right above already clamps state), so a
+    # state- or RTO-tier account read an all-India figure here. Clamped on
+    # both axes now, same dependencies as /monthly.
     # start_month/end_month default to the full year, giving the same
     # Jan-through-latest-month total as before. A custom range (e.g. 4/7 for
     # Apr-Jul) compares that exact window across both years instead --
@@ -106,10 +111,10 @@ async def get_yoy_summary(
 
     q_a = apply_total_filters(select(func.sum(Registration.count)).where(
         Registration.year == year_a, Registration.month >= start_month, Registration.month <= effective_end
-    ), vehicle_category=user_category)
+    ), state=state, rto_code=user_rto, vehicle_category=user_category)
     q_b = apply_total_filters(select(func.sum(Registration.count)).where(
         Registration.year == year_b, Registration.month >= start_month, Registration.month <= effective_end
-    ), vehicle_category=user_category)
+    ), state=state, rto_code=user_rto, vehicle_category=user_category)
 
     result_a = await db.execute(q_a)
     result_b = await db.execute(q_b)

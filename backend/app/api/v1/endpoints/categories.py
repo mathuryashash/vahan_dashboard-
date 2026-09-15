@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.core.query_filters import (
     apply_common_filters, category_makers, fuel_category, fuel_group, latest_month_with_data,
 )
-from app.core.scope import get_effective_category, get_effective_state, scoped_category
+from app.core.scope import get_effective_category, get_effective_state, scoped_category, scoped_rto
 from app.core.cache import TTLCache
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
@@ -53,7 +53,11 @@ _crosstab_detail_cache = TTLCache(_CACHE_TTL_SECONDS)
 
 
 @router.get("/crosstab-coverage", response_model=CrosstabCoverage)
-async def get_crosstab_coverage(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
+async def get_crosstab_coverage(
+    db: AsyncSession = Depends(get_db),
+    user_rto: str | None = Depends(scoped_rto),
+    _user: User = Depends(get_current_user),
+):
     """Which years each of the 3 crosstabs (Maker x Category, Fuel x
     Category, Maker x Fuel) actually has ANY data for -- distinct from
     whether one specific maker/state/fuel-group combination happens to
@@ -66,12 +70,19 @@ async def get_crosstab_coverage(db: AsyncSession = Depends(get_db), _user: User 
     to tell "not scraped for this year" apart from "scraped, real zero"
     instead of guessing from an empty filtered response.
     """
-    cached = _crosstab_coverage_cache.get(())
+    cached = _crosstab_coverage_cache.get((user_rto,))
     if cached is not None:
         return cached
 
     async def years_for(model) -> list[int]:
-        result = await db.execute(select(model.year).distinct().order_by(model.year.desc()))
+        # Scoped too: this is the signal the frontend uses to tell 'year
+        # never scraped' from 'scraped, real zero', and an RTO account
+        # offered a year that only exists outside its own RTO gets the
+        # wrong answer to both questions.
+        query = select(model.year).distinct()
+        if user_rto:
+            query = query.where(model.rto_code == user_rto)
+        result = await db.execute(query.order_by(model.year.desc()))
         return [row[0] for row in result.all()]
 
     result = {
@@ -79,7 +90,7 @@ async def get_crosstab_coverage(db: AsyncSession = Depends(get_db), _user: User 
         "fuel_category": await years_for(FuelCategoryTotal),
         "maker_fuel": await years_for(MakerFuelTotal),
     }
-    _crosstab_coverage_cache.set((), result)
+    _crosstab_coverage_cache.set((user_rto,), result)
     return result
 
 
@@ -98,9 +109,10 @@ async def get_categories(
     # Makers/Comparison plus the Categories page grid, so clamping it here
     # locks those selectors to that one category for free.
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db)
 ):
-    cache_key = (year, month, state, maker, vehicle_model, raw, user_category)
+    cache_key = (year, month, state, maker, vehicle_model, raw, user_category, user_rto)
     cached = _categories_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -140,8 +152,8 @@ async def get_categories(
     elif compare_month:
         q_curr = q_curr.where(Registration.month <= compare_month)
         q_prev = q_prev.where(Registration.month <= compare_month)
-    q_curr = apply_common_filters(q_curr, state=state, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
-    q_prev = apply_common_filters(q_prev, state=state, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
+    q_curr = apply_common_filters(q_curr, state=state, rto_code=user_rto, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
+    q_prev = apply_common_filters(q_prev, state=state, rto_code=user_rto, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
 
     q_curr = q_curr.group_by(group_col).order_by(desc("total"))
     q_prev = q_prev.group_by(group_col)
@@ -182,9 +194,10 @@ async def get_top_makers(
     state: str | None = Depends(get_effective_state),
     vehicle_model: str | None = None,
     limit: int = 10,
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = (vehicle_class, vehicle_category, commercial_tier, year, month, state, vehicle_model, limit)
+    cache_key = (vehicle_class, vehicle_category, commercial_tier, year, month, state, vehicle_model, limit, user_rto)
     cached = _top_makers_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -205,6 +218,8 @@ async def get_top_makers(
         ).where(MakerCategoryTotal.year == year)
         if state:
             cross_query = cross_query.where(MakerCategoryTotal.state_name == state)
+        if user_rto:
+            cross_query = cross_query.where(MakerCategoryTotal.rto_code == user_rto)
         if vehicle_class:
             cross_query = cross_query.where(MakerCategoryTotal.vehicle_class == vehicle_class)
         if vehicle_category:
@@ -223,7 +238,7 @@ async def get_top_makers(
 
     if month:
         query = query.where(Registration.month == month)
-    query = apply_common_filters(query, state=state, vehicle_model=vehicle_model)
+    query = apply_common_filters(query, state=state, rto_code=user_rto, vehicle_model=vehicle_model)
 
     query = query.group_by(Registration.maker).order_by(desc("total")).limit(limit)
 
@@ -245,9 +260,10 @@ async def get_fuel_breakdown(
     state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     vehicle_model: str | None = None,
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = (vehicle_class, vehicle_category, commercial_tier, fuel_group_filter, year, month, state, maker, vehicle_model)
+    cache_key = (vehicle_class, vehicle_category, commercial_tier, fuel_group_filter, year, month, state, maker, vehicle_model, user_rto)
     cached = _fuel_breakdown_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -264,6 +280,8 @@ async def get_fuel_breakdown(
         ).where(FuelCategoryTotal.year == year)
         if state:
             cross_query = cross_query.where(FuelCategoryTotal.state_name == state)
+        if user_rto:
+            cross_query = cross_query.where(FuelCategoryTotal.rto_code == user_rto)
         if vehicle_class:
             cross_query = cross_query.where(FuelCategoryTotal.vehicle_class == vehicle_class)
         if vehicle_category:
@@ -279,7 +297,7 @@ async def get_fuel_breakdown(
         ).where(Registration.year == year, Registration.fuel_type.isnot(None))
         if month:
             query = query.where(Registration.month == month)
-        query = apply_common_filters(query, state=state, maker=maker, vehicle_model=vehicle_model)
+        query = apply_common_filters(query, state=state, rto_code=user_rto, maker=maker, vehicle_model=vehicle_model)
         query = query.group_by(Registration.fuel_type)
         result = await db.execute(query)
         rows = result.all()
@@ -312,6 +330,7 @@ async def get_maker_category_breakdown(
     vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,
     limit: int = 20,
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     """Real Maker x Vehicle Category totals -- year-only, no month
@@ -321,7 +340,7 @@ async def get_maker_category_breakdown(
     to rank its categories. If both are given, groups by maker (returns the
     single row matching both).
     """
-    cache_key = (year, state, vehicle_category, maker, limit)
+    cache_key = (year, state, vehicle_category, maker, limit, user_rto)
     cached = _maker_category_breakdown_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -332,6 +351,8 @@ async def get_maker_category_breakdown(
     )
     if state:
         query = query.where(MakerCategoryTotal.state_name == state)
+    if user_rto:
+        query = query.where(MakerCategoryTotal.rto_code == user_rto)
     if vehicle_category:
         query = query.where(MakerCategoryTotal.vehicle_category == vehicle_category)
     if maker:
@@ -353,6 +374,7 @@ async def get_fuel_category_breakdown(
     state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = Depends(get_effective_category),
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     """Real Fuel-group x Vehicle Category totals -- year-only, same
@@ -363,7 +385,7 @@ async def get_fuel_category_breakdown(
     Grouped in Python, not SQL, since fuel_group is computed from the raw
     fuel_type column (same reason /fuel-breakdown already does this).
     """
-    cache_key = (year, state, vehicle_category, fuel_group_filter)
+    cache_key = (year, state, vehicle_category, fuel_group_filter, user_rto)
     cached = _fuel_category_breakdown_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -373,6 +395,8 @@ async def get_fuel_category_breakdown(
     )
     if state:
         query = query.where(FuelCategoryTotal.state_name == state)
+    if user_rto:
+        query = query.where(FuelCategoryTotal.rto_code == user_rto)
     if vehicle_category:
         query = query.where(FuelCategoryTotal.vehicle_category == vehicle_category)
 
@@ -402,6 +426,7 @@ async def get_maker_fuel_breakdown(
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
     limit: int = 20,
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     """Real Maker x Fuel totals -- year-only, same limitation and same fix
@@ -414,7 +439,7 @@ async def get_maker_fuel_breakdown(
     Python when ranking by maker, since fuel_group is computed from the raw
     fuel_type column (same reason fuel-category-breakdown does this).
     """
-    cache_key = (year, state, maker, fuel_group_filter, limit, user_category)
+    cache_key = (year, state, maker, fuel_group_filter, limit, user_category, user_rto)
     cached = _maker_fuel_breakdown_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -424,6 +449,8 @@ async def get_maker_fuel_breakdown(
     )
     if state:
         query = query.where(MakerFuelTotal.state_name == state)
+    if user_rto:
+        query = query.where(MakerFuelTotal.rto_code == user_rto)
     if maker:
         query = query.where(MakerFuelTotal.maker == maker)
     # MakerFuelTotal is maker x fuel only -- there is no category column to
@@ -432,7 +459,7 @@ async def get_maker_fuel_breakdown(
     # their category (see category_makers for what this does and doesn't
     # guarantee about the counts).
     if user_category:
-        query = query.where(MakerFuelTotal.maker.in_(category_makers(user_category, year=year, state=state)))
+        query = query.where(MakerFuelTotal.maker.in_(category_makers(user_category, year=year, state=state, rto_code=user_rto)))
 
     result = await db.execute(query)
     totals: dict[str, int] = {}
@@ -460,6 +487,7 @@ async def get_crosstab_detail(
     vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     """Total + YoY growth + top state for one Maker+Category / Category+Fuel
@@ -479,7 +507,7 @@ async def get_crosstab_detail(
     if sum(active) != 2:
         return {"total": None, "top_state": None, "yoy_growth_percent": None}
 
-    cache_key = (year, state, vehicle_category, maker, fuel_group_filter)
+    cache_key = (year, state, vehicle_category, maker, fuel_group_filter, user_rto)
     cached = _crosstab_detail_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -493,6 +521,8 @@ async def get_crosstab_detail(
             )
             if state:
                 query = query.where(MakerCategoryTotal.state_name == state)
+            if user_rto:
+                query = query.where(MakerCategoryTotal.rto_code == user_rto)
             rows = (await db.execute(query)).all()
             per_state: dict[str, int] = {}
             for state_name, count in rows:
@@ -506,6 +536,8 @@ async def get_crosstab_detail(
             )
             if state:
                 query = query.where(FuelCategoryTotal.state_name == state)
+            if user_rto:
+                query = query.where(FuelCategoryTotal.rto_code == user_rto)
         else:  # maker and fuel_group_filter
             query = select(MakerFuelTotal.state_name, MakerFuelTotal.fuel_type, MakerFuelTotal.count).where(
                 MakerFuelTotal.year == target_year,
@@ -513,6 +545,8 @@ async def get_crosstab_detail(
             )
             if state:
                 query = query.where(MakerFuelTotal.state_name == state)
+            if user_rto:
+                query = query.where(MakerFuelTotal.rto_code == user_rto)
         rows = (await db.execute(query)).all()
         per_state = {}
         for state_name, raw_fuel_type, count in rows:

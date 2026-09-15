@@ -42,6 +42,87 @@ async def _seed_two_states(db_session):
     await db_session.commit()
 
 
+async def _seed_sibling_rto(db_session):
+    """A SECOND RTO inside Maharashtra, so "clamped to MH1" is distinguishable
+    from "clamped to Maharashtra". With only one RTO per state (which is all
+    _seed_two_states gives) an RTO-tier user's numbers are identical either
+    way, and a test written on that seed passes against the leak it is
+    supposed to catch. MH1 = 100, MH2 = 900, so Maharashtra = 1000: any
+    whole-state answer is visibly 10x the RTO's own."""
+    await _seed_two_states(db_session)
+    await db_session.merge(RTO(rto_code="MH2", rto_name="Sibling RTO MH2", state_code="MH"))
+    db_session.add(
+        Registration(
+            state_code="MH", state_name="Maharashtra", rto_code="MH2", rto_name="Sibling RTO MH2",
+            vehicle_class="All", vehicle_category="Other", year=2026, month=1,
+            maker="HONDA", count=900, is_supplementary=False,
+        )
+    )
+    await db_session.commit()
+
+
+async def test_rto_scoped_user_kpis_exclude_sibling_rto(client, db_session):
+    """The live-proven leak: get_effective_state clamped an RTO-tier account
+    only to its STATE, so /summary/kpis returned a figure identical to the
+    state-tier account's (~18.6x the RTO's real volume in production)."""
+    await _seed_sibling_rto(db_session)
+    _login_as(**MH_RTO)
+    try:
+        # No rto param exists on this endpoint at all -- so this IS the
+        # omission case, and it must narrow to MH1 rather than widen to MH.
+        response = await client.get("/api/v1/summary/kpis", params={"year": 2026})
+        assert response.status_code == 200
+        assert response.json()["total_this_month"] == 100, "expected MH1 only, not all of Maharashtra (1000)"
+
+        # Naming their own state explicitly must not widen it back either.
+        widened = await client.get(
+            "/api/v1/summary/kpis", params={"year": 2026, "state": "Maharashtra"}
+        )
+        assert widened.json()["total_this_month"] == 100
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: User(id=0, role="admin", is_active=True, scope_type=UserScope.NATIONAL)
+
+
+async def test_state_scoped_user_still_sees_whole_state(client, db_session):
+    """The other side of the clamp: a STATE-tier account must keep seeing
+    every RTO in its state, so the fix narrows the RTO tier without
+    accidentally narrowing the tier above it."""
+    await _seed_sibling_rto(db_session)
+    _login_as(scope_type=UserScope.STATE, scope_state_code="MH", scope_state_name="Maharashtra")
+    try:
+        response = await client.get("/api/v1/summary/kpis", params={"year": 2026})
+        assert response.json()["total_this_month"] == 1000
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: User(id=0, role="admin", is_active=True, scope_type=UserScope.NATIONAL)
+
+
+async def test_rto_scoped_user_top_makers_exclude_sibling_rto(client, db_session):
+    """/categories/top-makers reported HERO MOTOCORP at ~36.6x the RTO's real
+    number in production -- whole-state maker volume under an RTO login."""
+    await _seed_sibling_rto(db_session)
+    _login_as(**MH_RTO)
+    try:
+        response = await client.get("/api/v1/categories/top-makers", params={"year": 2026})
+        assert response.status_code == 200
+        assert response.json() == [{"maker": "HONDA", "count": 100}]
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: User(id=0, role="admin", is_active=True, scope_type=UserScope.NATIONAL)
+
+
+async def test_rto_scoped_user_gets_only_own_rto_raw_rows(client, db_session):
+    """/registrations/ returned byte-identical raw rows for the state-tier and
+    RTO-tier accounts in production."""
+    await _seed_sibling_rto(db_session)
+    _login_as(**MH_RTO)
+    try:
+        response = await client.get("/api/v1/registrations/", params={"year": 2026})
+        assert response.status_code == 200
+        rows = response.json()
+        assert [r["count"] for r in rows] == [100], "sibling RTO MH2's rows must not be returned"
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: User(id=0, role="admin", is_active=True, scope_type=UserScope.NATIONAL)
+
+
 async def test_state_scoped_user_cannot_see_another_states_kpis(client, db_session):
     await _seed_two_states(db_session)
     _login_as(**DELHI)

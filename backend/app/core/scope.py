@@ -84,6 +84,23 @@ def scoped_category(user: User = Depends(get_current_user)) -> str | None:
     return user.scope_vehicle_category
 
 
+def scoped_rto(user: User = Depends(get_current_user)) -> str | None:
+    """An RTO-scoped user's own rto_code (else None), for the aggregate
+    endpoints that have NO rto param of their own -- exactly scoped_category's
+    job on the RTO axis, and for the same reason.
+
+    get_effective_state only ever clamped an RTO-tier user to their STATE, so
+    every /summary, /categories, /comparison, /registrations and /yoy figure
+    was whole-state, not their RTO's (live-proven: an RTO account saw ~18.6x
+    its paid scope). There is no rto_code query param anywhere on those
+    endpoints for get_effective_state's "narrow the param" trick to apply to,
+    which is precisely why the leak existed -- a param that doesn't exist
+    can't be clamped, so the filter has to be injected here instead. Returns
+    None for NATIONAL/STATE users, whose queries stay byte-for-byte what they
+    were."""
+    return user.scope_rto_code if user.scope_type == UserScope.RTO else None
+
+
 def enforce_state(user: User, state: str | None) -> str | None:
     """For endpoints with a required (not defaultable) state param, e.g.
     comparison.compare_states's state_a/state_b -- raises rather than

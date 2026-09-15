@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters
-from app.core.scope import enforce_state, get_effective_category
+from app.core.scope import enforce_state, get_effective_category, scoped_rto
 from app.core.cache import TTLCache
 from app.models.models import Registration, User, UserScope
 from app.schemas.schemas import StateComparisonData, StateComparisonRanking
@@ -31,6 +31,7 @@ async def compare_states(
     year: int = _DEFAULT_YEAR,
     vehicle_category: str | None = Depends(get_effective_category),
     fuel_group: str | None = None,
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -51,7 +52,7 @@ async def compare_states(
             apply_total_filters(
                 select(Registration.month, func.sum(Registration.count).label("count"))
                 .where(Registration.year == year, Registration.state_name == state_name),
-                vehicle_category=vehicle_category, fuel_group=fuel_group,
+                rto_code=user_rto, vehicle_category=vehicle_category, fuel_group=fuel_group,
             ),
             fuel_group,
         )
@@ -80,10 +81,11 @@ async def get_all_states_comparison(
     limit: int = 36,
     vehicle_category: str | None = Depends(get_effective_category),
     fuel_group: str | None = None,
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    cache_key = (year, limit, vehicle_category, fuel_group, user.scope_type, user.scope_state_name)
+    cache_key = (year, limit, vehicle_category, fuel_group, user.scope_type, user.scope_state_name, user_rto)
     cached = _all_states_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -95,14 +97,14 @@ async def get_all_states_comparison(
         apply_total_filters(
             select(Registration.state_name, func.sum(Registration.count).label("total"))
             .where(Registration.year == year),
-            vehicle_category=vehicle_category, fuel_group=fuel_group,
+            rto_code=user_rto, vehicle_category=vehicle_category, fuel_group=fuel_group,
         ),
         fuel_group,
     )
     total_query = apply_fuel_group_filter(
         apply_total_filters(
             select(func.sum(Registration.count)).where(Registration.year == year),
-            vehicle_category=vehicle_category, fuel_group=fuel_group,
+            rto_code=user_rto, vehicle_category=vehicle_category, fuel_group=fuel_group,
         ),
         fuel_group,
     )

@@ -8,19 +8,25 @@ def apply_common_filters(
     query: Select,
     *,
     state: str | None = None,
+    rto_code: str | None = None,
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
 ) -> Select:
-    """Apply the state/vehicle_class/maker/vehicle_model filters shared by
+    """Apply the state/rto/vehicle_class/maker/vehicle_model filters shared by
     most registration-aggregation endpoints. Month is deliberately excluded:
     callers need different month semantics (exact match vs. "up to" a cutoff
     month for year-to-date comparisons), so they apply it themselves.
     """
     if state:
         query = query.where(Registration.state_name == state)
+    # Narrower than state, so it doesn't matter that a scoped caller passes
+    # both -- the RTO already lives inside its own state. Indexed (see
+    # Registration.__table_args__), so this costs nothing it doesn't save.
+    if rto_code:
+        query = query.where(Registration.rto_code == rto_code)
     if vehicle_class:
         query = query.where(Registration.vehicle_class == vehicle_class)
     if vehicle_category:
@@ -90,6 +96,7 @@ def apply_total_filters(
     query: Select,
     *,
     state: str | None = None,
+    rto_code: str | None = None,
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
@@ -125,8 +132,9 @@ def apply_total_filters(
     ):
         query = exclude_supplementary(query)
     return apply_common_filters(
-        query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
-        commercial_tier=commercial_tier, maker=maker, vehicle_model=vehicle_model,
+        query, state=state, rto_code=rto_code, vehicle_class=vehicle_class,
+        vehicle_category=vehicle_category, commercial_tier=commercial_tier,
+        maker=maker, vehicle_model=vehicle_model,
     )
 
 

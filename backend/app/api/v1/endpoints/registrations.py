@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.query_filters import apply_total_filters
-from app.core.scope import get_effective_state, scoped_category
+from app.core.scope import get_effective_state, scoped_category, scoped_rto
 from app.models.models import Registration
 from app.schemas.schemas import MonthCount, RegistrationOut
 
@@ -22,6 +22,7 @@ async def get_registrations(
     fuel_type: str | None = None,
     limit: int = Query(default=500, le=5000),
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Registration)
@@ -33,6 +34,11 @@ async def get_registrations(
         filters.append(Registration.vehicle_category == user_category)
     if state:
         filters.append(Registration.state_name == state)
+    # Raw rows again: get_effective_state only ever clamped an RTO-tier
+    # account to its STATE, so this endpoint handed it every other RTO's rows
+    # verbatim (byte-identical to the state account's, live-proven).
+    if user_rto:
+        filters.append(Registration.rto_code == user_rto)
     if year:
         filters.append(Registration.year == year)
     if month:
@@ -81,6 +87,7 @@ async def get_aggregate_by_month(
     year: int,
     state: str | None = Depends(get_effective_state),
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     query = (
@@ -92,6 +99,13 @@ async def get_aggregate_by_month(
 
     if state:
         query = query.where(Registration.state_name == state)
+    # A bare where, not apply_total_filters: this endpoint deliberately
+    # doesn't exclude supplementary rows for unscoped callers (see below), and
+    # routing the RTO clamp through apply_total_filters would silently change
+    # an RTO account's totals to a different definition than everyone else's.
+    # Narrow only.
+    if user_rto:
+        query = query.where(Registration.rto_code == user_rto)
     # Applied only when actually scoped, so an unscoped caller's totals are
     # byte-for-byte what they were. apply_total_filters (not a bare where)
     # because a category filter has to read the vehicle_class-dimension pass

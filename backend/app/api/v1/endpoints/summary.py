@@ -3,11 +3,12 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, exclude_supplementary, latest_month_with_data
-from app.core.scope import get_effective_category, get_effective_state
+from app.core.scope import get_effective_category, get_effective_state, scoped_rto
 from app.core.cache import TTLCache
-from app.models.models import Registration
+from app.models.models import Registration, User
 from app.schemas.schemas import DashboardKPIs, MonthCount, MonthDetail, StateRankingItem
 from app.core.config import settings
 
@@ -29,7 +30,14 @@ _AVAILABLE_YEARS_CACHE_TTL_SECONDS = 300
 
 
 @router.get("/available-years", response_model=list[int])
-async def get_available_years(db: AsyncSession = Depends(get_db)):
+async def get_available_years(
+    db: AsyncSession = Depends(get_db),
+    # Every sibling route in this file requires a user; this one was missing
+    # it and answered 200 to an unauthenticated caller (found in a security
+    # review). The payload is only a list of years, but nothing here is meant
+    # to be public.
+    _user: User = Depends(get_current_user),
+):
     """Years that actually have real (non-supplementary) scraped data, newest
     first. The Overview year filter used to hardcode [2024, 2025, 2026]; as
     more years get backfilled (see scraper/backfill_all_years.py) that list
@@ -70,6 +78,7 @@ async def get_dashboard_kpis(
     year: int | None = None,
     month: int | None = None,
     state: str | None = Depends(get_effective_state),
+    user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
@@ -78,7 +87,7 @@ async def get_dashboard_kpis(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = (year, month, state, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model)
+    cache_key = (year, month, state, user_rto, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model)
     cached = _kpis_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -108,7 +117,7 @@ async def get_dashboard_kpis(
     )
     q_totals = apply_fuel_group_filter(
         apply_total_filters(
-            q_totals, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            q_totals, state=state, rto_code=user_rto, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
             commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
@@ -133,7 +142,7 @@ async def get_dashboard_kpis(
     )
     q_top_state = apply_fuel_group_filter(
         apply_total_filters(
-            q_top_state, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            q_top_state, state=state, rto_code=user_rto, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
             commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
@@ -173,6 +182,7 @@ _trend_cache = TTLCache(_TREND_CACHE_TTL_SECONDS)
 async def get_trend(
     year: int = _DEFAULT_YEAR,
     state: str | None = Depends(get_effective_state),
+    user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
@@ -181,7 +191,7 @@ async def get_trend(
     vehicle_model: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = (year, state, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model)
+    cache_key = (year, state, user_rto, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model)
     cached = _trend_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -194,7 +204,7 @@ async def get_trend(
     ).where(Registration.year == year)
     query = apply_fuel_group_filter(
         apply_total_filters(
-            query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            query, state=state, rto_code=user_rto, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
             commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
@@ -217,6 +227,7 @@ async def get_state_ranking(
     year: int = _DEFAULT_YEAR,
     month: int | None = None,
     state: str | None = Depends(get_effective_state),
+    user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
@@ -226,7 +237,7 @@ async def get_state_ranking(
     limit: int = 10,
     db: AsyncSession = Depends(get_db),
 ):
-    cache_key = (year, month, state, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model, limit)
+    cache_key = (year, month, state, user_rto, vehicle_class, vehicle_category, commercial_tier, fuel_group, maker, vehicle_model, limit)
     cached = _state_ranking_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -239,7 +250,7 @@ async def get_state_ranking(
         query = query.where(Registration.month == month)
     query = apply_fuel_group_filter(
         apply_total_filters(
-            query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            query, state=state, rto_code=user_rto, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
             commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
@@ -269,6 +280,7 @@ async def _period_sum(
     month: int | None = None,
     month_lt: int | None = None,
     state: str | None = None,
+    rto_code: str | None = None,
     vehicle_class: str | None = None,
     vehicle_category: str | None = None,
     commercial_tier: str | None = None,
@@ -283,7 +295,7 @@ async def _period_sum(
         query = query.where(Registration.month < month_lt)
     query = apply_fuel_group_filter(
         apply_total_filters(
-            query, state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+            query, state=state, rto_code=rto_code, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
             commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
@@ -303,6 +315,7 @@ async def get_month_detail(
     year: int,
     month: int,
     state: str | None = Depends(get_effective_state),
+    user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
@@ -325,7 +338,7 @@ async def get_month_detail(
     """
     prev_year = year - 1
     filters = dict(
-        state=state, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
+        state=state, rto_code=user_rto, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
         commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
     )
 
