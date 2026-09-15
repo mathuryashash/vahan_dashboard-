@@ -162,7 +162,10 @@ async def test_maker_fuel_breakdown_excludes_other_categories_makers(client, db_
 
 
 async def test_rto_analysis_maker_list_excludes_other_categories_makers(client, db_session):
-    """Per-RTO maker breakdown reads the category-blind maker-pass rows."""
+    """Per-RTO maker breakdown must come from the category-aware crosstab:
+    the maker-pass rows it used to read carry vehicle_category='Other' for
+    every row, so they can only say WHICH makers exist, never how much of a
+    maker's volume belongs to this account's category."""
     await _seed(db_session)
     _login_as(**FOUR_WHEELER)
     try:
@@ -171,6 +174,42 @@ async def test_rto_analysis_maker_list_excludes_other_categories_makers(client, 
         response = await client.get("/api/v1/rto/DL1/analysis", params={"year": 2025})
         assert response.status_code == 200
         assert [row["maker"] for row in response.json()["makers"]] == ["MARUTI SUZUKI"]
+    finally:
+        _restore_national_admin()
+
+
+async def test_rto_analysis_count_excludes_a_makers_other_category_volume(client, db_session):
+    """The leak the maker allowlist alone does NOT close: a maker selling in
+    several categories (Mahindra ships both cars and commercial vehicles)
+    passes the allowlist legitimately, but its count must still be only this
+    account's category. Asserting the number, not just the maker list --
+    without this, summing the category-blind maker-pass rows would report
+    CAR_COUNT + truck_count here and the test would still pass on names."""
+    truck_count = 7
+    await _seed(db_session)
+    geo = dict(state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Delhi RTO")
+    db_session.add_all([
+        # Same maker, same RTO, both categories -- and a maker-pass row that
+        # carries their COMBINED volume, exactly as the real scraper writes it.
+        MakerCategoryTotal(**geo, year=2026, maker="MAHINDRA", vehicle_class="MOTOR CAR",
+                           vehicle_category="Four-Wheeler", count=CAR_COUNT),
+        MakerCategoryTotal(**geo, year=2026, maker="MAHINDRA", vehicle_class="GOODS CARRIER",
+                           vehicle_category="Commercial Vehicle", count=truck_count),
+        Registration(**geo, vehicle_class="All", vehicle_category="Other", maker="MAHINDRA",
+                     year=2026, month=1, count=CAR_COUNT + truck_count, is_supplementary=False),
+    ])
+    await db_session.commit()
+
+    _login_as(**FOUR_WHEELER)
+    try:
+        response = await client.get("/api/v1/rto/DL1/analysis", params={"year": 2025})
+        assert response.status_code == 200
+        rows = {row["maker"]: row["count"] for row in response.json()["makers"]}
+        assert "MAHINDRA" in rows, "a multi-category maker must still appear for its own category"
+        assert rows["MAHINDRA"] == CAR_COUNT, (
+            f"expected only the Four-Wheeler volume ({CAR_COUNT}), got {rows['MAHINDRA']} "
+            f"-- the Commercial Vehicle volume ({truck_count}) leaked in"
+        )
     finally:
         _restore_national_admin()
 
