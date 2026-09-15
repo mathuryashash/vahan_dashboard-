@@ -123,7 +123,14 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange }: { year: number;
   }
 
   return (
-    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '120ms' }}>
+    // relative z-20: the entrance animation's transform/opacity gives this
+    // card its own stacking context even after it finishes (translateY(0)
+    // still counts as "not none" for stacking purposes) -- without an
+    // explicit z-index here, the maker-suggestions dropdown's own z-10
+    // only ranks within THIS card, so the sibling leaderboard card below
+    // (later in DOM, its own stacking context) painted over it regardless
+    // (found live: the dropdown rendered visibly behind that section).
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance relative z-20" style={{ animationDelay: '120ms' }}>
       <div className="mb-1">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Live Maker Lookup</h3>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
