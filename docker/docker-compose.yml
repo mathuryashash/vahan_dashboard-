@@ -2,7 +2,14 @@ name: vahan-dashboard
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Must match the major version of whatever server the data is dumped
+    # from: pg_restore reads dumps from older servers, never newer ones, and
+    # development here runs 18.3. A 16 image silently works right up until
+    # someone tries to restore a real 18 dump into it.
+    # Changing this major version needs an EMPTY postgres-data volume --
+    # Postgres refuses to start on a data directory written by a different
+    # major version.
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-vahan}
       POSTGRES_USER: ${POSTGRES_USER:-vahan}
