@@ -343,10 +343,19 @@ export function MakersModelsPage() {
               // rather than silently swapping one for the other (found in
               // review: the chart/title showed the estimate, CSV still
               // exported the untouched real year total with no indication).
-              ? (makers || []).map((m: { maker: string; count: number }, i: number) => ({
-                  maker: m.maker,
-                  fy_total: m.count,
-                  [`estimated_${MONTH_NAMES[month! - 1].toLowerCase()}_${year}`]: makerChartData[i]?.count,
+              // Driven by makerChartData (what is actually on screen) and the
+              // real total looked up BY NAME. Iterating the unfiltered
+              // `makers` with an index into the filtered makerChartData
+              // paired each maker with a different maker's estimate the
+              // moment the negligible-share filter dropped anyone -- under a
+              // correct-looking header and an honest note column, which is
+              // the worst possible way to be wrong.
+              ? makerChartData.map((d: { name: string; count: number }) => ({
+                  maker: d.name,
+                  fy_total: (makers || []).find(
+                    (m: { maker: string; count: number }) => m.maker === d.name,
+                  )?.count,
+                  [`estimated_${MONTH_NAMES[month! - 1].toLowerCase()}_${year}`]: d.count,
                   note: 'estimated month count is modeled from the FY total, not observed data',
                 }))
               : makers}

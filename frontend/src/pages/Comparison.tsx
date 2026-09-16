@@ -100,10 +100,24 @@ export function ComparisonPage() {
   // selected value is still its own option -- a <select> can't display a value
   // that isn't one of its options, which is what used to render blank.
   const optionsFor = (value: string) => (pickerOptions.includes(value) ? pickerOptions : [value, ...pickerOptions]);
-  const aData: { name: string; [key: string]: string | number }[] = (comparison?.state_a_data || []).map((d: { month: number; count: number }) => ({ name: MONTH_NAMES[d.month - 1], [stateA]: d.count }));
-  const bData: { name: string; [key: string]: string | number }[] = (comparison?.state_b_data || []).map((d: { month: number; count: number }) => ({ name: MONTH_NAMES[d.month - 1], [stateB]: d.count }));
-
-  const merged = aData.map((d, i) => ({ ...d, ...(bData[i] || {}) }));
+  // Merged on the MONTH, never on array position. Each state's series comes
+  // from its own GROUP BY and only contains months that have rows, so if B
+  // is missing any month A has, a positional merge shifts every later B
+  // value up a row and renders it under the wrong month -- silently, with
+  // no visual artifact, and only for particular state pairs. Keying by month
+  // also keeps a month that exists in B but not A, which the old
+  // aData.map() dropped outright.
+  const merged = (() => {
+    const byMonth = new Map<number, { name: string; [key: string]: string | number }>();
+    for (const d of (comparison?.state_a_data || []) as { month: number; count: number }[]) {
+      byMonth.set(d.month, { name: MONTH_NAMES[d.month - 1], [stateA]: d.count });
+    }
+    for (const d of (comparison?.state_b_data || []) as { month: number; count: number }[]) {
+      const row = byMonth.get(d.month) ?? { name: MONTH_NAMES[d.month - 1] };
+      byMonth.set(d.month, { ...row, [stateB]: d.count });
+    }
+    return [...byMonth.entries()].sort(([a], [b]) => a - b).map(([, row]) => row);
+  })();
 
   const totalA = (comparison?.state_a_data || []).reduce((s: number, d: { count: number }) => s + d.count, 0);
   const totalB = (comparison?.state_b_data || []).reduce((s: number, d: { count: number }) => s + d.count, 0);
