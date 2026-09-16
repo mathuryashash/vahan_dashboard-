@@ -157,7 +157,13 @@ async def get_dashboard_kpis(
     # VAHAN4 supplies month-wise, not day-wise, registrations. Avoid a large
     # scan for a date that cannot exist and expose an honest daily average
     # instead. The API field name stays stable for the current frontend.
-    period_months = month or await latest_month_with_data(db, current_year) or 1
+    # `month or ...` divided a SINGLE month's total by that month's index:
+    # picking September narrowed the numerator to one month while the
+    # denominator became 9 * 30 = 270 days, reading 4,383/day against a true
+    # ~39,447. The card then appeared to fall away steadily through the year,
+    # entirely as an artifact of the month number. One month selected means
+    # one month of days.
+    period_months = 1 if month else (await latest_month_with_data(db, current_year) or 1)
     total_today = int(total_this_period / (period_months * 30)) if total_this_period > 0 else 0
 
     last_updated = settings.LAST_UPDATED
@@ -259,11 +265,31 @@ async def get_state_ranking(
         fuel_group,
     )
 
+    # Denominator BEFORE the limit. Summing the returned rows made every
+    # share_percent a share of the top-`limit` subtotal, so the ten bars
+    # always added to exactly 100% and each state read high -- Uttar Pradesh
+    # showed 18.84% against a true national 13.30%, and that inflated figure
+    # shipped into client CSV exports. comparison.py's all-states ranking
+    # already builds a separate unlimited total for this exact reason; the
+    # pattern was never back-ported here, so Overview and Comparison
+    # disagreed on the same state's share for the same year.
+    total_query = apply_fuel_group_filter(
+        apply_total_filters(
+            select(func.sum(Registration.count)).where(
+                Registration.year == year,
+                *([Registration.month == month] if month else []),
+            ),
+            state=state, rto_code=user_rto, vehicle_class=vehicle_class,
+            vehicle_category=vehicle_category, commercial_tier=commercial_tier,
+            fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
+        ),
+        fuel_group,
+    )
+    total_all = (await db.execute(total_query)).scalar() or 0
+
     query = query.group_by(Registration.state_name).order_by(desc("total")).limit(limit)
     result = await db.execute(query)
     rows = result.all()
-
-    total_all = sum(r[1] for r in rows)
     ranking = [
         {
             "state_name": r[0],

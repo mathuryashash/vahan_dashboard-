@@ -192,6 +192,20 @@ def apply_total_filters(
         and not commercial_tier
     ):
         query = exclude_supplementary(query)
+    # ...with one exception the comment above gets wrong: 'Other' IS a real,
+    # selectable category, and it is exactly what classify_vehicle('All')
+    # returns. So for vehicle_category='Other' the maker pass AND the fuel
+    # pass both match, alongside the genuinely-Other vehicles (tractors,
+    # ambulances, cranes), and all three get summed. Measured on 2026:
+    # 45,587,609 against a true 859,783 -- 53x, on every KPI, trend, ranking,
+    # YoY and comparison. An Other-scoped account would see a number
+    # containing every other segment's volume, which is a scope leak and not
+    # merely bad arithmetic.
+    # Only the vehicle_class-dimension pass carries a real class, so that
+    # single condition isolates it. Skipped when a fuel_group is also set,
+    # since that combination needs the fuel pass (class='All') instead.
+    if vehicle_category == "Other" and not fuel_group:
+        query = query.where(Registration.vehicle_class != "All")
     return apply_common_filters(
         query, state=state, rto_code=rto_code, vehicle_class=vehicle_class,
         vehicle_category=vehicle_category, commercial_tier=commercial_tier,
