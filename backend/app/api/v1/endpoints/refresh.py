@@ -180,9 +180,13 @@ async def get_data_quality(db: AsyncSession = Depends(get_db), _user: User = Dep
 
     fada_last = (await db.execute(select(func.max(OEMMonthlySales.scraped_at)))).scalar()
 
-    if fada_last is None:
-        level = "red"
-    elif scrape_fresh and pct_clean is not None and pct_clean >= _CLEAN_THRESHOLD_PCT:
+    # A missing FADA ingest is no longer a red health light. FADA is a
+    # secondary, optional source (dealer retail PDFs); this dashboard's
+    # actual product is the VAHAN registration data, and a deployment that
+    # deliberately runs VAHAN-only was being told its data was unhealthy.
+    # Reported separately as fada_last_ingested_at so a caller that does
+    # care can still see it.
+    if scrape_fresh and pct_clean is not None and pct_clean >= _CLEAN_THRESHOLD_PCT:
         level = "green"
     else:
         level = "amber"

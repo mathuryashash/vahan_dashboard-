@@ -1,6 +1,8 @@
 // frontend/src/components/Sidebar.tsx
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, TrendingUp, BarChart3, Car, Award, Building, ChevronLeft, ChevronRight } from './Icons';
+// Award went with the hidden Industry Sales entry below -- re-add it here
+// when restoring that page.
+import { LayoutDashboard, Map, TrendingUp, BarChart3, Car, Building, ChevronLeft, ChevronRight } from './Icons';
 import clsx from 'clsx';
 import { useAppStore } from '../hooks/useAppStore';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,7 +16,10 @@ const navItems = [
   { to: '/yoy', icon: TrendingUp, label: 'Year over Year' },
   { to: '/categories', icon: BarChart3, label: 'Categories & Fuel' },
   { to: '/makers', icon: Car, label: 'Makers' },
-  { to: '/industry-sales', icon: Award, label: 'Industry Sales' },
+  // Industry Sales is hidden: it is the only page sourced from FADA's
+  // dealer-retail PDFs rather than VAHAN, and this deployment presents
+  // VAHAN registration data only. The page and its endpoints still exist --
+  // restore this line (and the route in App.tsx) to bring it back.
   { to: '/rto-analysis', icon: Building, label: 'RTO Analysis' },
 ];
 

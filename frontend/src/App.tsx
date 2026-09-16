@@ -14,7 +14,9 @@ const YoYPage = lazy(() => import('./pages/YoY').then((m) => ({ default: m.YoYPa
 const CategoriesPage = lazy(() => import('./pages/Categories').then((m) => ({ default: m.CategoriesPage })));
 const CategoryDetailPage = lazy(() => import('./pages/CategoryDetail').then((m) => ({ default: m.CategoryDetailPage })));
 const MakersModelsPage = lazy(() => import('./pages/MakersModels').then((m) => ({ default: m.MakersModelsPage })));
-const IndustrySalesPage = lazy(() => import('./pages/IndustrySales').then((m) => ({ default: m.IndustrySalesPage })));
+// IndustrySales' lazy import is intentionally absent -- the route below
+// redirects while the FADA-sourced page is hidden, and keeping the import
+// would still ship its chunk. Restore both together.
 const RtoAnalysisPage = lazy(() => import('./pages/RtoAnalysis').then((m) => ({ default: m.RtoAnalysisPage })));
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRefreshStatus } from './api/vahan';
@@ -133,7 +135,11 @@ export default function App() {
                 <Route path="/categories" element={<CategoriesPage />} />
                 <Route path="/categories/:vehicleClass" element={<CategoryDetailPage />} />
                 <Route path="/makers" element={<MakersModelsPage />} />
-                <Route path="/industry-sales" element={<IndustrySalesPage />} />
+                {/* FADA-sourced; hidden while this deployment presents VAHAN
+                    data only (see Sidebar). Redirects rather than 404s so an
+                    old bookmark still lands somewhere sensible. Swap back to
+                    <IndustrySalesPage /> to restore it. */}
+                <Route path="/industry-sales" element={<Navigate to="/" replace />} />
                 <Route path="/rto-analysis" element={<RtoAnalysisPage />} />
               </Routes>
             </Suspense>
