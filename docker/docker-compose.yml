@@ -15,7 +15,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-vahan}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vahan}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data. The 18+ images
+      # store data in a major-version-specific subdirectory
+      # (/var/lib/postgresql/18/docker) so that pg_upgrade --link can work
+      # across a single mount point. Mounting the old 16-era path makes the
+      # entrypoint refuse to start -- "there appears to be PostgreSQL data
+      # in /var/lib/postgresql/data" -- and it fails that way even on a
+      # brand-new empty volume, so it reads as a corrupt volume when it is
+      # really just the wrong mount point.
+      - postgres-data:/var/lib/postgresql
       # Official Postgres image auto-runs every .sql/.sql.gz/.sh file here, in
       # name order, but ONLY the very first time it starts against an empty
       # data directory -- exactly a fresh client's first `docker compose up`.
