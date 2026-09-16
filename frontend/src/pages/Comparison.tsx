@@ -204,6 +204,39 @@ export function ComparisonPage() {
         )}
       </div>
 
+      {comboImpossible && (
+        // Without this the page rendered its header and two dropdowns over
+        // empty space, which reads as a broken page rather than a documented
+        // limit of the source data. Says which two filters collide and what
+        // to do about it, instead of leaving the user to guess.
+        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-6 animate-entrance">
+          <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-2">
+            Can't compare states on {selectedCategory} × {fuelGroup}
+          </h3>
+          <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+            VAHAN publishes vehicle category and powertrain as separate state-level
+            reports — there is no single table crossing both, so no honest per-state
+            number exists for this pair. Clear either filter to compare states:
+          </p>
+          <div className="flex gap-2 mt-3">
+            <button
+              type="button"
+              onClick={() => setSelectedCategory(null)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] transition-colors"
+            >
+              Compare on {fuelGroup} only
+            </button>
+            <button
+              type="button"
+              onClick={() => setFuelGroup(null)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] transition-colors"
+            >
+              Compare on {selectedCategory} only
+            </button>
+          </div>
+        </div>
+      )}
+
       {!comboImpossible && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-entrance" style={{ animationDelay: '80ms' }}>
         {[{

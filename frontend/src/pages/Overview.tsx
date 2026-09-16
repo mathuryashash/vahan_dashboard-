@@ -840,10 +840,15 @@ export function OverviewPage() {
       </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {[
-          { label: 'States Active', value: '36 / 36', sub: 'All states reporting', colorIdx: 3 },
-          { label: 'Avg per State', value: kpis ? Math.round(kpis.total_this_month / 36).toLocaleString('en-IN') : '—', sub: 'registrations per state', colorIdx: 0 },
+          // "States Active 36 / 36 -- All states reporting" used to sit here
+          // as a hardcoded string. It claimed full national coverage no
+          // matter what the data actually held, which is exactly the kind of
+          // fabricated reassurance this product cannot afford. There is no
+          // cheap real source for it (the ranking query is capped at 10
+          // rows), so it is gone rather than guessed.
+          { label: 'Avg per State / UT', value: kpis ? Math.round(kpis.total_this_month / 36).toLocaleString('en-IN') : '—', sub: 'total ÷ 36 states & UTs', colorIdx: 0 },
           { label: 'Peak Trend Point', value: chartData.length > 0 ? chartData.reduce((a: { count: number }, b: { count: number }) => a.count > b.count ? a : b).name : '—', sub: 'highest volume time point', colorIdx: 5 },
         ].map((stat, i) => (
           <div key={i} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4 flex items-center gap-4 animate-entrance" style={{ animationDelay: `${350 + i * 60}ms` }}>

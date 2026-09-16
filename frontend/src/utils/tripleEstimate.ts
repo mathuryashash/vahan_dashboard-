@@ -71,7 +71,22 @@ export function estimateTripleCells({ mcList, mfList, myList, rCf }: TripleEstim
   const result = new Map<string, number>();
   let target = rCf;
 
-  for (let iter = 0; iter <= pool.length && pool.length > 0; iter++) {
+  // Bound captured up front, NOT re-read from `pool` each pass. The loop
+  // removes capped makers, so `iter <= pool.length` was a limit that fell as
+  // the counter rose: each pass costs one iteration and removes at least one
+  // maker, so the two meet at N/2 and the loop can stop with the pool still
+  // holding uncapped makers, never reaching the `over.length === 0` branch
+  // that assigns them. Those makers would get no value at all and the
+  // estimates would sum below the real total.
+  //
+  // Latent, not observed: checked against the real FY2026 Two-Wheeler x EV
+  // inputs and both bounds give an identical result summing to exactly the
+  // anchor, because that case converges in far fewer than N/2 rounds. It
+  // needs a distribution where more than half the makers cap in separate
+  // rounds. Each pass caps at least one maker, so the initial size is a
+  // sufficient bound.
+  const maxIters = pool.length;
+  for (let iter = 0; iter <= maxIters && pool.length > 0; iter++) {
     const rawSum = pool.reduce((s, c) => s + c.raw, 0);
     if (rawSum <= 0) break;
     const scale = target / rawSum;
