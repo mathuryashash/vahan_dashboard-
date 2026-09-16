@@ -97,23 +97,23 @@ async def get_aggregate_by_month(
         .order_by(Registration.month)
     )
 
-    if state:
-        query = query.where(Registration.state_name == state)
-    # A bare where, not apply_total_filters: this endpoint deliberately
-    # doesn't exclude supplementary rows for unscoped callers (see below), and
-    # routing the RTO clamp through apply_total_filters would silently change
-    # an RTO account's totals to a different definition than everyone else's.
-    # Narrow only.
-    if user_rto:
-        query = query.where(Registration.rto_code == user_rto)
-    # Applied only when actually scoped, so an unscoped caller's totals are
-    # byte-for-byte what they were. apply_total_filters (not a bare where)
-    # because a category filter has to read the vehicle_class-dimension pass
-    # -- the only rows carrying a real category -- and must NOT then also
-    # exclude supplementary rows, which would strip out exactly those rows
-    # and silently zero the result.
-    if user_category:
-        query = apply_total_filters(query, vehicle_category=user_category)
+    # One definition of "a registration total", for every caller. This used
+    # to skip exclude_supplementary unless the caller was scoped, to keep an
+    # unscoped caller's numbers byte-for-byte unchanged -- but the number it
+    # was preserving counted each registration up to three times, once per
+    # scrape dimension. Measured on 2026: this endpoint returned 67,091,739
+    # where /summary/trend returned 22,363,913, exactly 3.00x -- two
+    # endpoints on the same dashboard disagreeing threefold. Stability is not
+    # a reason to keep publishing a wrong total.
+    #
+    # apply_total_filters is what every other aggregate uses: it excludes the
+    # supplementary passes for a plain total, and switches to the
+    # vehicle_class-dimension pass when a category is set (the only rows that
+    # carry a real category), which is why a category filter must NOT also
+    # exclude supplementary rows.
+    query = apply_total_filters(
+        query, state=state, rto_code=user_rto, vehicle_category=user_category,
+    )
 
     result = await db.execute(query)
     rows = result.all()

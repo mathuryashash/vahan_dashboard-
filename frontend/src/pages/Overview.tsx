@@ -372,10 +372,27 @@ export function OverviewPage() {
     enabled: selectedMonth != null && !kpiComboImpossible,
   });
 
-  const chartData = (trend || []).map((d: { month?: number; count: number }) => ({
-    name: d.month ? MONTH_NAMES[d.month - 1] : '',
-    count: d.count,
-  }));
+  // The current month is still filling in, so plotting it drops the line off
+  // a cliff and reads as a collapsing market. YoY.tsx already guards this and
+  // documents the incident behind it (September 2026 showed -38.6% purely
+  // because it was 15 days old); this is that guard, on the landing page's
+  // flagship chart, which had none.
+  const _now = new Date();
+  const trendPartialMonth =
+    selectedYear === _now.getFullYear() && selectedMonth == null ? _now.getMonth() + 1 : null;
+  const trendPartialName = trendPartialMonth ? MONTH_NAMES[trendPartialMonth - 1] : null;
+  const trendPartialProgress = trendPartialMonth
+    ? Math.round((_now.getDate() / new Date(_now.getFullYear(), trendPartialMonth, 0).getDate()) * 100)
+    : null;
+
+  const chartData = (trend || [])
+    // Only when viewing the whole year. If the user has explicitly picked
+    // this month, hiding it would leave an empty chart.
+    .filter((d: { month?: number }) => !trendPartialMonth || d.month !== trendPartialMonth)
+    .map((d: { month?: number; count: number }) => ({
+      name: d.month ? MONTH_NAMES[d.month - 1] : '',
+      count: d.count,
+    }));
 
   // These cards fall back to the cross-tab YEAR total for impossible combos,
   // so their value is identical for every month -- which reads as stale or
@@ -671,7 +688,15 @@ export function OverviewPage() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Registration Trend</h3>
-              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">Monthly View — FY {selectedYear}</p>
+              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
+                Monthly View — FY {selectedYear}
+                {trendPartialName && (
+                  // Said out loud rather than quietly dropped: a reader who
+                  // counts the months should know why the latest one is
+                  // absent, not wonder whether the data is stale.
+                  <> · {trendPartialName} excluded, month {trendPartialProgress}% elapsed</>
+                )}
+              </p>
             </div>
             <span className="text-[10px] font-mono px-2 py-1 rounded-md" style={{ color: chart.seriesColors[0], background: 'var(--bg-sunken)' }}>
               MONTHLY
