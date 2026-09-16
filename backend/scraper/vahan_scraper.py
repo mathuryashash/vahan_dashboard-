@@ -186,6 +186,59 @@ def _exported_data_start(rows: list[list[str]]) -> int:
     return len(rows)
 
 
+class ExportIntegrityError(RuntimeError):
+    """A parsed export disagrees with the source's own arithmetic.
+
+    Raised rather than logged so the RTO fails and is retried instead of
+    persisting a quietly-short table. Every VAHAN export carries its own
+    per-row Total and numbers its rows 1..N; the parser drops both (the
+    Total is sliced off by header_row[2:-1], the S No is only checked for
+    digit-ness). Those two discarded facts are exactly what would have made
+    the old pagination bug loud: it silently lost whichever page never got
+    fetched -- in practice the alphabetically-first 25 rows -- and every
+    cross-check the codebase had at the time compared the three dimension
+    passes against each other, all of which paginated through the same code
+    and were therefore wrong identically and agreed perfectly.
+    """
+
+
+def _validate_export(
+    rows: list[list[str]], data_start: int, column_count: int, *, context: str
+) -> None:
+    """Check a parsed export against the two facts the source states itself.
+
+    1. S No runs 1..N with no gaps or repeats. This is the one that catches
+       dropped ROWS -- a lost first page makes the serials start at 26, and
+       no per-row arithmetic can see that.
+    2. Each row's own Total equals the sum of that row's cells, which
+       catches a column slice that has drifted out of alignment.
+
+    Deliberately exact integer equality: there is no threshold to tune and
+    no false-positive band, because both sides come from the same response.
+    """
+    serials: list[int] = []
+    total_idx = 2 + column_count
+    for row in rows[data_start:]:
+        if not row or not row[0].strip().isdigit():
+            continue
+        serials.append(int(row[0].strip()))
+        if len(row) <= total_idx or not row[total_idx].strip():
+            continue  # no Total column in this export shape
+        declared = parse_count(row[total_idx])
+        summed = sum(parse_count(c) for c in row[2:total_idx] if c.strip())
+        if summed != declared:
+            raise ExportIntegrityError(
+                f"{context}: row {row[0]} ({row[1] if len(row) > 1 else '?'}) cells sum to "
+                f"{summed} but the export's own Total says {declared}"
+            )
+
+    if serials and serials != list(range(1, len(serials) + 1)):
+        raise ExportIntegrityError(
+            f"{context}: S No is not a contiguous 1..{len(serials)} run "
+            f"(got {serials[:3]}...{serials[-3:]}) -- rows are missing or duplicated"
+        )
+
+
 def _exported_header_row(rows: list[list[str]], data_start: int) -> list[str] | None:
     """The nearest non-blank row above the first data row -- this is the
     leaf column-header row (class names / month abbreviations) regardless
@@ -579,6 +632,7 @@ async def scrape_yaxis_by_vehicle_class_table(
     if header_row is None:
         return []
     column_names = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
+    _validate_export(rows, data_start, len(column_names), context=f"{yaxis_value} x {xaxis_value} {year}")
 
     records: list[dict] = []
     for row in rows[data_start:]:
@@ -691,6 +745,7 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
     if header_row is None:
         return []
     month_labels = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
+    _validate_export(rows, data_start, len(month_labels), context=f"{dimension} x Month {year}")
 
     records: list[dict] = []
     for row in rows[data_start:]:

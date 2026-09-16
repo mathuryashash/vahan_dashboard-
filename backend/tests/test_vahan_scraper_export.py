@@ -9,9 +9,13 @@ dumps the whole report in one response instead, with no pagination at all.
 import io
 import zipfile
 
+import pytest
+
 from scraper.vahan_scraper import (
+    ExportIntegrityError,
     _exported_data_start,
     _exported_header_row,
+    _validate_export,
     parse_exported_xlsx,
 )
 
@@ -78,6 +82,46 @@ def test_exported_data_start_finds_first_numeric_s_no_row():
 def test_exported_data_start_returns_len_when_no_data_rows():
     rows = [["Title"], ["S No", "Maker", "TOTAL"]]
     assert _exported_data_start(rows) == len(rows)
+
+
+# Real export shape, from the fixture below: col 0 = S No, col 1 = the row
+# label, cols 2..n-1 = the month/class cells, and the LAST column is the
+# source's own row Total. header_row[2:-1] slices that Total off, so nothing
+# downstream ever reads it -- which is why the parser could lose a quarter of
+# every table without anything noticing.
+_HEADER = ["", "", "JAN", "FEB", ""]
+
+
+def _data_row(s_no: int, label: str, a: int, b: int, total: int | None = None) -> list[str]:
+    return [str(s_no), label, str(a), str(b), str(a + b if total is None else total)]
+
+
+def test_validate_export_accepts_a_consistent_table():
+    rows = [["Title"], _HEADER, _data_row(1, "MAKER A", 2, 1), _data_row(2, "MAKER B", 5, 4)]
+    _validate_export(rows, _exported_data_start(rows), len(_HEADER[2:-1]), context="t")
+
+
+def test_validate_export_catches_a_dropped_first_page():
+    # The exact production bug: page 1 was never fetched, so the parsed table
+    # starts at S No 26. Every row is internally consistent and every
+    # dimension pass agreed with every other, because all three lost the same
+    # rows -- only the serial numbering betrays it.
+    rows = [["Title"], _HEADER] + [_data_row(n, f"MAKER {n}", 1, 1) for n in range(26, 51)]
+    with pytest.raises(ExportIntegrityError, match="contiguous"):
+        _validate_export(rows, _exported_data_start(rows), len(_HEADER[2:-1]), context="t")
+
+
+def test_validate_export_catches_a_row_whose_cells_contradict_its_own_total():
+    rows = [["Title"], _HEADER, _data_row(1, "MAKER A", 2, 1), _data_row(2, "MAKER B", 5, 4, total=99)]
+    with pytest.raises(ExportIntegrityError, match="Total"):
+        _validate_export(rows, _exported_data_start(rows), len(_HEADER[2:-1]), context="t")
+
+
+def test_validate_export_ignores_an_export_with_no_total_column():
+    # Shorter rows (no trailing Total) must not be treated as a mismatch --
+    # the serial check still applies.
+    rows = [["Title"], ["", "", "JAN", "FEB"], ["1", "MAKER A", "2", "1"]]
+    _validate_export(rows, _exported_data_start(rows), 2, context="t")
 
 
 def test_exported_header_row_skips_blank_spacer_rows():
