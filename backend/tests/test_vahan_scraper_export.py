@@ -117,6 +117,28 @@ def test_validate_export_catches_a_row_whose_cells_contradict_its_own_total():
         _validate_export(rows, _exported_data_start(rows), len(_HEADER[2:-1]), context="t")
 
 
+def test_validate_export_on_the_real_vehicle_class_export_shape():
+    # Captured from live exports (Sikkim SK2, Ladakh LA1, Mizoram MZ1,
+    # Maharashtra MH45, 2026-09-16), abbreviated. Two things this pins that
+    # the small fixtures above do not:
+    #   - the export emits EVERY vehicle class whatever the RTO's size, so
+    #     the 'flat' header shape documented for the old HTML path (TOTAL
+    #     third, not last) has no export equivalent -- if it did, this
+    #     validator would reject good data on small RTOs.
+    #   - column_count is derived exactly as both call sites derive it, so a
+    #     change to that slicing breaks this test rather than production.
+    header = ["", "", "M-Cycle/Scooter", "Motor Car", "Goods Carrier", "Bus", ""]
+    rows = [
+        ["Title"],
+        header,
+        ["1", "ASHOK LEYLAND LTD", "0", "0", "4", "2", "6"],
+        ["2", "ACTION CONSTRUCTION EQUIPMENT LTD.", "0", "0", "2", "0", "2"],
+    ]
+    column_count = len(header[2:-1])  # the call sites' own expression
+    assert column_count == 4
+    _validate_export(rows, _exported_data_start(rows), column_count, context="real shape")
+
+
 def test_validate_export_ignores_an_export_with_no_total_column():
     # Shorter rows (no trailing Total) must not be treated as a mismatch --
     # the serial check still applies.

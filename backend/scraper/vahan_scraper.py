@@ -215,6 +215,17 @@ def _validate_export(
 
     Deliberately exact integer equality: there is no threshold to tune and
     no false-positive band, because both sides come from the same response.
+
+    `column_count` comes from header_row[2:-1] at both call sites, so the
+    Total is expected as the row's LAST cell. Checked against real exports
+    before relying on it, because the module comment above documents a
+    'flat' HTML header shape that puts TOTAL third instead of last, which
+    would make this reject good data. It does not occur in the xlsx export:
+    the export emits the full vehicle-class list (79 columns) whatever the
+    RTO's size, so the narrow-set shape that triggered the flat HTML header
+    has no export equivalent. Confirmed 2026-09-16 on Sikkim SK2, Ladakh
+    LA1, Mizoram MZ1 and Maharashtra MH45 for Maker x Vehicle Class, and on
+    MH12 for Maker x Month -- all 'TOTAL last', all passing.
     """
     serials: list[int] = []
     total_idx = 2 + column_count
