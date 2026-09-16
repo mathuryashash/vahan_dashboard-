@@ -28,5 +28,10 @@ test_screenshots/
 # Plaintext demo credentials and a captured session cookie. They were
 # untracked but NOT ignored, so any `git add .` would have committed them --
 # and a credential in git history can't be un-shipped.
+# Local pg_dump output, made when moving the database between machines.
+# 235MB -- over GitHub's 100MB hard limit, so committing it doesn't just
+# bloat the repo, it wedges the next push.
+/vahan.dump
+
 /pass.txt
 /cookies.txt
