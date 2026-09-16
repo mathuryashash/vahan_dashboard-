@@ -562,6 +562,7 @@ export function OverviewPage() {
           month={selectedMonth}
           state={selectedState}
           hasYearData={crosstabCoverage ? crosstabCoverage.maker_category.includes(selectedYear) : true}
+          isPartialYear={!!crosstabCoverage?.maker_category_partial?.includes(selectedYear)}
         />
       )}
 
@@ -573,6 +574,7 @@ export function OverviewPage() {
           month={selectedMonth}
           state={selectedState}
           hasYearData={crosstabCoverage ? crosstabCoverage.fuel_category.includes(selectedYear) : true}
+          isPartialYear={!!crosstabCoverage?.fuel_category_partial?.includes(selectedYear)}
         />
       )}
 
@@ -583,6 +585,7 @@ export function OverviewPage() {
           fuelGroup={fuelGroup!}
           month={selectedMonth}
           hasYearData={crosstabCoverage ? crosstabCoverage.maker_fuel.includes(selectedYear) : true}
+          isPartialYear={!!crosstabCoverage?.maker_fuel_partial?.includes(selectedYear)}
           state={selectedState}
         />
       )}
@@ -864,7 +867,7 @@ export function OverviewPage() {
  * Class cross-tab (year-only, no month breakdown -- see
  * docs/superpowers/specs/2026-08-25-maker-category-crosstab-design.md).
  * Rendered only when both selectedCategory and selectedMaker are set. */
-function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }: { year: number; category: string; maker: string; month: number | null; state: string | null; hasYearData: boolean }) {
+function MakerCategoryPanel({ year, category, maker, month, state, hasYearData, isPartialYear = false }: { year: number; category: string; maker: string; month: number | null; state: string | null; hasYearData: boolean; isPartialYear?: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['makerCategoryBreakdown', year, category, maker, state],
     queryFn: ({ signal }) => getMakerCategoryBreakdown({ year, vehicle_category: category, maker, state }, signal),
@@ -924,7 +927,7 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
 /** Same shape as MakerCategoryPanel, sourced from the separate Fuel x
  * Vehicle Class cross-tab (see FuelCategoryTotal / fuel-category-breakdown).
  * Rendered only when both selectedCategory and fuelGroup are set. */
-function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearData }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
+function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearData, isPartialYear = false }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean; isPartialYear?: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', year, category, fuelGroup, state],
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }, signal),
@@ -1068,7 +1071,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
  * separate Maker x Fuel cross-tab (see MakerFuelTotal /
  * maker-fuel-breakdown). Rendered only when both selectedMaker and
  * fuelGroup are set. */
-function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData }: { year: number; maker: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
+function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData, isPartialYear = false }: { year: number; maker: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean; isPartialYear?: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ['makerFuelBreakdown', year, maker, fuelGroup, state],
     queryFn: ({ signal }) => getMakerFuelBreakdown({ year, maker, fuel_group: fuelGroup, state }, signal),

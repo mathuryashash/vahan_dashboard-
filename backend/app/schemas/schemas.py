@@ -158,6 +158,15 @@ class CrosstabCoverage(BaseModel):
     maker_category: list[int]
     fuel_category: list[int]
     maker_fuel: list[int]
+    # Years that HAVE rows but are materially under-scraped, so any ranking
+    # built from them reflects how much got scraped rather than the market.
+    # Separate from the lists above, which only answer "any rows at all?" --
+    # a half-finished year passes that test and then silently ranks makers
+    # by scrape completeness. See get_crosstab_coverage for how this is
+    # measured. Default empty so an older client is unaffected.
+    maker_category_partial: list[int] = []
+    fuel_category_partial: list[int] = []
+    maker_fuel_partial: list[int] = []
 
 
 class CrosstabDetail(BaseModel):

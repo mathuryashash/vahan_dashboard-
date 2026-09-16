@@ -4,6 +4,67 @@ from sqlalchemy.sql.selectable import Select
 from app.models.models import MakerCategoryTotal, Registration
 
 
+# A maker is flagged when it reaches under this share of the RTOs it covers
+# in its own best year. Deliberately low: a maker really can shrink its
+# footprint year to year, and a false "incomplete" badge on good data costs
+# more trust than it saves. Measured 2025 vs 2026 -- TVS 0.98 and Maruti 0.88
+# are untouched, while Bajaj (0.13), Hero (0.44) and Honda (0.49) are caught,
+# and Bajaj's stored 2025 total is ~20x below its true value.
+_COVERAGE_GAP_THRESHOLD = 0.6
+# How far back to look for a maker's best year. Matches the crosstab
+# coverage window in categories.py; keeps the scan bounded.
+_COVERAGE_YEARS = 6
+
+
+async def makers_with_coverage_gaps(
+    db: AsyncSession, model, year: int, makers: list[str], *,
+    state: str | None = None, rto_code: str | None = None,
+) -> set[str]:
+    """Of `makers`, those whose stored total for `year` is built on far fewer
+    RTOs than that same maker reaches in its best recent year.
+
+    Exists because a year can look complete in aggregate while individual
+    makers are missing from most of the country. Measured on the live DB:
+    2025 has all 36 states, ~1,400 RTOs and all 12 months, and its national
+    maker-pass total is in line with neighbouring years -- yet Bajaj Auto's
+    2025 rows cover 173 RTOs against 1,384 in 2026, understating it roughly
+    20x, while TVS covers 1,365 and is fine. No year-level or table-level
+    check can see that; it is only visible per maker.
+
+    Compares each maker against ITSELF rather than against other makers, so a
+    genuinely regional maker is not flagged for being regional.
+
+    An RTO-scoped caller gets an empty set: "how many RTOs does this cover"
+    is meaningless when the answer can only ever be one.
+    """
+    if not makers or rto_code:
+        return set()
+
+    def coverage(*group_by):
+        q = select(*group_by, func.count(func.distinct(model.rto_code))).where(
+            model.maker.in_(makers), model.year > year - _COVERAGE_YEARS,
+        )
+        if state:
+            q = q.where(model.state_name == state)
+        return q.group_by(*group_by)
+
+    # Best recent year per maker, and what this year actually has.
+    best: dict[str, int] = {}
+    for maker, _yr, rtos in (await db.execute(coverage(model.maker, model.year))).all():
+        if rtos > best.get(maker, 0):
+            best[maker] = rtos
+    this_year = {
+        maker: rtos
+        for maker, rtos in (await db.execute(
+            coverage(model.maker).where(model.year == year)
+        )).all()
+    }
+    return {
+        maker for maker, peak in best.items()
+        if peak and this_year.get(maker, 0) < peak * _COVERAGE_GAP_THRESHOLD
+    }
+
+
 def apply_common_filters(
     query: Select,
     *,

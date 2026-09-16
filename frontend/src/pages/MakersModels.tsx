@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
+import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears, getCrosstabCoverage } from '../api/vahan';
 import { estimateTripleCells, MIN_CATEGORY_SHARE } from '../utils/tripleEstimate';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
@@ -49,6 +49,11 @@ export function MakersModelsPage() {
   // structural limit as the Overview page's combined filters. `month` only
   // applies to the plain (no category, no fuel) leaderboard.
   const comboImpossible = !!(selectedCategory && fuelGroup);
+
+  // Only matters on the category path: without a category this page ranks
+  // from Registration's maker pass, which is a different (complete) source.
+  const { data: crosstabCoverage } = useQuery({ queryKey: ['crosstabCoverage'], queryFn: getCrosstabCoverage });
+  const yearIsPartial = !!selectedCategory && !!crosstabCoverage?.maker_category_partial?.includes(year);
   const { data: makers, isLoading: makersLoading, isError: makersError, refetch: refetchMakers } = useQuery({
     queryKey: ['makers-full', year, month, selectedCategory, fuelGroup, selectedState],
     queryFn: ({ signal }) => {
@@ -198,10 +203,17 @@ export function MakersModelsPage() {
       const myTotal = myTotalMap.get(m.maker);
       return !myTotal || m.count / myTotal >= MIN_CATEGORY_SHARE;
     })
-    .map((m: { maker: string; count: number }) => ({
+    .map((m: { maker: string; count: number; partial?: boolean }) => ({
       name: m.maker,
       count: isEstimated ? Math.round(m.count * monthRatio!) : m.count,
+      // Set by the backend when this maker's figure for this year is built
+      // on a fraction of the RTOs it normally covers -- an understated bar,
+      // not a real decline.
+      partial: !!m.partial,
     }));
+  const partialMakers = makerChartData
+    .filter((d: { partial: boolean }) => d.partial)
+    .map((d: { name: string }) => d.name);
   const selectClass = "bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer";
 
   return (
@@ -297,6 +309,33 @@ export function MakersModelsPage() {
           ) : (
             <>Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory || fuelGroup}</span> registrations for FY {year} — a year total. Pick a month above for an estimated month-level breakdown.</>
           )}
+        </div>
+      )}
+
+      {!yearIsPartial && partialMakers.length > 0 && (
+        // Named, not just counted: a reader has to know WHICH bars are
+        // understated, or the whole chart becomes untrustworthy instead of
+        // the few rows that actually are.
+        <div className="bg-[var(--bg-card)] border-2 border-[var(--danger,#dc2626)] rounded-xl px-4 py-3 text-xs text-[var(--text-primary)] animate-entrance">
+          <span className="font-bold text-[var(--danger,#dc2626)]">Understated:</span>{' '}
+          {partialMakers.join(', ')} — {partialMakers.length === 1 ? 'this maker is' : 'these makers are'}{' '}
+          recorded in far fewer RTOs for FY {year} than they normally cover, so the{' '}
+          {partialMakers.length === 1 ? 'bar is' : 'bars are'} too low and the ranking is affected.
+          Awaiting a re-scrape of this year.
+        </div>
+      )}
+
+      {yearIsPartial && (
+        // Loud, not a footnote: every maker number below this point comes
+        // from a crosstab that is still being scraped, and the shortfall is
+        // uneven per maker, so the ORDER is wrong too -- not just the
+        // magnitudes. Measured on FY2026: Bajaj had 164 of 1406 RTOs where
+        // Hero had 516, which is why TVS outranked Hero here.
+        <div className="bg-[var(--bg-card)] border-2 border-[var(--danger,#dc2626)] rounded-xl px-4 py-3 text-xs text-[var(--text-primary)] animate-entrance">
+          <span className="font-bold text-[var(--danger,#dc2626)]">Incomplete data — do not rely on this ranking.</span>{' '}
+          The Maker × Category source for FY {year} is still being scraped, and different
+          manufacturers are covered to different degrees. Both the counts and the order below
+          are affected. Use a completed year for maker comparisons.
         </div>
       )}
 
