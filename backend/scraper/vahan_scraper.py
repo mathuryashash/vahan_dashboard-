@@ -819,13 +819,45 @@ async def _scrape_state_worker(
     delay_seconds: float,
     already_done: frozenset[str],
 ) -> list[dict]:
-    """Independent worker: creates its own HTTP client + session, scrapes one state fully."""
+    """Independent worker: creates its own HTTP client + session, scrapes one state fully.
+
+    `state_select_id` is only a fallback. The State dropdown's JSF component
+    id is per-session and has drifted repeatedly (see the module docstring),
+    so a worker running its OWN session must derive its own id from its own
+    page -- this used to load a fresh page, throw the HTML away, and drive it
+    with the id another session discovered. At best that select fails and the
+    state yields nothing; at worst the id addresses a different widget, the
+    state filter never moves off its default, and all-India numbers get
+    persisted under one state's name. The serial path above already
+    re-derives the id after every refresh for exactly this reason.
+    """
     async with httpx.AsyncClient(
         headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
     ) as client:
         session = _VahanSession(client)
-        await session.load()
-        return await _scrape_state(session, state, state_select_id, year, dimension, delay_seconds, already_done)
+        page_html = await session.load()
+        own_select_id = discover_state_select_id(page_html) or state_select_id
+        try:
+            return await _scrape_state(
+                session, state, own_select_id, year, dimension, delay_seconds, already_done
+            )
+        except SessionExpiredError as exc:
+            # The serial path gets a 5-refresh budget; this one had nothing,
+            # so a single expiry propagated out of asyncio.gather and
+            # abandoned every other in-flight state. One clean retry on a new
+            # session, keeping whatever this state already produced.
+            done = already_done | {i["rto_code"] for i in exc.partial_items if "rto_code" in i}
+            logger.warning(
+                "Session expired scraping %s (%s) -- retrying once on a fresh session, "
+                "resuming after %d RTOs.", state["state_name"], exc, len(done),
+            )
+            retry_session = _VahanSession(client)
+            retry_html = await retry_session.load()
+            retry_select_id = discover_state_select_id(retry_html) or own_select_id
+            rest = await _scrape_state(
+                retry_session, state, retry_select_id, year, dimension, delay_seconds, done
+            )
+            return list(exc.partial_items) + rest
 
 
 async def scrape_all_india(
