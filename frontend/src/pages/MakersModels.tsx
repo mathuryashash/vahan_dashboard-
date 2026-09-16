@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears, getCrosstabCoverage } from '../api/vahan';
+import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
 import { estimateTripleCells, MIN_CATEGORY_SHARE } from '../utils/tripleEstimate';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
@@ -50,10 +50,6 @@ export function MakersModelsPage() {
   // applies to the plain (no category, no fuel) leaderboard.
   const comboImpossible = !!(selectedCategory && fuelGroup);
 
-  // Only matters on the category path: without a category this page ranks
-  // from Registration's maker pass, which is a different (complete) source.
-  const { data: crosstabCoverage } = useQuery({ queryKey: ['crosstabCoverage'], queryFn: getCrosstabCoverage });
-  const yearIsPartial = !!selectedCategory && !!crosstabCoverage?.maker_category_partial?.includes(year);
   const { data: makers, isLoading: makersLoading, isError: makersError, refetch: refetchMakers } = useQuery({
     queryKey: ['makers-full', year, month, selectedCategory, fuelGroup, selectedState],
     queryFn: ({ signal }) => {
@@ -312,7 +308,7 @@ export function MakersModelsPage() {
         </div>
       )}
 
-      {!yearIsPartial && partialMakers.length > 0 && (
+      {partialMakers.length > 0 && (
         // Named, not just counted: a reader has to know WHICH bars are
         // understated, or the whole chart becomes untrustworthy instead of
         // the few rows that actually are.
@@ -325,19 +321,6 @@ export function MakersModelsPage() {
         </div>
       )}
 
-      {yearIsPartial && (
-        // Loud, not a footnote: every maker number below this point comes
-        // from a crosstab that is still being scraped, and the shortfall is
-        // uneven per maker, so the ORDER is wrong too -- not just the
-        // magnitudes. Measured on FY2026: Bajaj had 164 of 1406 RTOs where
-        // Hero had 516, which is why TVS outranked Hero here.
-        <div className="bg-[var(--bg-card)] border-2 border-[var(--danger,#dc2626)] rounded-xl px-4 py-3 text-xs text-[var(--text-primary)] animate-entrance">
-          <span className="font-bold text-[var(--danger,#dc2626)]">Incomplete data — do not rely on this ranking.</span>{' '}
-          The Maker × Category source for FY {year} is still being scraped, and different
-          manufacturers are covered to different degrees. Both the counts and the order below
-          are affected. Use a completed year for maker comparisons.
-        </div>
-      )}
 
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '80ms' }}>
         <div className="mb-4 flex items-center justify-between">

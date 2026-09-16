@@ -83,13 +83,7 @@ export const getMakerCategoryBreakdown = (params: { year: number; state?: string
 export const getFuelCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; fuel_group?: string | null }, signal?: AbortSignal) =>
   api.get('/categories/fuel-category-breakdown', { params, signal }).then(r => r.data);
 
-// *_partial: years that have rows but are materially under-scraped, so a
-// ranking built from them reflects scrape progress rather than the market.
-// Optional so a response from an older backend still parses.
-export const getCrosstabCoverage = (): Promise<{
-  maker_category: number[]; fuel_category: number[]; maker_fuel: number[];
-  maker_category_partial?: number[]; fuel_category_partial?: number[]; maker_fuel_partial?: number[];
-}> =>
+export const getCrosstabCoverage = (): Promise<{ maker_category: number[]; fuel_category: number[]; maker_fuel: number[] }> =>
   api.get('/categories/crosstab-coverage').then(r => r.data);
 
 export const getMakerFuelBreakdown = (params: { year: number; state?: string | null; maker?: string | null; fuel_group?: string | null; limit?: number }, signal?: AbortSignal) =>

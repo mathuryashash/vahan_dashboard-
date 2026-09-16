@@ -5,7 +5,7 @@ from sqlalchemy import select, func, desc
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import (
-    apply_common_filters, category_makers, exclude_supplementary, fuel_category, fuel_group,
+    apply_common_filters, category_makers, fuel_category, fuel_group,
     latest_month_with_data, makers_with_coverage_gaps,
 )
 from app.core.scope import get_effective_category, get_effective_state, scoped_category, scoped_rto
@@ -49,11 +49,6 @@ _crosstab_coverage_cache = TTLCache(300)
 # crosstab-to-maker-pass ratio. 0.8 sits well clear of the real spread
 # (2021-2025 measured 130.8-149.6%, so the worst good year is already 0.87 of
 # the median) while catching 2026's 67.1%, which is 0.51.
-_PARTIAL_YEAR_RATIO = 0.8
-# How many recent years form the baseline. Six spans enough closed years to
-# have a stable median while staying inside the era the data is shaped the
-# same way -- and it is the window users actually compare against.
-_PARTIAL_YEAR_WINDOW = 6
 _categories_cache = TTLCache(_CACHE_TTL_SECONDS)
 _top_makers_cache = TTLCache(_CACHE_TTL_SECONDS)
 _fuel_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
@@ -96,63 +91,25 @@ async def get_crosstab_coverage(
         result = await db.execute(query.order_by(model.year.desc()))
         return [row[0] for row in result.all()]
 
-    # Completeness, not just presence. A crosstab year is scraped RTO by RTO,
-    # so an interrupted run leaves every RTO holding *some* rows while the
-    # big makers are missing from most of them -- which passes the "any rows?"
-    # test above and then ranks makers by how much of the country got
-    # scraped. Measured live on 2026: Bajaj present in 164 of 1406 RTOs and
-    # Hero in 516, against 1378 and 1354 in 2025, which put TVS above Hero in
-    # the Top Manufacturers chart purely as a scraping artefact.
-    #
-    # The yardstick is the same year's canonical maker-pass total in
-    # Registration. That normalises for a part-finished calendar year (2026
-    # holds 9 months, so its raw total is legitimately lower) and for growth
-    # between years, leaving only genuine under-coverage. Each crosstab
-    # covers MORE than the maker pass because a registration can carry both a
-    # class and a fuel row, so the ratio sits well above 100%; what matters
-    # is that it is STABLE per year. Measured: 2021-2025 held 130.8-149.6%,
-    # 2026 broke to 67.1%.
-    # Only the recent window, for two reasons. The ratio drifts slowly across
-    # two decades (2003's data is shaped differently from 2025's), so a median
-    # taken over every year since 2003 flagged 2023-2025 as partial when they
-    # are fine; and this endpoint runs on page load, where 24 years x 2
-    # aggregates took 12.7s. Grouped by year in one query per table instead
-    # of a query per year.
-    async def totals_by_year(column, model, years: list[int]) -> dict[int, int]:
-        query = select(model.year, func.sum(column)).where(model.year.in_(years))
-        if model is Registration:
-            query = exclude_supplementary(query)
-        if user_rto:
-            query = query.where(model.rto_code == user_rto)
-        result = await db.execute(query.group_by(model.year))
-        return {row[0]: row[1] or 0 for row in result.all()}
-
-    async def partial_years(model, years: list[int]) -> list[int]:
-        window = years[:_PARTIAL_YEAR_WINDOW]  # years_for returns newest first
-        # Needs a few years to know what "normal" looks like. With fewer,
-        # say nothing rather than guess -- a false "partial" badge on good
-        # data costs more trust than it saves.
-        if len(window) < 3:
-            return []
-        reg = await totals_by_year(Registration.count, Registration, window)
-        cross = await totals_by_year(model.count, model, window)
-        ratios = {y: cross.get(y, 0) / reg[y] for y in window if reg.get(y)}
-        if len(ratios) < 3:
-            return []
-        ordered = sorted(ratios.values())
-        median = ordered[len(ordered) // 2]
-        return sorted(y for y, r in ratios.items() if r < median * _PARTIAL_YEAR_RATIO)
-
-    mc_years = await years_for(MakerCategoryTotal)
-    fc_years = await years_for(FuelCategoryTotal)
-    mf_years = await years_for(MakerFuelTotal)
+    # A year-level completeness check used to live here, comparing each
+    # crosstab's yearly total against the same year's maker-pass total in
+    # Registration and flagging years far below the median ratio. It is gone
+    # on purpose. The denominator is not a trustworthy baseline: Registration
+    # itself holds under-scraped years (2024/2025 were written by the same
+    # dropped-pagination parser), which inflated the "normal" ratio to
+    # 130-150%. Once those years are re-scraped the ratio falls toward 100%,
+    # and a genuinely complete year reads as broken -- after the 2026 crosstab
+    # was repaired and verified, the check still called it partial.
+    # A warning that fires on good data is worse than none; it teaches people
+    # to ignore the ones that matter.
+    # The per-maker check (makers_with_coverage_gaps, used by top-makers and
+    # maker-category-breakdown) replaces it and is sound for the reason this
+    # one wasn't: it compares a maker against ITSELF inside one table, so no
+    # other table's completeness can skew it. It caught 2026 independently.
     result = {
-        "maker_category": mc_years,
-        "fuel_category": fc_years,
-        "maker_fuel": mf_years,
-        "maker_category_partial": await partial_years(MakerCategoryTotal, mc_years),
-        "fuel_category_partial": await partial_years(FuelCategoryTotal, fc_years),
-        "maker_fuel_partial": await partial_years(MakerFuelTotal, mf_years),
+        "maker_category": await years_for(MakerCategoryTotal),
+        "fuel_category": await years_for(FuelCategoryTotal),
+        "maker_fuel": await years_for(MakerFuelTotal),
     }
     _crosstab_coverage_cache.set((user_rto,), result)
     return result
