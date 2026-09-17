@@ -146,9 +146,24 @@ async def test_top_makers_excludes_other_categories_makers(client, db_session):
         _restore_national_admin()
 
 
-async def test_maker_fuel_breakdown_excludes_other_categories_makers(client, db_session):
-    """MakerFuelTotal has no category column at all -- the makers have to be
-    restricted via MakerCategoryTotal or a 4W account sees 2W manufacturers."""
+async def test_maker_fuel_breakdown_returns_empty_for_category_scoped_account(client, db_session):
+    """MakerFuelTotal has no category column at all, so there is NO honest
+    Maker x Category x Fuel answer to give a category-scoped account.
+
+    This test previously asserted only that the maker NAMES were restricted
+    (via a maker.in_(category_makers(...)) membership filter). That filter
+    controlled which makers appeared but not what their counts covered, so
+    every returned figure was the maker's ALL-category total. Live-proven on
+    real data: a Four-Wheeler account querying HERO MOTOCORP received
+    5,927,031 -- its two-wheeler volume, ~947x its true 6,259 Four-Wheeler
+    units -- and an unfiltered call returned a pure two-wheeler leaderboard
+    under a four-wheeler label. Asserting on names alone is what let that
+    pass; the count was never checked.
+
+    Empty is the correct answer, matching get_crosstab_detail, which already
+    refuses the identical Maker x Fuel + category combination rather than
+    inventing a number.
+    """
     await _seed(db_session)
     _login_as(**FOUR_WHEELER)
     try:
@@ -156,7 +171,10 @@ async def test_maker_fuel_breakdown_excludes_other_categories_makers(client, db_
             "/api/v1/categories/maker-fuel-breakdown", params={"year": 2026, "fuel_group": "ICE"}
         )
         assert response.status_code == 200
-        assert [row["maker"] for row in response.json()] == ["MARUTI SUZUKI"]
+        assert response.json() == [], (
+            "a category-scoped account must get no rows here rather than "
+            "cross-category volumes labelled as its own segment"
+        )
     finally:
         _restore_national_admin()
 

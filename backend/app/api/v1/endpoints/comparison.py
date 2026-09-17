@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
@@ -98,7 +98,11 @@ async def compare_states(
 @router.get("/all-states", response_model=list[StateComparisonRanking])
 async def get_all_states_comparison(
     year: int = _DEFAULT_YEAR,
-    limit: int = 36,
+    # Bounded, matching summary.get_state_ranking and categories.get_top_makers.
+    # A bare `int` let limit=-1 through to Postgres ("LIMIT must not be
+    # negative") as an opaque 500, and let an unbounded positive value both
+    # remove the result cap and mint unlimited distinct TTLCache keys.
+    limit: int = Query(default=36, ge=1, le=200),
     vehicle_category: str | None = Depends(get_effective_category),
     fuel_group: str | None = None,
     user_rto: str | None = Depends(scoped_rto),

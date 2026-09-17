@@ -53,15 +53,15 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "dev-only-change-me-in-production"
     JWT_EXPIRE_MINUTES: int = 60 * 24  # 24h
 
-    # /docs, /redoc and /openapi.json are unauthenticated by design -- handy
-    # locally, pure reconnaissance on a customer-facing host (every route,
-    # every field name, every scope dependency, enumerable by anyone who can
-    # reach the API). Default True so local dev is unchanged; set
-    # ENABLE_API_DOCS=false in the production .env. Also controls whether the
-    # CSP has to keep script-src 'unsafe-inline' (see main.py): Swagger UI is
-    # the only inline-script page this API serves, so with docs off the
-    # weakest directive in the policy goes away with them.
-    ENABLE_API_DOCS: bool = True
+    # False by default so an omitted .env is safe. /docs, /redoc and
+    # /openapi.json enumerate every route, every query parameter (including
+    # the scope-clamped ones), every schema and every scope dependency --
+    # a free map of the authorization surface for anyone who can reach the
+    # API, which is exactly how the scope gaps found in review were located.
+    # It also forces the CSP to keep script-src 'unsafe-inline' plus a CDN
+    # origin, weakening the only XSS backstop. Set ENABLE_API_DOCS=true in
+    # a local .env for development.
+    ENABLE_API_DOCS: bool = False
 
     # FADA (dealer retail figures parsed from press-release PDFs) is a second
     # source, separate from VAHAN. This deployment presents VAHAN

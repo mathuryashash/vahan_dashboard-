@@ -306,7 +306,7 @@ _leaderboard_db_gate = asyncio.Semaphore(4)
 
 async def get_top_makers_leaderboard(
     db: AsyncSession, state_code: str, year: int, fuel: str | None = None, limit: int = 10,
-    vehicle_category: str | None = None,
+    vehicle_category: str | None = None, rto: str | None = None,
 ) -> list[dict]:
     """Real (not modeled) maker ranking for one state/year, optionally
     scoped to one raw fuel value -- the actual-numbers alternative to
@@ -338,6 +338,14 @@ async def get_top_makers_leaderboard(
     )
     if vehicle_category:
         ranking_query = ranking_query.where(MakerCategoryTotal.vehicle_category == vehicle_category)
+    # Same argument as vehicle_category above, for the geographic axis. An
+    # RTO-tier account passes require_state_code trivially (its RTO is in
+    # that state), so without this the ranking was the whole STATE's top
+    # makers -- the state tier's product, which is sold separately. Narrows
+    # both halves: which makers get ranked here, and whose numbers get
+    # fetched in _one below.
+    if rto:
+        ranking_query = ranking_query.where(MakerCategoryTotal.rto_code == rto)
     top_makers = (await db.execute(
         ranking_query
         .group_by(MakerCategoryTotal.maker)
@@ -355,7 +363,7 @@ async def get_top_makers_leaderboard(
         async with _leaderboard_db_gate:
             try:
                 async with AsyncSessionLocal() as own_db:
-                    records = await get_or_scrape_maker_query(own_db, state_code, year, maker, fuel)
+                    records = await get_or_scrape_maker_query(own_db, state_code, year, maker, fuel, rto=rto)
                 if vehicle_category:
                     records = [r for r in records if classify_live_category(r["category"]) == vehicle_category]
                 return {"maker": maker, "total": sum(r["count"] for r in records)}

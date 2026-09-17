@@ -5,7 +5,7 @@ from sqlalchemy import select, func, desc
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import (
-    apply_common_filters, category_makers, fuel_category, fuel_group,
+    apply_common_filters, fuel_category, fuel_group,
     latest_month_with_data, makers_with_coverage_gaps,
 )
 from app.core.scope import get_effective_category, get_effective_state, scoped_category, scoped_rto
@@ -487,6 +487,26 @@ async def get_maker_fuel_breakdown(
     Python when ranking by maker, since fuel_group is computed from the raw
     fuel_type column (same reason fuel-category-breakdown does this).
     """
+    # MakerFuelTotal is maker x fuel ONLY -- it has no category dimension,
+    # so there is no honest way to answer this for a category-scoped
+    # account. The previous attempt filtered by MEMBERSHIP
+    # (maker.in_(category_makers(...))): it restricted WHICH makers appear
+    # but not what their counts cover, so every returned figure was the
+    # maker's all-category total. Live-proven: a Four-Wheeler account
+    # querying HERO MOTOCORP got 5,927,031 -- HERO's two-wheeler volume,
+    # ~947x its real 6,259 Four-Wheeler units -- and an unfiltered call
+    # returned a pure two-wheeler leaderboard (HERO/HONDA/TVS) under a
+    # four-wheeler label. The account cannot detect that as a leak; it
+    # reads as its own data.
+    #
+    # Return empty rather than wrong, matching get_crosstab_detail below,
+    # which already refuses the identical Maker x Fuel + category combo --
+    # and, like it, refuses ABOVE the cache: this is a constant, so there is
+    # nothing worth memoizing, and TTLCache.set sweeps the whole store on
+    # every call.
+    if user_category:
+        return []
+
     cache_key = (year, state, maker, fuel_group_filter, limit, user_category, user_rto)
     cached = _maker_fuel_breakdown_cache.get(cache_key)
     if cached is not None:
@@ -501,13 +521,6 @@ async def get_maker_fuel_breakdown(
         query = query.where(MakerFuelTotal.rto_code == user_rto)
     if maker:
         query = query.where(MakerFuelTotal.maker == maker)
-    # MakerFuelTotal is maker x fuel only -- there is no category column to
-    # filter on, so a four-wheeler account would otherwise get a list of
-    # two-wheeler makers here. Restrict to makers that actually sell in
-    # their category (see category_makers for what this does and doesn't
-    # guarantee about the counts).
-    if user_category:
-        query = query.where(MakerFuelTotal.maker.in_(category_makers(user_category, year=year, state=state, rto_code=user_rto)))
 
     result = await db.execute(query)
     totals: dict[str, int] = {}

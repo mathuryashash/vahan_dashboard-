@@ -3,7 +3,8 @@ RTO-scoped user must never see another state's/RTO's data, regardless of
 what they pass in the query string or URL."""
 from app.core.auth import get_current_user
 from app.main import app
-from app.models.models import RTO, Registration, State, User, UserScope
+from app.models.models import MakerCategoryTotal, RTO, Registration, State, User, UserScope
+from app.services import live_scrape_service
 
 DELHI = dict(scope_type=UserScope.STATE, scope_state_code="DL", scope_state_name="Delhi")
 MH_RTO = dict(
@@ -59,6 +60,44 @@ async def _seed_sibling_rto(db_session):
         )
     )
     await db_session.commit()
+
+
+async def test_leaderboard_ranking_is_clamped_to_the_users_own_rto(db_session, monkeypatch):
+    """The fourth recurrence of this bug shape, found by review.
+
+    /live-query/leaderboard was guarded by require_state_code alone, which
+    an RTO-tier account passes trivially -- its RTO is in that state -- so
+    it ranked the whole STATE's top makers, which is the state tier's
+    product. Exercised at the service layer because the endpoint
+    live-scrapes each ranked maker; the scrape is stubbed so this stays
+    offline and tests only the narrowing.
+    """
+    await db_session.merge(State(state_code="MH", state_name="Maharashtra"))
+    await db_session.merge(RTO(rto_code="MH1", rto_name="Test RTO MH1", state_code="MH"))
+    await db_session.merge(RTO(rto_code="MH2", rto_name="Sibling RTO MH2", state_code="MH"))
+    await db_session.commit()
+    geo = dict(state_code="MH", state_name="Maharashtra", year=2026,
+               vehicle_class="M-CYCLE/SCOOTER", vehicle_category="Two-Wheeler")
+    db_session.add_all([
+        MakerCategoryTotal(**geo, rto_code="MH1", rto_name="Test RTO MH1", maker="ALPHA", count=100),
+        # Bigger, so an unclamped ranking puts it first and the leak is
+        # unmistakable rather than a subtle ordering difference.
+        MakerCategoryTotal(**geo, rto_code="MH2", rto_name="Sibling RTO MH2", maker="BETA", count=900),
+    ])
+    await db_session.commit()
+
+    async def _fake_scrape(db, state_code, year, maker, fuel=None, rto=None):
+        return [{"month": 1, "category": "TWO WHEELER(NT)", "count": 5}]
+
+    monkeypatch.setattr(live_scrape_service, "get_or_scrape_maker_query", _fake_scrape)
+
+    own = await live_scrape_service.get_top_makers_leaderboard(db_session, "MH", 2026, rto="MH1")
+    assert [m["maker"] for m in own] == ["ALPHA"], "RTO-scoped leaderboard leaked a sibling RTO's maker"
+
+    # A state-tier caller (rto=None) must still see both -- the clamp has to
+    # narrow the RTO tier without shrinking the tier above it.
+    whole_state = await live_scrape_service.get_top_makers_leaderboard(db_session, "MH", 2026)
+    assert {m["maker"] for m in whole_state} == {"ALPHA", "BETA"}
 
 
 async def test_rto_scoped_user_kpis_exclude_sibling_rto(client, db_session):
@@ -192,3 +231,39 @@ async def test_national_user_is_unrestricted(client, db_session):
     response = await client.get("/api/v1/summary/kpis", params={"year": 2026, "state": "Maharashtra"})
     assert response.status_code == 200
     assert response.json()["total_this_month"] == 100
+
+
+async def test_rto_scoped_user_rto_list_excludes_sibling_rto(client, db_session):
+    """GET /rto/{state}/list must return ONLY the caller's own RTO.
+
+    Regression: this route was guarded by require_state_code alone, which an
+    RTO-tier account passes trivially -- its RTO lives in that state -- while
+    the query itself had no RTO filter. It therefore returned every RTO in
+    the state ranked by volume, which is the state tier's product. Found by
+    live audit: a UP32 account received all 76 UP RTOs.
+
+    _seed_sibling_rto is what makes this test meaningful: with one RTO per
+    state, "clamped to MH1" and "clamped to Maharashtra" return the same
+    rows and the test would pass against the leak.
+    """
+    await _seed_sibling_rto(db_session)
+    _login_as(**MH_RTO)
+    # fy_filter(2025) covers Apr-2025..Mar-2026, which includes the Jan-2026
+    # seed rows.
+    response = await client.get("/api/v1/rto/MH/list", params={"year": 2025})
+    assert response.status_code == 200
+    codes = [row["rto_code"] for row in response.json()]
+    assert codes == ["MH1"], (
+        f"RTO-scoped user saw {codes} -- the sibling RTO's volume (and its "
+        "rank against the caller's own) must never be returned"
+    )
+
+
+async def test_state_scoped_user_rto_list_still_sees_every_rto_in_state(client, db_session):
+    """The fix above must not narrow the STATE tier, which is sold exactly
+    this per-RTO league table for its own state."""
+    await _seed_sibling_rto(db_session)
+    _login_as(scope_type=UserScope.STATE, scope_state_code="MH", scope_state_name="Maharashtra")
+    response = await client.get("/api/v1/rto/MH/list", params={"year": 2025})
+    assert response.status_code == 200
+    assert sorted(row["rto_code"] for row in response.json()) == ["MH1", "MH2"]

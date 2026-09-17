@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
 from app.core.query_filters import apply_total_filters, category_makers, exclude_supplementary
-from app.core.scope import require_rto_code, require_state_code, scoped_category
+from app.core.scope import require_rto_code, require_state_code, scoped_category, scoped_rto
 from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, Registration
 from app.schemas.schemas import RtoAnalysis, RtoListItem
@@ -35,13 +35,35 @@ async def get_rtos_for_state(
     state_code: str = Depends(require_state_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
     """RTOs with real registration data for this state/FY, ranked by
     volume. Reads from `registrations` directly (not the `rtos` master
     table) so the list only ever shows RTOs that actually have data.
     """
-    cache_key = (state_code, year, user_category)
+    # Kept as a comment, not in the docstring above: FastAPI publishes a
+    # route docstring as the OpenAPI `description`, and the rest of this
+    # explains an exploit and quotes real volumes. ENABLE_API_DOCS is False
+    # by default, but that is one flag away from being public.
+    #
+    # require_state_code alone is NOT enough here. It only checks that the
+    # requested state is the caller's own, which an RTO-tier account passes
+    # trivially -- its RTO lives in that state. With no RTO clamp this
+    # returned every RTO in the state, ranked by volume: live-proven, an
+    # RTO-tier account received all 76 of its state's RTOs, byte-identical
+    # to what the state tier is sold. That is the whole state-tier product
+    # handed to an RTO-tier subscriber, and it is the third recurrence of
+    # this bug shape in this codebase.
+    #
+    # The sibling route below (/{rto_code}/analysis) was already closed via
+    # require_rto_code, which is exactly what made the gap easy to miss.
+    #
+    # user_rto MUST also be in the cache key: the key was
+    # (state_code, year, user_category), so adding the filter without the
+    # key would serve one tenant's cached list to another -- turning a read
+    # leak into a cross-tenant cache leak.
+    cache_key = (state_code, year, user_category, user_rto)
     cached = _rto_list_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -57,6 +79,7 @@ async def get_rtos_for_state(
             func.sum(Registration.count).label("total"),
         )
         .where(Registration.state_code == state_code, fy_filter(year)),
+        rto_code=user_rto,
         vehicle_category=user_category,
     ).group_by(Registration.rto_code, Registration.rto_name).order_by(desc("total"))
 

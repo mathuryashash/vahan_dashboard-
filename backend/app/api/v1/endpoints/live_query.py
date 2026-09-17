@@ -5,7 +5,7 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import category_makers, classify_live_category
 from app.core.rate_limit import limiter
-from app.core.scope import require_state_code, scoped_category
+from app.core.scope import require_state_code, scoped_category, scoped_rto
 from app.models.models import User, UserScope
 from app.services.live_scrape_service import (
     UnknownRtoCodeError, UnknownStateCodeError, get_or_scrape_maker_query, get_site_rto_codes,
@@ -120,6 +120,7 @@ async def get_leaderboard(
     limit: int = Query(10, ge=1, le=20),
     state_code: str = Depends(require_state_code),
     user_category: str | None = Depends(scoped_category),
+    user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
@@ -132,8 +133,17 @@ async def get_leaderboard(
     5/minute, not 10 like /maker: an uncached call here pays up to `limit`
     (capped at 20) real CAPTCHA-solves, not one -- rarer, heavier requests
     get a tighter budget."""
+    # scoped_rto, not require_state_code alone. The state guard only checks
+    # that the requested state is the caller's own, which an RTO-tier
+    # account passes trivially because its RTO lives in that state -- so
+    # this route returned the whole STATE's top-maker ranking to an RTO
+    # subscriber. Same shape as the /rto/{state}/list leak, and the fourth
+    # recurrence in this codebase; the sibling /maker route above already
+    # narrows RTO unconditionally for exactly this reason.
     try:
-        makers = await get_top_makers_leaderboard(db, state_code, year, fuel, limit, vehicle_category=user_category)
+        makers = await get_top_makers_leaderboard(
+            db, state_code, year, fuel, limit, vehicle_category=user_category, rto=user_rto,
+        )
     except UnknownStateCodeError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown state_code {state_code!r}.")
     except TesseractUnavailableError:
