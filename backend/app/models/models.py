@@ -67,7 +67,15 @@ class Registration(Base):
     # earning its per-insert maintenance cost on a 26M-row, millions/year
     # table (dropped below in migrations.py; nothing here recreates them).
     day = Column(Integer, nullable=True)
-    vehicle_model = Column(String(200), nullable=True, index=True)
+    # No index: VAHAN has no Model dimension (its report Y-axis offers only
+    # Vehicle Category / Vehicle Class / Norms / Fuel / Maker / State), so
+    # nothing has ever written this column -- 0 populated rows out of 18.4M
+    # -- and the index on it was 200MB of pure overhead plus a write on
+    # every scraped row. The column stays: model-level data is purchasable
+    # from a MoRTH reseller, and this is where it would land.
+    # apply_common_filters rejects a filter on it rather than returning the
+    # empty result an all-NULL column would otherwise produce.
+    vehicle_model = Column(String(200), nullable=True)
     count = Column(Integer, default=0)
     recorded_at = Column(DateTime, default=func.now())
     # The live scraper can only pivot on one dimension (Maker, Vehicle Class,

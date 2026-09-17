@@ -1,3 +1,4 @@
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.selectable import Select
@@ -97,7 +98,24 @@ def apply_common_filters(
     if maker:
         query = query.where(Registration.maker == maker)
     if vehicle_model:
-        query = query.where(Registration.vehicle_model == vehicle_model)
+        # Refuse rather than return a confident zero. VAHAN publishes no
+        # Model dimension at all -- its report Y-axis offers exactly Vehicle
+        # Category, Vehicle Class, Norms, Fuel, Maker and State, and the
+        # word "model" appears nowhere on the page -- so nothing has ever
+        # written this column: 0 populated rows out of 18.4M. A filter on it
+        # therefore matched nothing and returned an empty result that reads
+        # as "no registrations for that model" rather than "this dimension
+        # does not exist", which is the same silently-wrong shape this
+        # module now guards against elsewhere.
+        # Model-level data is obtainable, but only from a paid reseller of
+        # MoRTH data, not from the dashboard this app scrapes.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "vehicle_model filtering is not available: VAHAN's public reports carry no "
+                "model dimension, so no model data exists in this database."
+            ),
+        )
     return query
 
 
