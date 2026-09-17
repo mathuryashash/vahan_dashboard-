@@ -42,13 +42,17 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         await seed_geo_hierarchy(session)
     scheduler_task = asyncio.create_task(run_scheduler_loop())
-    fada_scheduler_task = asyncio.create_task(run_fada_scheduler_loop())
+    # VAHAN only by default -- see ENABLE_FADA_SCRAPER in config.py.
+    fada_scheduler_task = (
+        asyncio.create_task(run_fada_scheduler_loop()) if settings.ENABLE_FADA_SCRAPER else None
+    )
     # Off by default -- see ENABLE_PREVIOUS_YEAR_REVALIDATION's own comment
     # in config.py for why this isn't just always on.
     revalidation_task = asyncio.create_task(run_previous_year_revalidation_loop()) if settings.ENABLE_PREVIOUS_YEAR_REVALIDATION else None
     yield
     scheduler_task.cancel()
-    fada_scheduler_task.cancel()
+    if fada_scheduler_task:
+        fada_scheduler_task.cancel()
     if revalidation_task:
         revalidation_task.cancel()
 

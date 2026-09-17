@@ -11,10 +11,15 @@ const INTEGRITY_COLOR: Record<'green' | 'amber' | 'red', string> = {
   amber: 'var(--accent)',
   red: 'var(--danger)',
 };
+// 'red' used to mean "FADA has no data" -- a second source this deployment
+// no longer scrapes or displays, so the backend stopped emitting that level
+// and the label would have been meaningless to a reader. The API still types
+// red as possible, so it keeps an entry, reworded to say something true if
+// it ever appears again.
 const INTEGRITY_LABEL: Record<'green' | 'amber' | 'red', string> = {
   green: 'Data integrity: clean',
   amber: 'Data integrity: check needed',
-  red: 'Data integrity: FADA has no data',
+  red: 'Data integrity: quality check failing',
 };
 
 function DataIntegrityBadge() {

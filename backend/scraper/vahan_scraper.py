@@ -822,6 +822,25 @@ async def _scrape_state(
         for parsed in [parse_rto_option(text)]
         if parsed
     ]
+    # A state with no RTOs at all is never real -- every Indian state has
+    # them. It means the select came back as a page without the RTO options:
+    # a session whose ViewState died without raising ViewExpiredException, so
+    # the recovery below never fired. Left as a warning, the run simply
+    # skipped the state and still reported "complete": year 2017 finished
+    # with 13 states done and 23 logging "0/0 RTOs", all within the same
+    # second, leaving that year a mix of freshly-scraped and stale rows that
+    # neither a resume nor a plain re-run would reconcile.
+    # Raising hands it to the 5-refresh recovery that already exists, which
+    # re-authenticates, re-derives the dropdown id and retries the state.
+    if not all_rtos:
+        err = SessionExpiredError(
+            f"{state_name}: the RTO dropdown came back empty, which no real state "
+            "produces -- treating as a dead session rather than skipping the state"
+        )
+        err.partial_items = items
+        err.remaining_rtos = None
+        raise err
+
     rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
     skipped_count = len(all_rtos) - len(rtos)
     if skipped_count:

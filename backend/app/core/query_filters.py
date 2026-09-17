@@ -202,9 +202,20 @@ def apply_total_filters(
     # containing every other segment's volume, which is a scope leak and not
     # merely bad arithmetic.
     # Only the vehicle_class-dimension pass carries a real class, so that
-    # single condition isolates it. Skipped when a fuel_group is also set,
-    # since that combination needs the fuel pass (class='All') instead.
-    if vehicle_category == "Other" and not fuel_group:
+    # single condition isolates it.
+    #
+    # Applied even when a fuel_group is set, deliberately. Exempting that
+    # case left the fuel-dimension pass as the only rows able to satisfy
+    # both filters -- and those rows carry vehicle_class='All', meaning they
+    # sum that fuel across EVERY class nationwide. The answer came back as
+    # the whole country's EV total wearing an "Other category" label, which
+    # is the same scope-leak shape this guard exists to close. With the
+    # condition applied, the class pass (fuel_type NULL) cannot match a fuel
+    # filter, so the combination returns nothing -- the same honest empty
+    # answer Two-Wheeler + EV already gives, since no table crosses category
+    # with fuel at the registration level (that is what FuelCategoryTotal is
+    # for, and what the frontend routes to instead).
+    if vehicle_category == "Other":
         query = query.where(Registration.vehicle_class != "All")
     return apply_common_filters(
         query, state=state, rto_code=rto_code, vehicle_class=vehicle_class,

@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     # weakest directive in the policy goes away with them.
     ENABLE_API_DOCS: bool = True
 
+    # FADA (dealer retail figures parsed from press-release PDFs) is a second
+    # source, separate from VAHAN. This deployment presents VAHAN
+    # registration data only -- the Industry Sales page it fed is hidden --
+    # so the 24h scraper that fetches it is off by default too. Leaving it
+    # running would keep hitting fada.in for data nothing displays. Set
+    # ENABLE_FADA_SCRAPER=true to turn it back on alongside that page.
+    ENABLE_FADA_SCRAPER: bool = False
+
     class Config:
         env_file = ".env"
         case_sensitive = True
