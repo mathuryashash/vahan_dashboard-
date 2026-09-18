@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
-from app.core.query_filters import apply_total_filters
+from app.core.query_filters import apply_total_filters, reject_vehicle_model
 from app.core.scope import get_effective_state, scoped_category, scoped_rto
 from app.models.models import Registration
 from app.schemas.schemas import MonthCount, RegistrationOut
@@ -49,8 +49,11 @@ async def get_registrations(
         filters.append(Registration.vehicle_class == vehicle_class)
     if maker:
         filters.append(Registration.maker == maker)
-    if vehicle_model:
-        filters.append(Registration.vehicle_model == vehicle_model)
+    # Not a filter: an explicit refusal, same as every endpoint that routes
+    # through apply_common_filters. This one builds its filter list by hand,
+    # so it kept silently returning "no registrations for that model" for a
+    # dimension VAHAN does not publish at all.
+    reject_vehicle_model(vehicle_model)
     if fuel_type:
         filters.append(Registration.fuel_type == fuel_type)
 

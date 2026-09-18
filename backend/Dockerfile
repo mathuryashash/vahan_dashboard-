@@ -19,4 +19,20 @@ COPY data/reference/ ./data/reference/
 
 EXPOSE 8020
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8020"]
+# --workers 1 is stated, not left to uvicorn's default, because three things
+# in this app are only correct with exactly one process -- see "Deployment
+# constraints" in README.md, and the startup guard in app/main.py:
+#   1. app/core/rate_limit.py's LoginRateLimiter counts failed logins in
+#      process memory. N workers = N x 5 guesses per window per account.
+#   2. The TTLCache instances in app/api/v1/endpoints/* are module-level, so
+#      N workers means N caches and the same query can answer two different
+#      numbers depending on which worker takes the request.
+#   3. DB_POOL_SIZE + DB_MAX_OVERFLOW = 60 connections PER PROCESS against
+#      Postgres max_connections=100, which the scrapers already draw on
+#      (see scraper/pool_sizing.py). Two workers is 120 and the excess
+#      fails to connect rather than queueing.
+# --no-access-log: the request middleware in app/main.py emits one line per
+# request carrying the request id; uvicorn's own access logger sets
+# propagate=False and its own formatter, so it can never carry that id and
+# would just duplicate every line.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8020", "--workers", "1", "--no-access-log"]

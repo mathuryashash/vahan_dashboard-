@@ -36,9 +36,9 @@ from sqlalchemy import func, select
 # script that actually needed them the most.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-from app.core.auth import hash_password
-from app.core.database import AsyncSessionLocal, init_db
-from app.models.models import RTO, Registration, State, User, UserRole, UserScope, VehicleCategoryScope
+from app.core.auth import hash_password  # noqa: E402
+from app.core.database import AsyncSessionLocal, init_db  # noqa: E402
+from app.models.models import RTO, Registration, State, User, UserRole, UserScope, VehicleCategoryScope  # noqa: E402
 
 
 async def _upsert(db, email: str, full_name: str, role: str, scope_type: str, password: str, **scope) -> tuple[User, bool]:

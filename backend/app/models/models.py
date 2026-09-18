@@ -56,8 +56,15 @@ class Registration(Base):
     rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
     month = Column(Integer, nullable=False, index=True)
-    year = Column(Integer, nullable=False, index=True)
-    vehicle_class = Column(String(200), nullable=False, index=True)
+    # No standalone index on year or vehicle_class: each is the leading column
+    # of a composite below that a bare equality filter can use just as well
+    # (year -> idx_reg_year_month_supp_count, vehicle_class ->
+    # idx_reg_class_state_rto). Verified by dropping both inside a rolled-back
+    # transaction and re-EXPLAINing six representative dashboard queries: every
+    # plan came back byte-identical. Together with is_supplementary below they
+    # cost 637 MB and a write on every one of the ~18M scraped rows.
+    year = Column(Integer, nullable=False)
+    vehicle_class = Column(String(200), nullable=False)
     maker = Column(String(200), nullable=True)
     fuel_type = Column(String(100), nullable=True)
     norms_type = Column(String(50), nullable=True)
@@ -89,7 +96,11 @@ class Registration(Base):
     # them while breakdown-by-category queries still include them. False/NULL
     # (the default) covers the canonical maker-dimension real rows and all
     # synthetic rows, which were never split this way and are safe to sum.
-    is_supplementary = Column(Boolean, nullable=True, default=False, index=True)
+    # Not indexed on its own: a btree over a boolean that splits 56/44 across
+    # 18M rows is never selective enough for the planner to choose, and it
+    # didn't -- it appears as a non-leading column in the three composites
+    # that actually serve these queries instead. See year's comment above.
+    is_supplementary = Column(Boolean, nullable=True, default=False)
     # Broad category (2W/3W/4W/Commercial/Other) and, for Commercial rows
     # only, a size tier (LCV/MCV/HCV/Unspecified) -- see
     # app.core.query_filters.classify_vehicle. Persisted (not computed on
@@ -275,7 +286,8 @@ class MakerFuelTotal(Base):
         # idx_mft_year_maker (year, maker) removed -- fully subsumed by the
         # wider index below sharing its leading two columns (dropped in
         # migrations.py, nothing here recreates it).
-        Index("idx_mft_year_fuel", "year", "fuel_type"),
+        # idx_mft_year_fuel (year, fuel_type) removed too: zero scans since
+        # this database was built (pg_stat_user_indexes, stats never reset).
         # Same state_name gap as the other two crosstabs, for crosstab-detail
         # and maker-fuel-breakdown's maker+state path.
         Index("idx_mft_year_maker_state", "year", "maker", "state_name", "fuel_type", "count"),

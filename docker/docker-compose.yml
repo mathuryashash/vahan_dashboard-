@@ -37,6 +37,18 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    # Docker's default json-file driver has NO size limit, so on a
+    # long-running VPS /var/lib/docker/containers/**/*-json.log grows until
+    # the disk is full -- and since the postgres-data volume lives on that
+    # same disk, a full disk takes the database down with it. 10m x 5 caps
+    # each service at 50 MB, far more than enough to debug a demo.
+    # Only applies to containers CREATED after this change: `docker compose
+    # up -d` recreates them, a plain `docker restart` does not.
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   backend:
     build:
@@ -62,6 +74,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    logging: *default-logging
 
   frontend:
     build:
@@ -73,6 +86,7 @@ services:
       backend:
         condition: service_started
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   postgres-data:

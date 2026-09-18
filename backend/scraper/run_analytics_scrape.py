@@ -14,11 +14,15 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import distinct, select
 
-from app.core.database import AsyncSessionLocal, engine, init_db
-from app.core.scrape_lock import scrape_write_lock
-from app.models.models import State, StateMonthCategoryTotal
-from app.services.scraper_service import persist_state_month_category_batch
-from scraper.analytics_scraper import CaptchaSolveError, load_session, scrape_state_year, verify_tesseract
+from scraper import pool_sizing
+
+pool_sizing.concurrent_workers()  # before any app.* import -- see that module's docstring
+
+from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
+from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.models.models import State, StateMonthCategoryTotal  # noqa: E402
+from app.services.scraper_service import persist_state_month_category_batch  # noqa: E402
+from scraper.analytics_scraper import CaptchaSolveError, load_session, scrape_state_year, verify_tesseract  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("run_analytics_scrape")

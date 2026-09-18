@@ -1,0 +1,18 @@
+# Dev/CI-only tooling. Pinned on purpose: an unpinned ruff picks up new rules
+# on its own release schedule and fails a branch that was green yesterday,
+# with no change from us. Bump deliberately, and run `python -m ruff check .`
+# locally before pushing the bump.
+#
+# pytest and pytest-asyncio are NOT here -- they are already in
+# requirements.txt, because the test suite is also how a fresh install
+# verifies itself.
+ruff==0.15.6
+
+# Test-only. tests/test_scrape_lock.py::test_sqlite_is_a_no_op builds a
+# sqlite+aiosqlite engine to prove the advisory-lock helper degrades to a
+# no-op off Postgres. It was installed on the dev machine but declared
+# nowhere, so the suite passed locally and would have failed on its first CI
+# run with ModuleNotFoundError -- a green laptop proving nothing about a
+# clean checkout.
+aiosqlite==0.21.0
+

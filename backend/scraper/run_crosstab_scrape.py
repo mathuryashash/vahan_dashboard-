@@ -15,15 +15,19 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
-from sqlalchemy import select
+from scraper import pool_sizing
 
-from app.core.database import AsyncSessionLocal, engine, init_db
-from app.core.scrape_lock import scrape_write_lock
-from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal
-from app.services.scraper_service import (
+pool_sizing.serial()  # before any app.* import -- see that module's docstring
+
+from sqlalchemy import select  # noqa: E402
+
+from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
+from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal  # noqa: E402
+from app.services.scraper_service import (  # noqa: E402
     _state_code_lookup, persist_fuel_category_batch, persist_maker_category_batch, persist_maker_fuel_batch,
 )
-from scraper.vahan_scraper import (
+from scraper.vahan_scraper import (  # noqa: E402
     scrape_all_india_fuel_category, scrape_all_india_maker_category, scrape_all_india_maker_fuel,
 )
 

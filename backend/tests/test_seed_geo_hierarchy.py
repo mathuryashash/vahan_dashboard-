@@ -1,5 +1,3 @@
-import io
-import pytest
 from sqlalchemy import select
 from app.scripts.seed_geo_hierarchy import seed_from_rows
 from app.models.models import State, Zone, District, RTO, RTODistrict

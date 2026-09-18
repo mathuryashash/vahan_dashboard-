@@ -1,1 +1,7 @@
 docker/seed/seed.sql.gz filter=lfs diff=lfs merge=lfs -text
+
+# Shell scripts are authored on Windows but only ever run on Linux (the VPS)
+# and macOS. A CRLF checkout -- which core.autocrlf=true produces by default
+# on Windows clones -- makes the kernel read the shebang as "/usr/bin/env
+# bash\r" and fail with a bare "bad interpreter: No such file or directory".
+*.sh text eol=lf

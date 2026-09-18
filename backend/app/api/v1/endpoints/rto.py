@@ -184,7 +184,17 @@ async def get_rto_analysis(
     overview_result = await db.execute(overview_query)
     overview_row = overview_result.one()
     months_with_data = overview_row.months_with_data or 0
-    avg_monthly = round(total / months_with_data, 1) if months_with_data else 0
+    # Divide a figure by the window it actually covers. `total` above comes
+    # from the maker query, which for a category-scoped account reads the
+    # crosstab across [year, year+1] because that table has no month column --
+    # roughly 24 months. months_with_data counts distinct months within ONE
+    # fiscal year, so pairing them overstated the monthly rate by about 2x for
+    # exactly the scoped accounts this endpoint clamps. overview_query shares
+    # the denominator's FY window (and the same category restriction), so it
+    # is the honest numerator. For an unscoped account the two sums are
+    # arithmetically identical -- same RTO, same FY, same exclude_supplementary,
+    # and the maker groups cover every row -- so no number moves there.
+    avg_monthly = round((overview_row.total or 0) / months_with_data, 1) if months_with_data else 0
 
     name_result = await db.execute(base.limit(1))
     sample = name_result.scalars().first()

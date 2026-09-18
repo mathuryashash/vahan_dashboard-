@@ -26,12 +26,16 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
-from app.core.database import AsyncSessionLocal, engine, init_db
-from app.core.scrape_lock import scrape_write_lock
-from app.models.models import MakerCategoryTotal, State
-from app.services import live_scrape_service
-from app.services.live_scrape_service import TesseractUnavailableError, get_or_scrape_maker_query
-from scraper.analytics_scraper import CaptchaSolveError, verify_tesseract
+from scraper import pool_sizing
+
+pool_sizing.concurrent_workers()  # before any app.* import -- see that module's docstring
+
+from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
+from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.models.models import MakerCategoryTotal, State  # noqa: E402
+from app.services import live_scrape_service  # noqa: E402
+from app.services.live_scrape_service import TesseractUnavailableError, get_or_scrape_maker_query  # noqa: E402
+from scraper.analytics_scraper import CaptchaSolveError, verify_tesseract  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("run_top_makers_scrape")

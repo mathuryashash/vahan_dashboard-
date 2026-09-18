@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  # push is scoped to master rather than every branch: with a bare `push:`,
+  # a commit on a branch that has an open PR fires BOTH this and
+  # pull_request, and their concurrency groups differ (refs/heads/x vs
+  # refs/pull/N/merge), so each commit ran two full suites in parallel.
+  push:
+    branches: [master]
+  pull_request:
+
+# Nothing here uses GITHUB_TOKEN -- no comments, releases or pushes -- so
+# read-only is all it needs, and stating it means the job keeps least
+# privilege regardless of what the repo or org default is set to later.
+permissions:
+  contents: read
+
+# A second push to the same branch cancels the first. The backend job spends
+# most of its time on a 362-test suite that drops and recreates the schema per
+# test; there is no value in finishing a run for a commit that has already
+# been superseded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        # Pinned to the same major version as development and the compose
+        # file (18). pg_restore reads older dumps but never newer ones, and
+        # the tests exercise real Postgres behaviour -- partial indexes,
+        # SQLSTATE codes, ON CONFLICT -- that SQLite would not catch.
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: vahan
+          POSTGRES_PASSWORD: vahan
+          # vahan_test, not vahan: tests/conftest.py defaults
+          # TEST_DATABASE_URL to .../vahan_test, so matching it here means CI
+          # needs no extra env var to find its database.
+          POSTGRES_DB: vahan_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vahan"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # app/main.py's lifespan refuses to boot on the dev-default secret.
+      # httpx's ASGITransport never runs lifespan, so no current test needs
+      # this -- it is here so that the day one does, CI fails for a real
+      # reason rather than on a missing variable.
+      JWT_SECRET_KEY: ci-not-a-real-secret-just-for-the-test-run
+      DATABASE_URL: postgresql+asyncpg://vahan:vahan@127.0.0.1:5432/vahan_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches local development (3.13.3).
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      # Lint first: it takes seconds, the suite takes minutes, and a lint
+      # failure is the cheaper one to find out about.
+      - name: Lint
+        run: python -m ruff check .
+
+      - name: Tests
+        run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci, not npm install: it installs exactly the lockfile and fails
+      # loudly if package.json and package-lock.json have drifted, which is
+      # the failure worth catching here.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # `tsc -b && vite build` -- this is also the type check, so a type
+      # error fails the build rather than reaching production.
+      - name: Build
+        run: npm run build

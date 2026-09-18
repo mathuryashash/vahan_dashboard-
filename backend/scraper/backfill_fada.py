@@ -10,9 +10,13 @@ import logging
 
 import httpx
 
-from app.core.database import AsyncSessionLocal, engine, init_db
-from app.core.scrape_lock import scrape_write_lock
-from scraper.fada_scraper import discover_releases, parse_release_pdf, persist_oem_sales
+from scraper import pool_sizing
+
+pool_sizing.serial()  # before any app.* import -- see that module's docstring
+
+from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
+from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from scraper.fada_scraper import discover_releases, parse_release_pdf, persist_oem_sales  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backfill_fada")

@@ -23,11 +23,19 @@ from app.scripts.export_seed_data import export_seed
 
 # Falls back to the common Windows install path since `psql` isn't always on
 # PATH there even when Postgres itself is installed and running (this repo's
-# own dev setup is one such case). Skips outright if neither resolves --
-# this test needs a real psql binary to faithfully exercise the same
-# docker-entrypoint-initdb.d loading mechanism the shipped seed file goes
-# through, not a stand-in.
-PSQL = shutil.which("psql") or r"C:\Program Files\PostgreSQL\18\bin\psql.exe"
+# own dev setup is one such case). This test needs a real psql binary to
+# faithfully exercise the same docker-entrypoint-initdb.d loading mechanism
+# the shipped seed file goes through, not a stand-in -- so when neither
+# resolves it skips. The fallback is guarded by an existence check rather
+# than used blindly: on a Linux runner without psql, handing subprocess a
+# hardcoded Windows path raises FileNotFoundError, which reads as a broken
+# test rather than a missing tool.
+_WINDOWS_PSQL = r"C:\Program Files\PostgreSQL\18\bin\psql.exe"
+PSQL = shutil.which("psql") or (_WINDOWS_PSQL if os.path.exists(_WINDOWS_PSQL) else None)
+
+pytestmark = pytest.mark.skipif(
+    PSQL is None, reason="needs a real psql binary on PATH to exercise the seed round-trip"
+)
 
 
 async def test_export_seed_round_trips_through_psql(db_session, monkeypatch, tmp_path):

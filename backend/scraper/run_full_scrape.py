@@ -16,13 +16,17 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from scraper import pool_sizing
 
-from app.core.database import AsyncSessionLocal, engine, init_db
-from app.core.scrape_lock import scrape_write_lock
-from app.models.models import Registration
-from app.services.scraper_service import persist_rto_batch, _state_code_lookup
-from scraper.vahan_scraper import DIMENSIONS, scrape_all_india
+pool_sizing.serial()  # before any app.* import -- see that module's docstring
+
+from sqlalchemy import delete, select  # noqa: E402
+
+from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
+from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.models.models import Registration  # noqa: E402
+from app.services.scraper_service import persist_rto_batch, _state_code_lookup  # noqa: E402
+from scraper.vahan_scraper import DIMENSIONS, scrape_all_india  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("run_full_scrape")
@@ -125,11 +129,28 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
             if item.get("state_complete"):
                 state_name = item["state_name"]
                 total, skipped, succeeded = item["rto_total"], item["rto_skipped"], item["rto_succeeded"]
+                empty = item.get("rto_empty", 0)
                 done_now = skipped + succeeded
+                # An RTO returning zero records still counts as succeeded --
+                # the request completed -- but it produced nothing to replace
+                # the synthetic fallback with. A state where EVERY RTO came
+                # back empty therefore looked 100% complete and purged its
+                # synthetic rows down to a hole. VAHAN answering with blank
+                # tables instead of erroring is a real degradation mode (it is
+                # how the 2017 run failed), so require at least one RTO with
+                # actual records before deleting anything.
+                produced_records = succeeded > empty
                 # Only purge on the maker pass -- see _purge_synthetic_for_state
                 # docstring. vehicle_class/fuel passes are additive and never
                 # touch the synthetic fallback data.
-                if dimension == "maker" and total > 0 and done_now == total:
+                if dimension == "maker" and total > 0 and done_now == total and not produced_records:
+                    states_partial += 1
+                    logger.error(
+                        "%s: all %d/%d RTOs returned zero records -- keeping the synthetic "
+                        "rows and re-scraping next run rather than purging to nothing",
+                        state_name, empty, total,
+                    )
+                elif dimension == "maker" and total > 0 and done_now == total:
                     purged = await _purge_synthetic_for_state(db, state_name, year)
                     await db.commit()
                     states_replaced += 1

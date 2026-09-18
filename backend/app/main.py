@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,11 +11,23 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.core.config import settings
 from app.core.database import init_db, AsyncSessionLocal
 from app.core.rate_limit import limiter
+from app.core.request_context import RequestIdFilter, get_request_id, new_request_id, set_request_id
+from app.core.worker_guard import assert_single_worker
 from app.api.v1.router import api_router
 from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
 from scraper.scheduler import run_scheduler_loop, run_fada_scheduler_loop, run_previous_year_revalidation_loop
 
-logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=settings.LOG_LEVEL,
+    # [%(request_id)s] is what makes a production failure traceable: every
+    # line a request produced carries the same id, and the response carries
+    # it back, so a report of "it broke" maps to specific lines. The filter
+    # below supplies "-" for records logged outside any request -- without
+    # it, logging raises KeyError on its own format string.
+    format="%(asctime)s %(levelname)s %(name)s [%(request_id)s]: %(message)s",
+)
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(RequestIdFilter())
 
 
 @asynccontextmanager
@@ -24,6 +37,12 @@ async def lifespan(app: FastAPI):
     # reach. setup-native.sh generates a real secret into .env; this catches
     # every other path (a manual deploy, a forgotten .env) before it ever
     # accepts a request instead of silently running with a public key.
+    # Same shape as the JWT check below, and for the same reason: a
+    # misconfiguration that silently half-works is worse than a refusal to
+    # boot. Multi-worker quietly multiplies the login-guess allowance, splits
+    # the caches, and oversubscribes Postgres. See app/core/worker_guard.py
+    # for what it can and cannot detect.
+    assert_single_worker()
     if settings.JWT_SECRET_KEY == "dev-only-change-me-in-production":
         raise RuntimeError(
             "JWT_SECRET_KEY is still the insecure default -- set a real one in .env "
@@ -85,8 +104,28 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
+async def request_context_and_security_headers(request: Request, call_next):
+    # Set BEFORE call_next, never after: Starlette runs the rest of the stack
+    # in a task that COPIES this context, so a value set here is visible
+    # downstream, while one set downstream is invisible here. That asymmetry
+    # is also why user_id travels back on request.state instead.
+    request_id = new_request_id(request.headers.get("X-Request-ID"))
+    set_request_id(request_id)
+    started = time.perf_counter()
+
     response = await call_next(request)
+
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    # One line per request, replacing uvicorn's access log (the Dockerfile
+    # passes --no-access-log): uvicorn's own logger sets propagate=False and
+    # its own formatter, so it can never carry the request id.
+    logging.getLogger("app.request").info(
+        "%s %s -> %s in %.0fms%s",
+        request.method, request.url.path, response.status_code, elapsed_ms,
+        f" user={request.state.user_id}" if getattr(request.state, "user_id", None) else "",
+    )
+    # Echoed so a screenshot or a browser network tab maps to a log line.
+    response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     # Swagger UI is the only page this API serves that needs inline scripts
@@ -112,8 +151,29 @@ async def security_headers(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    logging.getLogger("app").exception("Unhandled exception on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    # 57014 is Postgres' query_canceled, which is what get_db's
+    # statement_timeout produces. Expected by design, not a crash -- logging it
+    # as an unhandled exception with a full traceback would bury the real ones,
+    # and 500 tells the caller we broke when we actually gave up on time.
+    # An admin's pg_cancel_backend() reports 57014 too and would be described
+    # as a timeout here; that needs someone deliberately cancelling a backend,
+    # and "we stopped running your query" is true either way.
+    if getattr(getattr(exc, "orig", None), "sqlstate", None) == "57014":
+        logging.getLogger("app").warning(
+            "Query exceeded the %sms statement timeout on %s %s",
+            settings.DB_STATEMENT_TIMEOUT_MS, request.method, request.url.path,
+        )
+        return JSONResponse(status_code=504, content={"detail": "Query took too long; narrow the filters and retry."})
+    logging.getLogger("app").exception(
+        "Unhandled exception on %s %s (user=%s)",
+        request.method, request.url.path, getattr(request.state, "user_id", None),
+    )
+    # The id is in the log line via the format string; returning it lets a
+    # user quote it instead of describing what they were doing.
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "request_id": get_request_id()},
+    )
 
 
 app.include_router(api_router, prefix=settings.API_V1_STR)

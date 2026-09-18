@@ -66,6 +66,36 @@ async def makers_with_coverage_gaps(
     }
 
 
+def reject_vehicle_model(vehicle_model: str | None) -> None:
+    """Refuse a model filter rather than return a confident zero.
+
+    VAHAN publishes no Model dimension at all -- its report Y-axis offers
+    exactly Vehicle Category, Vehicle Class, Norms, Fuel, Maker and State, and
+    the word "model" appears nowhere on the page -- so nothing has ever
+    written this column: 0 populated rows out of 18.4M. Filtering on it
+    matched nothing and returned an empty result that reads as "no
+    registrations for that model" rather than "this dimension does not
+    exist", which is the same silently-wrong shape this module guards against
+    elsewhere.
+
+    Module-level rather than inline in apply_common_filters because not every
+    endpoint routes through that: registrations.py builds its filter list by
+    hand, and without this it kept returning the confident empty result long
+    after the shared path started refusing.
+
+    Model-level data is obtainable, but only from a paid reseller of MoRTH
+    data, not from the dashboard this app scrapes.
+    """
+    if vehicle_model:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "vehicle_model filtering is not available: VAHAN's public reports carry no "
+                "model dimension, so no model data exists in this database."
+            ),
+        )
+
+
 def apply_common_filters(
     query: Select,
     *,
@@ -97,25 +127,7 @@ def apply_common_filters(
         query = query.where(Registration.commercial_tier == commercial_tier)
     if maker:
         query = query.where(Registration.maker == maker)
-    if vehicle_model:
-        # Refuse rather than return a confident zero. VAHAN publishes no
-        # Model dimension at all -- its report Y-axis offers exactly Vehicle
-        # Category, Vehicle Class, Norms, Fuel, Maker and State, and the
-        # word "model" appears nowhere on the page -- so nothing has ever
-        # written this column: 0 populated rows out of 18.4M. A filter on it
-        # therefore matched nothing and returned an empty result that reads
-        # as "no registrations for that model" rather than "this dimension
-        # does not exist", which is the same silently-wrong shape this
-        # module now guards against elsewhere.
-        # Model-level data is obtainable, but only from a paid reseller of
-        # MoRTH data, not from the dashboard this app scrapes.
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "vehicle_model filtering is not available: VAHAN's public reports carry no "
-                "model dimension, so no model data exists in this database."
-            ),
-        )
+    reject_vehicle_model(vehicle_model)
     return query
 
 

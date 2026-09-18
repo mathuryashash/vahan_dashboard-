@@ -70,6 +70,50 @@ data) covering 2016-2026. A background scheduler also keeps scraping fresh
 data automatically every 5 hours, and you can trigger an on-demand refresh
 from the dashboard's header (rate-limited to once per 30 minutes).
 
+## Deployment constraints
+
+**Run exactly one API worker.** The app refuses to start otherwise (see
+`backend/app/core/worker_guard.py`). Three things depend on it:
+
+1. The login rate limiter (`backend/app/core/rate_limit.py`) counts failed
+   attempts in process memory. N workers means N x 5 password guesses per
+   window against accounts whose emails are public.
+2. The endpoint response caches (`TTLCache`, used across
+   `backend/app/api/v1/endpoints/`) are per-process. N workers means N
+   caches, so the same query can show two different numbers depending on
+   which worker answers.
+3. Each process opens `DB_POOL_SIZE + DB_MAX_OVERFLOW` = 60 connections
+   against Postgres `max_connections=100`, which the scraper processes
+   already draw on (`backend/scraper/pool_sizing.py`). Two workers is 120,
+   and the excess fails to connect rather than queueing.
+
+Going multi-worker is a real day of work, not a flag: the limiter and the
+caches have to move to a shared store (Redis), and the pool sizes have to be
+divided by the worker count. Once that is genuinely done, set
+`ALLOW_MULTI_WORKER=true`. One worker comfortably serves a demo and a single
+customer, so there is no need to do this speculatively.
+
+The guard reads *declared* intent -- `WEB_CONCURRENCY`, `--workers`/`-w`,
+Gunicorn. It cannot see N separate containers or VPSes each running one
+worker behind a load balancer, and every constraint above breaks there
+identically. Nothing but this paragraph protects that case.
+
+**Back up the database.** `scripts/backup.sh` (nightly `pg_dump -Fc`, 7 daily
++ 4 weekly, optional off-host copy) and `scripts/restore-check.sh`, which
+proves the newest dump actually restores. Run the restore check before any
+demo or migration -- an untested backup is a rumour. A filesystem copy of the
+`postgres-data` volume while Postgres is running is *not* a backup.
+
+**Logs.** Each container is capped at 10 MB x 5 files
+(`docker/docker-compose.yml`); Docker's default is unlimited, and a full disk
+takes Postgres down with it. Every request logs one line carrying an
+`X-Request-ID` that is also returned to the caller, so a reported failure maps
+to specific log lines. The `setup-native.sh` path writes an unrotated
+`backend.log` -- that path is for development only.
+
+Full checklist, including TLS and the remaining items:
+`docs/PRODUCTION_HARDENING_CHECKLIST.md`.
+
 ## Troubleshooting
 
 - **Port already in use (3000 or 8020):** something else on your machine is
