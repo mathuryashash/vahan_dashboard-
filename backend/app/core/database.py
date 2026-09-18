@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
@@ -30,8 +31,12 @@ else:
         # fast (see the VACUUM ANALYZE note in that incident, and
         # /summary/available-years' caching) -- this is headroom on top of
         # that, not a replacement for it.
-        pool_size=20,
-        max_overflow=40,
+        # Sized from settings so the scraper entrypoints can ask for a much
+        # smaller pool: they are separate processes sharing one Postgres
+        # max_connections=100, and at 60 apiece several concurrent backfills
+        # plus the API oversubscribe it. See DB_POOL_SIZE's comment.
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
     )
 AsyncSessionLocal = async_sessionmaker(
     engine,
@@ -44,6 +49,37 @@ Base = declarative_base()
 
 async def get_db():
     async with AsyncSessionLocal() as session:
+        # Request-scoped timeouts, transaction-local so they cannot leak onto
+        # the next request that borrows this pooled connection. Here rather
+        # than on the engine because migrations' CREATE INDEX and
+        # scrape_quality's VACUUM ANALYZE run for minutes by design and must
+        # not inherit them -- neither goes through this dependency.
+        #
+        # Both bound a single statement: how long it may run, and how long it
+        # may wait for a lock. Deliberately NOT
+        # idle_in_transaction_session_timeout, which bounds the gaps BETWEEN
+        # statements instead -- and this execute opens the transaction before
+        # the dependency yields, so every request is already inside one before
+        # its endpoint runs a query (measured: xact_start is set at yield).
+        # Endpoints that await VAHAN mid-request legitimately sit idle in that
+        # transaction for minutes -- /leaderboard fans out to 20 live scrapes
+        # at up to 90s each -- and killing the connection under them turns an
+        # already-correct response into a 500 at commit time. An idle ceiling
+        # belongs on the role or server, well above any real request, not here.
+        #
+        # set_config(..., is_local => true) is the function form of SET LOCAL,
+        # used for two reasons: asyncpg sends this through a prepared
+        # statement, which rejects several ";"-separated commands, and the
+        # function form takes a bind parameter instead of an interpolated
+        # value. One round trip, no string building.
+        if not is_sqlite:
+            await session.execute(
+                text(
+                    "SELECT set_config('statement_timeout', :ms, true),"
+                    " set_config('lock_timeout', :ms, true)"
+                ),
+                {"ms": str(int(settings.DB_STATEMENT_TIMEOUT_MS))},
+            )
         try:
             yield session
             await session.commit()
@@ -91,6 +127,15 @@ async def init_db():
     await drop_orphaned_indexes(engine, [
         "ix_registrations_day", "ix_registrations_recorded_at",
         "idx_mct_year_maker", "idx_mft_year_maker",
+        # Redundant leading-column prefixes of wider composites, plus one
+        # boolean index the planner can never use -- 637 MB on registrations
+        # alone, and an index write on every one of its ~18M rows. Proven
+        # inert: dropped inside a rolled-back transaction, six representative
+        # dashboard queries re-EXPLAINed, all six plans byte-identical.
+        "ix_registrations_year", "ix_registrations_vehicle_class",
+        "ix_registrations_is_supplementary",
+        # Zero scans since this database was built (stats never reset).
+        "idx_mft_year_fuel",
         # Superseded by idx_mlqc_natural_key_v2, which adds rto_code to the
         # same key -- must be dropped (not just left alongside) or the old,
         # narrower UNIQUE would reject a legitimate RTO-scoped row for a

@@ -53,6 +53,27 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "dev-only-change-me-in-production"
     JWT_EXPIRE_MINUTES: int = 60 * 24  # 24h
 
+    # Connection budget. Postgres ships with max_connections=100, and every
+    # process using this engine can open POOL_SIZE + MAX_OVERFLOW. The API
+    # is one process; each scraper run is another, and several can run at
+    # once during a backfill. At 20+40 each, four processes want 240 against
+    # a ceiling of 100 -- the excess does not queue, it fails to connect.
+    # Scraper entrypoints lower these via the environment (they need a
+    # handful of connections, not sixty); the defaults here are sized for
+    # the API, whose Overview page alone fires ~8 concurrent aggregates.
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 40
+
+    # Applied to HTTP request sessions only (see database.get_db), not to
+    # migrations, VACUUM or the scrapers -- CREATE INDEX on an 18M-row table
+    # and VACUUM ANALYZE legitimately run for minutes, and killing those
+    # would be worse than the runaway query this guards against. Without it
+    # a single slow query holds its connection until the client gives up,
+    # which is how one bad plan becomes pool exhaustion and then an outage.
+    # 30s is far above any healthy request here (the slowest cold aggregate
+    # measured ~3s).
+    DB_STATEMENT_TIMEOUT_MS: int = 30_000
+
     # False by default so an omitted .env is safe. /docs, /redoc and
     # /openapi.json enumerate every route, every query parameter (including
     # the scope-clamped ones), every schema and every scope dependency --

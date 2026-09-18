@@ -53,13 +53,22 @@ def _token_from_cookie(request: Request) -> str:
     return token
 
 
-async def get_current_user(token: str = Depends(_token_from_cookie), db: AsyncSession = Depends(get_db)) -> User:
+async def get_current_user(
+    request: Request,
+    token: str = Depends(_token_from_cookie),
+    db: AsyncSession = Depends(get_db),
+) -> User:
     payload = decode_access_token(token)
     if payload is None:
         raise _credentials_error
     user = (await db.execute(select(User).where(User.id == int(payload["sub"])))).scalar_one_or_none()
     if user is None or not user.is_active:
         raise _credentials_error
+    # Lets the per-request log line and the 500 handler say WHO hit the
+    # problem. On request.state rather than a ContextVar because the
+    # middleware runs in an outer context: a value set here would not be
+    # visible to it (see app/core/request_context.py).
+    request.state.user_id = user.id
     return user
 
 
