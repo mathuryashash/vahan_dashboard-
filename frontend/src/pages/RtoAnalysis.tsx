@@ -1,6 +1,6 @@
 // frontend/src/pages/RtoAnalysis.tsx
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { getStates, getRtosForState, getRtoAnalysis, getAvailableYears, getDistrictsForState, getRtosForDistrict, getLiveRtos } from '../api/vahan';
 import { LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
@@ -63,16 +63,26 @@ export function RtoAnalysisPage() {
   // there's no per-district registration data of its own, so this doesn't
   // need its own analysis endpoint, just the district's RTO codes to
   // intersect against the state's already-ranked RTO list below.
+  // Year-aware: the server offers only districts that resolve to data in this
+  // FY, so picking one can no longer land on an empty list.
   const { data: districts } = useQuery<{ district_code: string; district_name: string }[]>({
-    queryKey: ['districts', stateCode],
-    queryFn: () => getDistrictsForState(stateCode),
+    queryKey: ['districts', stateCode, fyYear],
+    queryFn: () => getDistrictsForState(stateCode, fyYear),
     enabled: !!stateCode && auth.scope_type !== 'rto',
+    // Keeps the pick while the new year's list loads, instead of flashing
+    // "All Districts". State changes reset the pick, so only years reach this.
+    placeholderData: keepPreviousData,
   });
 
+  // A district offered for one FY may not be offered for another. Derived
+  // rather than reset in an effect: a stale pick is simply ignored, instead
+  // of silently filtering the RTO list down to nothing after a year change.
+  const activeDistrict = districts?.some((d) => d.district_code === districtCode) ? districtCode : '';
+
   const { data: districtRtos } = useQuery<{ rto_code: string }[]>({
-    queryKey: ['districtRtos', districtCode],
-    queryFn: () => getRtosForDistrict(districtCode),
-    enabled: !!districtCode,
+    queryKey: ['districtRtos', activeDistrict],
+    queryFn: () => getRtosForDistrict(activeDistrict),
+    enabled: !!activeDistrict,
   });
 
   const { data: rtos, isLoading: rtosLoading, isError: rtosError, refetch: refetchRtos } = useQuery<RTOListItem[]>({
@@ -97,7 +107,7 @@ export function RtoAnalysisPage() {
     enabled: !!rtoCode,
   });
 
-  const districtRtoCodes = districtCode ? new Set((districtRtos || []).map((r) => r.rto_code)) : null;
+  const districtRtoCodes = activeDistrict ? new Set((districtRtos || []).map((r) => r.rto_code)) : null;
   const rtosInScope = districtRtoCodes ? (rtos || []).filter((r) => districtRtoCodes.has(r.rto_code)) : (rtos || []);
   const rtoChartData = rtosInScope.map((r) => ({ name: r.rto_name || r.rto_code, code: r.rto_code, count: r.total }));
 
@@ -151,7 +161,7 @@ export function RtoAnalysisPage() {
         {auth.scope_type !== 'rto' && (
           <LabeledSelect
             label="District"
-            value={districtCode}
+            value={activeDistrict}
             onChange={(e) => { setDistrictCode(e.target.value); setRtoCode(null); }}
             disabled={!stateCode}
             className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold cursor-pointer w-full max-w-xs disabled:opacity-40 disabled:cursor-not-allowed"
@@ -184,7 +194,7 @@ export function RtoAnalysisPage() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
-                {districtCode ? `RTOs — ${districts?.find((d) => d.district_code === districtCode)?.district_name ?? 'District'}` : 'RTOs — All Districts'}
+                {activeDistrict ? `RTOs — ${districts?.find((d) => d.district_code === activeDistrict)?.district_name ?? 'District'}` : 'RTOs — All Districts'}
               </h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">click an RTO to see its company breakdown below</p>
             </div>
@@ -202,8 +212,8 @@ export function RtoAnalysisPage() {
           ) : rtoChartData.length === 0 ? (
             <EmptyState
               variant="no-data"
-              title={districtCode ? "No RTOs with data in this district/year" : "No data for this state/year"}
-              description={districtCode ? "Try a different district, year, or clear the district filter." : "Try a different year or state."}
+              title={activeDistrict ? "No RTOs with data in this district/year" : "No data for this state/year"}
+              description={activeDistrict ? "Try a different district, year, or clear the district filter." : "Try a different year or state."}
             />
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 38)}>

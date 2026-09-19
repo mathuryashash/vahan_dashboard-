@@ -7,6 +7,7 @@ from app.core.auth import require_role, get_current_user
 from app.core.database import get_db
 from app.models.models import OEMMonthlySales, ScrapeQualityLog, State, User, UserRole
 from app.schemas.schemas import RefreshResponse
+from app.services import source_health
 from app.services.scraper_service import run_scraper
 from app.core.config import settings
 
@@ -60,6 +61,14 @@ async def trigger_refresh(
         status="started",
         message="Scraper job started in background. This can take over an hour for a full India refresh.",
     )
+
+
+@router.get("/source-health")
+async def get_source_health(_admin: User = Depends(require_role(UserRole.ADMIN))):
+    """Latest hourly check of both VAHAN sites -- see app/services/source_health.py.
+    Admin-only: it is operational detail, not something a customer's analyst
+    needs to see, and "our data source is down" is ours to communicate."""
+    return source_health.current_status()
 
 
 @router.get("/status")

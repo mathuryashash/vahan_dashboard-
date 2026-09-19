@@ -10,6 +10,7 @@ from app.core.query_filters import (
 )
 from app.core.scope import get_effective_category, get_effective_state, scoped_category, scoped_rto
 from app.core.cache import TTLCache
+from app.core.maker_names import note_for
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
 
@@ -413,6 +414,74 @@ async def get_maker_category_breakdown(
         for row in response:
             row["partial"] = row[key_name] in gaps
     _maker_category_breakdown_cache.set(cache_key, response)
+    return response
+
+
+_brand_options_cache = TTLCache(_CACHE_TTL_SECONDS)
+
+# National registrations a maker needs in a category, in the year, to be
+# offered under it. Measured, not guessed (2026): the old rule -- any maker
+# with >=1% of its own volume in the category -- put Mercedes-Benz (72 units),
+# Escorts (6) and Mitsubishi (4) under Two-Wheeler, 221 makers in all. A share
+# rule cannot fix that, because BMW (21% two-wheeler, 3,736 units: Motorrad)
+# and Piaggio (27%, 28,443: Vespa/Aprilia) are genuine two-wheeler makers with
+# LOWER shares than some of the noise. Absolute volume separates them cleanly
+# and leaves 63 two-wheeler makers.
+_MIN_BRAND_UNITS = 100
+
+
+@router.get("/brand-options")
+async def get_brand_options(
+    year: int = _DEFAULT_YEAR,
+    state: str | None = Depends(get_effective_state),
+    vehicle_category: str | None = Depends(get_effective_category),
+    user_rto: str | None = Depends(scoped_rto),
+    db: AsyncSession = Depends(get_db),
+):
+    """Makers to offer in the OEM/Brand picker: the complete list, not a top-N,
+    so every real maker is reachable by search. Largest first.
+
+    Membership is decided NATIONALLY and the counts are scoped. Whether BMW
+    makes two-wheelers is a fact about BMW, not about one state; gating on
+    in-scope volume instead would drop genuine brands in every small state or
+    RTO. The national aggregate is only ever a yes/no gate -- no national
+    figure is returned -- and the outer query is clamped to the caller's own
+    state, RTO and category, so every maker listed has registrations the caller
+    is entitled to see, and every count shown is theirs.
+    """
+    cache_key = (year, state, vehicle_category, user_rto)
+    cached = _brand_options_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    base = [
+        MakerCategoryTotal.year == year,
+        # Not companies: VAHAN's residual bucket, and a National Informatics
+        # Centre test account that carries 273,864 registrations (2003-2019).
+        MakerCategoryTotal.maker != "OTHERS",
+        ~MakerCategoryTotal.maker.ilike("NIC TEST ACCOUNT%"),
+    ]
+    if vehicle_category:
+        base.append(MakerCategoryTotal.vehicle_category == vehicle_category)
+        # The floor is leak control for a CATEGORY list, so it applies only
+        # here. "All Brands" has no category to leak into, and a floor there
+        # only hid real companies: 1,988 registered in 2026 but 540 were
+        # listed -- small EV makers among the missing.
+        base.append(MakerCategoryTotal.maker.in_(
+            select(MakerCategoryTotal.maker).where(*base)
+            .group_by(MakerCategoryTotal.maker)
+            .having(func.sum(MakerCategoryTotal.count) >= _MIN_BRAND_UNITS)
+        ))
+    query = select(MakerCategoryTotal.maker, func.sum(MakerCategoryTotal.count).label("total")).where(*base)
+    if state:
+        query = query.where(MakerCategoryTotal.state_name == state)
+    if user_rto:
+        query = query.where(MakerCategoryTotal.rto_code == user_rto)
+    query = query.group_by(MakerCategoryTotal.maker).order_by(desc("total"))
+
+    rows = (await db.execute(query)).all()
+    response = [{"maker": r.maker, "count": r.total, "note": note_for(r.maker)} for r in rows]
+    _brand_options_cache.set(cache_key, response)
     return response
 
 

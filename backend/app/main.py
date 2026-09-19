@@ -15,6 +15,7 @@ from app.core.request_context import RequestIdFilter, get_request_id, new_reques
 from app.core.worker_guard import assert_single_worker
 from app.api.v1.router import api_router
 from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
+from app.services import source_health
 from scraper.scheduler import run_scheduler_loop, run_fada_scheduler_loop, run_previous_year_revalidation_loop
 
 logging.basicConfig(
@@ -68,7 +69,11 @@ async def lifespan(app: FastAPI):
     # Off by default -- see ENABLE_PREVIOUS_YEAR_REVALIDATION's own comment
     # in config.py for why this isn't just always on.
     revalidation_task = asyncio.create_task(run_previous_year_revalidation_loop()) if settings.ENABLE_PREVIOUS_YEAR_REVALIDATION else None
+    # Always on: the old VAHAN dashboard is past its announced shutdown date,
+    # and the alert is only useful if it is running before that happens.
+    source_health_task = asyncio.create_task(source_health.run_source_health_loop())
     yield
+    source_health_task.cancel()
     scheduler_task.cancel()
     if fada_scheduler_task:
         fada_scheduler_task.cancel()

@@ -232,6 +232,26 @@ async def test_rto_analysis_count_excludes_a_makers_other_category_volume(client
         _restore_national_admin()
 
 
+async def test_rto_analysis_avg_monthly_excludes_other_categories_volume(client, db_session):
+    """avg_monthly used to sum the maker-pass rows of every maker with ANY
+    row in the category. Those rows are a maker's whole volume, so one stray
+    Hero car pulled all 400 of its bikes into a four-wheeler account's
+    average (live: 15x at a Karnataka RTO for three-wheelers)."""
+    await _seed(db_session)
+    geo = dict(state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Delhi RTO")
+    db_session.add(MakerCategoryTotal(**geo, year=2026, maker="HERO MOTOCORP", vehicle_class="MOTOR CAR",
+                                      vehicle_category="Four-Wheeler", count=1))
+    await db_session.commit()
+
+    _login_as(**FOUR_WHEELER)
+    try:
+        response = await client.get("/api/v1/rto/DL1/analysis", params={"year": 2025})
+        assert response.status_code == 200
+        assert response.json()["avg_monthly"] == CAR_COUNT
+    finally:
+        _restore_national_admin()
+
+
 async def test_state_ranking_and_all_states_comparison_are_clamped(client, db_session):
     await _seed(db_session)
     _login_as(**TWO_WHEELER)

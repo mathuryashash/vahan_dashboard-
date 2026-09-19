@@ -1,5 +1,5 @@
 // frontend/src/pages/Overview.tsx
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AreaChart, Area, PieChart, Pie, Cell,
@@ -12,9 +12,9 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { insidePieLabel } from '../components/ChartAxisTick';
 import { ExportCsvButton } from '../components/ExportCsvButton';
 import { LabeledSelect } from '../components/LabeledSelect';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getTopMakers, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
-import { MIN_CATEGORY_SHARE } from '../utils/tripleEstimate';
+import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getBrandOptions, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
 import { useScopeLock } from '../hooks/useScopeLock';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
@@ -290,67 +290,30 @@ export function OverviewPage() {
     queryFn: ({ signal }) => getCategories({ year: selectedYear, month: selectedMonth, state: selectedState }, signal),
   });
 
-  // Deliberately NOT filtered by selectedCategory: the live scraper can only
-  // pivot one dimension (maker OR vehicle_class) per RTO visit, so the
-  // canonical maker-pass rows always store vehicle_class='All' and the
-  // vehicle_class-pass rows always store maker=NULL -- maker + a specific
-  // category never coexist on the same row for any live-scraped year.
-  // Filtering this dropdown by category would always return zero brands.
-  const { data: makers } = useQuery({
-    queryKey: ['makers', selectedYear, selectedMonth, selectedState],
-    queryFn: ({ signal }) => getTopMakers({
-      year: selectedYear,
-      month: selectedMonth,
-      state: selectedState,
-      limit: 30
-    }, signal),
+  // The complete OEM/Brand list, built server-side (get_brand_options in
+  // backend categories.py). It replaces two limits the old client-side list
+  // had: "All Brands" was a top-30, so VinFast -- 17th in Four-Wheeler for
+  // 2026 -- was unreachable; and category membership was a 1%-of-own-volume
+  // share rule, which put Mercedes-Benz (72 units) under Two-Wheeler while
+  // genuine bike makers like BMW and Piaggio have lower shares than that
+  // noise. Membership is now national volume, and the list is searchable.
+  const { data: brandRows } = useQuery({
+    queryKey: ['brandOptions', selectedYear, selectedCategory, selectedState],
+    queryFn: ({ signal }) => getBrandOptions({ year: selectedYear, vehicle_category: selectedCategory, state: selectedState }, signal),
   });
+  const brandOptions = useMemo(
+    () => (brandRows || []).map((b) => ({ value: b.maker, label: b.maker, note: b.note })),
+    [brandRows],
+  );
 
-  // The comment above is about getTopMakers specifically (that pass's rows
-  // always have maker=NULL when category is set) -- it doesn't apply to
-  // MakerCategoryTotal (see MakerCategoryPanel below), a SEPARATE real
-  // crosstab that has both maker AND category on the same row. Sourcing the
-  // OEM/Brand list from that instead, whenever a category is picked, so the
-  // dropdown only offers makers with a real (non-negligible) presence in
-  // that category -- same MIN_CATEGORY_SHARE cutoff as the Top Manufacturers
-  // ranking (tripleEstimate.ts), and the same reasoning: a maker's real
-  // count in one category can be genuine but a rounding error for them
-  // (found live: two-wheeler makers showing up as "Four-Wheeler" brands).
-  // limit:100 (vs. getTopMakers' unscoped limit:30 above) because a maker
-  // can rank respectably within one category while being far outside the
-  // top 30 overall -- confirmed live this is exactly why VinFast (real
-  // rank 17/101 in Four-Wheeler for 2026) never appeared in the unscoped
-  // "All Brands" list, despite having real data.
-  const { data: categoryScopedMakers } = useQuery({
-    queryKey: ['brandOptionsByCategory', selectedYear, selectedCategory, selectedState],
-    queryFn: ({ signal }) => getMakerCategoryBreakdown({ year: selectedYear, vehicle_category: selectedCategory!, state: selectedState, limit: 100 }, signal),
-    enabled: !!selectedCategory,
-  });
-  const { data: makerYearTotalsForShare } = useQuery({
-    queryKey: ['makerYearTotalsForShare', selectedYear, selectedState],
-    queryFn: ({ signal }) => getTopMakers({ year: selectedYear, state: selectedState, limit: 100 }, signal),
-    enabled: !!selectedCategory,
-  });
-  const myTotalForShareMap = new Map<string, number>((makerYearTotalsForShare || []).map((m: { maker: string; count: number }) => [m.maker, m.count]));
-  const brandOptions: string[] = selectedCategory
-    ? (categoryScopedMakers || [])
-        .filter((m: { maker: string; count: number }) => {
-          const myTotal = myTotalForShareMap.get(m.maker);
-          return !myTotal || m.count / myTotal >= MIN_CATEGORY_SHARE;
-        })
-        .map((m: { maker: string }) => m.maker)
-        .sort()
-    : (makers || []).map((m: { maker: string }) => m.maker);
-
-  // A maker picked while unscoped (or under a different category) can fall
-  // outside the newly category-scoped list -- clear it rather than leave
-  // the <select>'s value pointing at an option that's no longer rendered.
+  // A maker picked under one category can fall outside another's list --
+  // clear it rather than keep filtering by a brand the picker no longer
+  // offers. Only once the list has loaded, so a refetch can't clear it.
   useEffect(() => {
-    if (selectedCategory && selectedMaker && !brandOptions.includes(selectedMaker)) {
+    if (brandRows && selectedCategory && selectedMaker && !brandRows.some((b) => b.maker === selectedMaker)) {
       setSelectedMaker(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCategory, selectedMaker, brandOptions.join('|')]);
+  }, [brandRows, selectedCategory, selectedMaker, setSelectedMaker]);
 
   // The live VAHAN4 site has no day-level granularity at all -- its finest
   // X-axis option is "Month Wise" (confirmed against the live site's own
@@ -508,7 +471,11 @@ export function OverviewPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance">
+      {/* relative z-20: animate-entrance leaves this card with its own
+          stacking context, so the brand picker's dropdown z-index would only
+          rank inside it and the charts below would paint over the list --
+          the same bug LiveMakerQueryPanel hit and fixed this way. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance relative z-20">
         {isStateLocked ? (
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</span>
@@ -557,12 +524,13 @@ export function OverviewPage() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <LabeledSelect label="OEM / Brand" value={selectedMaker || ''} onChange={(e) => setSelectedMaker(e.target.value || null)} className={selectClass}>
-            <option value="">All Brands</option>
-            {brandOptions.map((maker) => (
-              <option key={maker} value={maker}>{maker}</option>
-            ))}
-          </LabeledSelect>
+          <SearchableSelect
+            label="OEM / Brand"
+            value={selectedMaker || ''}
+            onChange={(maker) => setSelectedMaker(maker || null)}
+            options={brandOptions}
+            allLabel="All Brands"
+          />
           {fuelGroup && (
             <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight">
               not scoped to {fuelGroup} — VAHAN can't cross maker × fuel here, see panel below

@@ -59,11 +59,11 @@ export function Sidebar() {
       <div className="px-4 py-5 border-b border-[var(--border)]">
         {!sidebarCollapsed && (
           <div className="animate-entrance">
-            <p className="text-sm font-bold text-[var(--text-primary)] tracking-tight">VAHAN SEWA</p>
+            <p className="text-sm font-bold text-[var(--text-primary)] tracking-tight">GRYDENCE</p>
           </div>
         )}
         {sidebarCollapsed && (
-          <img src="/company-logo.png" alt="Logo" className="w-8 h-8 rounded-lg object-cover mx-auto" />
+          <img src="/company-logo.png" alt="Grydence" className="w-8 h-8 rounded-lg object-cover mx-auto" />
         )}
       </div>
 

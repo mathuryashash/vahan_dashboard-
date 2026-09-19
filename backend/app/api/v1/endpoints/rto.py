@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
-from app.core.query_filters import apply_total_filters, category_makers, exclude_supplementary
+from app.core.query_filters import apply_total_filters, exclude_supplementary
 from app.core.scope import require_rto_code, require_state_code, scoped_category, scoped_rto
 from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, Registration
@@ -24,9 +24,19 @@ def fy_filter(fy_year: int):
     Month values never collide across the two calendar years (Apr-Dec vs
     Jan-Mar), so downstream DISTINCT month/aggregate math stays correct.
     """
-    return or_(
-        and_(Registration.year == fy_year, Registration.month >= 4),
-        and_(Registration.year == fy_year + 1, Registration.month <= 3),
+    # The leading `year IN (...)` is implied by the OR below and changes no
+    # result -- it exists for the index. Every registrations index here leads
+    # (rto_code, year, ...), and an OR across two years leaves Postgres only
+    # rto_code to seek on, so each probe walked that RTO's history from 2003
+    # forward, discarding ~14,000 index entries to reach the current FY
+    # (measured: "Rows Removed by Filter: 13771" per RTO). The IN gives it a
+    # year to seek straight to.
+    return and_(
+        Registration.year.in_([fy_year, fy_year + 1]),
+        or_(
+            and_(Registration.year == fy_year, Registration.month >= 4),
+            and_(Registration.year == fy_year + 1, Registration.month <= 3),
+        ),
     )
 
 
@@ -134,7 +144,7 @@ async def get_rto_analysis(
         # category+month but no maker; the same pairwise-only ceiling
         # tripleEstimate.ts works around on the frontend). So a scoped
         # account's window is the two calendar years the FY spans -- the
-        # convention category_makers already uses just below, keeping this
+        # convention category_makers uses elsewhere, keeping this
         # endpoint internally consistent -- which fully covers the FY but
         # also the ~12 months either side of it.
         #
@@ -161,21 +171,17 @@ async def get_rto_analysis(
             .where(Registration.rto_code == rto_code, fy_filter(year))
         ).group_by(Registration.maker).order_by(desc("count"))
 
-    overview_query = exclude_supplementary(
+    # Same filter get_rtos_for_state uses: for a scoped account it reads the
+    # vehicle_class-pass rows, which carry a real category. Restricting the
+    # maker-pass rows to category_makers instead summed each such maker's
+    # WHOLE volume -- one stray car pulled a bike maker's every bike in.
+    overview_query = apply_total_filters(
         select(
             func.sum(Registration.count).label("total"),
             func.count(func.distinct(Registration.month)).label("months_with_data"),
-        ).where(Registration.rto_code == rto_code, fy_filter(year))
+        ).where(Registration.rto_code == rto_code, fy_filter(year)),
+        vehicle_category=user_category,
     )
-    # months_with_data feeds avg_monthly's denominator and is returned as-is.
-    # Unfiltered it counted every category's active months, so a scoped
-    # account got a denominator covering segments it can't see (and the month
-    # coverage of those segments leaked through the field itself). Restricted
-    # to the months this account's own makers were actually active.
-    if user_category:
-        overview_query = overview_query.where(
-            Registration.maker.in_(category_makers(user_category, years=[year, year + 1], rto_code=rto_code))
-        )
 
     maker_result = await db.execute(maker_query)
     makers = maker_result.all()

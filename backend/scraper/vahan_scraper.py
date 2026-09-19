@@ -75,6 +75,38 @@ PAGE_SIZE = 25
 MAX_PAGES = 200
 
 
+class SourceUnavailableError(RuntimeError):
+    """The VAHAN4 report page no longer carries the form this scraper drives.
+
+    The dashboard announced it would be discontinued after 15 August 2026 and
+    is still up past that date, so this is the expected way it ends. Kept
+    distinct from SessionExpiredError on purpose: that one means "log in
+    again and resume", this one means "the source is gone" -- retrying a
+    session would never help, and must not be what an operator sees."""
+
+
+# Exactly the markers the scraper matches on (see _parse_options, which looks
+# for `<select id="X_input"`), so this check and the scrape can never
+# disagree about whether the form is there.
+_REQUIRED_CONTROL_MARKERS = {
+    RTO_SELECT_ID: f'<select id="{RTO_SELECT_ID}_input"',
+    YAXIS_SELECT_ID: f'<select id="{YAXIS_SELECT_ID}_input"',
+    XAXIS_SELECT_ID: f'<select id="{XAXIS_SELECT_ID}_input"',
+    YEAR_SELECT_ID: f'<select id="{YEAR_SELECT_ID}_input"',
+    REFRESH_BUTTON_ID: f'id="{REFRESH_BUTTON_ID}"',
+}
+
+
+def missing_report_controls(page_html: str) -> list[str]:
+    """The report controls absent from `page_html`; [] means the form is intact.
+
+    Needed on top of load()'s ViewState check because a discontinuation notice
+    is most likely still a JSF page, and every JSF page has a ViewState. The
+    ViewState check would pass, and the scrape would only fail later on an
+    empty RTO dropdown -- which is read as an expired session and retried."""
+    return [name for name, marker in _REQUIRED_CONTROL_MARKERS.items() if marker not in page_html]
+
+
 def _extract_viewstate(text: str) -> str | None:
     m = re.search(
         r'(?:name="javax\.faces\.ViewState"[^>]*value="([^"]*)"'
@@ -434,6 +466,21 @@ class _VahanSession:
                 if attempt == retries - 1:
                     raise last_exc
                 logger.warning("ViewState missing (attempt %d/%d), retrying...", attempt + 1, retries)
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+
+            missing = missing_report_controls(resp.text)
+            if missing:
+                # Retried like a missing ViewState, so a truncated response
+                # can't trip it; a notice page fails the same way every time.
+                last_exc = SourceUnavailableError(
+                    f"VAHAN4 report form is missing {', '.join(missing)} -- the dashboard may have "
+                    "been replaced by a discontinuation notice, or changed its layout."
+                )
+                if attempt == retries - 1:
+                    raise last_exc
+                logger.warning("Report controls missing (attempt %d/%d): %s; retrying...",
+                               attempt + 1, retries, ", ".join(missing))
                 await asyncio.sleep(5 * (attempt + 1))
                 continue
 

@@ -79,6 +79,12 @@ class CaptchaSolveError(RuntimeError):
     """Every CAPTCHA attempt for one query was rejected."""
 
 
+class UnexpectedPageError(RuntimeError):
+    """The response was not a results page at all. Distinct from a state with
+    no registrations, which still renders a table of zeros -- see
+    parse_month_category_table for why the two must not be conflated."""
+
+
 class TesseractUnavailableError(RuntimeError):
     """tesseract binary missing, or its language data can't actually OCR --
     confirmed this session that a fresh Windows Tesseract install can have
@@ -266,13 +272,20 @@ def parse_month_category_table(html: str) -> list[dict]:
         tag.decompose()
     table = soup.find("table")
     if not table:
-        # A state/year with genuinely no registrations still renders a
-        # table (just all-zero cells, dropped below) -- no table at all
-        # means the response shape wasn't the results page we expected
-        # (e.g. a session-timeout interstitial), which would otherwise
-        # persist silently as indistinguishable from real zero-data.
-        logger.warning("no <table> found in response -- unexpected page shape, treating as 0 rows")
-        return []
+        # A state/year with genuinely no registrations still renders a table
+        # (all-zero cells, dropped below), so no table at all means this
+        # wasn't a results page -- a session-timeout interstitial, an error
+        # page, a changed layout. It used to log a warning and return [],
+        # which every caller then treated as real zero data:
+        # persist_state_month_category_batch deletes a state's year BEFORE
+        # inserting, so one bad page wiped it and the run logged "0 rows";
+        # and the live maker lookup cached the [] as "this maker sold 0" and
+        # served it to every later request. Raising lets each caller skip the
+        # state and keep what it had.
+        raise UnexpectedPageError(
+            "no results <table> in the response -- not a results page "
+            "(session timeout, error page, or changed site layout)"
+        )
 
     rows = [
         [cell.get_text(strip=True) for cell in tr.find_all(["td", "th"])]

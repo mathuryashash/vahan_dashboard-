@@ -1,6 +1,6 @@
 // frontend/src/components/Header.tsx
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { triggerRefresh, getDataQuality } from '../api/vahan';
+import { triggerRefresh, getDataQuality, getSourceHealth } from '../api/vahan';
 import { useEffect, useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import type { RefreshStatus, ScrapeProgress } from '../types';
@@ -42,6 +42,42 @@ function DataIntegrityBadge() {
         {data.level}
       </span>
     </div>
+  );
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  old_site: 'VAHAN dashboard',
+  new_site: 'VAHAN analytics site',
+};
+
+// Admin-only: are the scrapers' sources still usable? (backend
+// app/services/source_health.py). Silent while both are fine. The old
+// dashboard is past its announced shutdown date, so its "down" pill is the
+// alert that matters -- every maker/class/fuel scrape depends on it.
+function SourceHealthAlert() {
+  const { data } = useQuery({
+    queryKey: ['sourceHealth'],
+    queryFn: getSourceHealth,
+    refetchInterval: 5 * 60 * 1000,
+  });
+  if (!data) return null;
+  const down = Object.entries(data).filter(([, s]) => !s.ok);
+  if (!down.length) return null;
+  return (
+    <>
+      {down.map(([name, s]) => (
+        <div
+          key={name}
+          role="alert"
+          className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest font-bold text-[var(--danger)]"
+          title={`${s.detail}${s.down_since ? ` — down since ${new Date(s.down_since).toLocaleString('en-IN')}` : ''}. Scrapes that depend on it will fail.`}
+        >
+          <div className="w-2 h-2 rounded-full animate-pulse-soft" style={{ background: 'var(--danger)' }} />
+          {SOURCE_LABEL[name] ?? name} down
+        </div>
+      ))}
+      <div className="w-px h-5 bg-[var(--border)]" />
+    </>
   );
 }
 
@@ -104,14 +140,15 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, o
   return (
     <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-surface)] flex items-center justify-between px-6 shrink-0">
       <div className="flex items-center gap-3">
-        <img src="/company-logo.png" alt="Logo" className="w-8 h-8 rounded-lg object-cover" />
+        <img src="/company-logo.png" alt="Grydence" className="w-8 h-8 rounded-lg object-cover" />
         <div>
-          <h1 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">VAHAN SEWA</h1>
-          <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">Vehicle Analytics Observatory</p>
+          <h1 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">GRYDENCE</h1>
+          <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">Market Intelligence &amp; MIS</p>
         </div>
       </div>
 
       <div className="flex items-center gap-3">
+        {auth.role === 'admin' && <SourceHealthAlert />}
         <DataIntegrityBadge />
         <div className="w-px h-5 bg-[var(--border)]" />
 

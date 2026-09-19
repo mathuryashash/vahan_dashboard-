@@ -33,9 +33,9 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         className="w-full max-w-sm bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-8 shadow-sm"
       >
         <div className="flex items-center gap-3 mb-6">
-          <img src="/company-logo.png" alt="Logo" className="w-8 h-8 rounded-lg object-cover" />
+          <img src="/company-logo.png" alt="Grydence" className="w-8 h-8 rounded-lg object-cover" />
           <div>
-            <h1 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">VAHAN SEWA</h1>
+            <h1 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">GRYDENCE</h1>
             <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">Sign in</p>
           </div>
         </div>

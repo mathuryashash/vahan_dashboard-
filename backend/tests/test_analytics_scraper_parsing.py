@@ -10,7 +10,9 @@ is a real captured "Invalid CAPTCHA" response with no result table.
 """
 from pathlib import Path
 
-from scraper.analytics_scraper import _build_form, map_site_rtos, parse_month_category_table
+import pytest
+
+from scraper.analytics_scraper import UnexpectedPageError, _build_form, map_site_rtos, parse_month_category_table
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -47,12 +49,29 @@ def test_parse_month_category_table_strips_script_pollution():
     assert records == [{"month": 3, "category": "Two Wheeler", "count": 500}]
 
 
-def test_parse_month_category_table_empty_without_a_table():
-    assert parse_month_category_table("<div>no table here</div>") == []
+def test_a_page_with_no_results_table_raises_rather_than_reading_as_zero():
+    """Used to return [] -- which the callers then persisted as a real zero,
+    deleting the state's year first, or cached as "this maker sold 0"."""
+    with pytest.raises(UnexpectedPageError):
+        parse_month_category_table("<div>no table here</div>")
 
 
-def test_parse_month_category_table_empty_for_invalid_captcha_response():
+def test_an_invalid_captcha_page_is_not_mistaken_for_zero_registrations():
     html = (FIXTURES / "analytics_invalid_captcha_sample.html").read_text(encoding="utf-8")
+    with pytest.raises(UnexpectedPageError):
+        parse_month_category_table(html)
+
+
+def test_a_genuine_all_zero_table_still_means_no_registrations():
+    """The distinction the raise depends on: a state with nothing registered
+    renders a table of zeros, and that must stay a valid empty result."""
+    html = """
+    <table>
+      <tr><th>Month</th><th>TWO WHEELER</th><th>Total</th></tr>
+      <tr><td>2026-01</td><td>0</td><td>0</td></tr>
+      <tr><td>Total</td><td>0</td><td>0</td></tr>
+    </table>
+    """
     assert parse_month_category_table(html) == []
 
 

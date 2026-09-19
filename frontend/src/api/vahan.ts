@@ -60,6 +60,15 @@ export const getMonthDetail = (params: { year: number; month: number } & Omit<Fi
   api.get('/summary/month-detail', { params, signal }).then(r => r.data);
 export const getAvailableYears = (): Promise<number[]> => api.get('/summary/available-years').then(r => r.data);
 export const getScrapeProgress = () => api.get('/refresh/scrape-progress').then(r => r.data);
+export interface SourceStatus {
+  ok: boolean;
+  detail: string;
+  checked_at: string;
+  down_since: string | null;
+}
+// Admin-only hourly check of both VAHAN sites -- backend app/services/source_health.py.
+export const getSourceHealth = () =>
+  api.get('/refresh/source-health').then(r => r.data as Record<string, SourceStatus>);
 export const getDataQuality = (): Promise<{
   level: 'green' | 'amber' | 'red';
   scrape_fresh: boolean;
@@ -77,6 +86,10 @@ export const getOemMonthly = (params: { category: string; year: number; month?: 
 export const getOemTrend = (params: { maker: string; category: string }) =>
   api.get('/oem-sales/trend', { params }).then(r => r.data);
 
+// The OEM/Brand picker's complete list, scoped and category-filtered server
+// side -- see get_brand_options in backend categories.py.
+export const getBrandOptions = (params: { year: number; vehicle_category?: string | null; state?: string | null }, signal?: AbortSignal) =>
+  api.get('/categories/brand-options', { params, signal }).then(r => r.data as { maker: string; count: number; note: string | null }[]);
 export const getMakerCategoryBreakdown = (params: { year: number; state?: string | null; vehicle_category?: string | null; maker?: string | null; limit?: number }, signal?: AbortSignal) =>
   api.get('/categories/maker-category-breakdown', { params, signal }).then(r => r.data);
 
@@ -140,8 +153,11 @@ export const searchLiveMakers = (q: string, signal?: AbortSignal): Promise<strin
 
 export const getRtosForState = (stateCode: string, year: number) =>
   api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
-export const getDistrictsForState = (stateCode: string) =>
-  api.get(`/geo/states/${stateCode}/districts`).then(r => r.data);
+// With a year, the server returns only districts that resolve to registration
+// data in that FY -- see get_districts_in_state in backend geo.py for why a
+// third of districts would otherwise dead-end.
+export const getDistrictsForState = (stateCode: string, year?: number) =>
+  api.get(`/geo/states/${stateCode}/districts`, { params: { year } }).then(r => r.data);
 export const getRtosForDistrict = (districtCode: string) =>
   api.get(`/geo/districts/${districtCode}/rtos`).then(r => r.data);
 export const getRtoAnalysis = (rtoCode: string, year: number) =>
