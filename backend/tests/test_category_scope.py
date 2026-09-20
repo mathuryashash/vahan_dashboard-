@@ -252,6 +252,24 @@ async def test_rto_analysis_avg_monthly_excludes_other_categories_volume(client,
         _restore_national_admin()
 
 
+async def test_unscoped_users_category_pick_applies_to_yoy_and_rto(client, db_session):
+    """These endpoints only ever read the SCOPED category, so a national
+    user who picked Four-Wheeler on Overview saw every category's numbers
+    on YoY and RTO Analysis, under a page still showing their pick."""
+    await _seed(db_session)
+    four_w = {"vehicle_category": "Four-Wheeler"}
+
+    summary = (await client.get("/api/v1/yoy/summary", params={"year_a": 2025, "year_b": 2026, **four_w})).json()
+    assert summary["total_2026"] == CAR_COUNT
+    monthly = (await client.get("/api/v1/yoy/monthly", params={"year_a": 2025, "year_b": 2026, **four_w})).json()
+    assert [row["year_2026"] for row in monthly["data"]] == [CAR_COUNT]
+    rtos = (await client.get("/api/v1/rto/DL/list", params={"year": 2025, **four_w})).json()
+    assert [row["total"] for row in rtos] == [CAR_COUNT]
+    analysis = (await client.get("/api/v1/rto/DL1/analysis", params={"year": 2025, **four_w})).json()
+    assert [row["maker"] for row in analysis["makers"]] == ["MARUTI SUZUKI"]
+    assert analysis["avg_monthly"] == CAR_COUNT
+
+
 async def test_state_ranking_and_all_states_comparison_are_clamped(client, db_session):
     await _seed(db_session)
     _login_as(**TWO_WHEELER)

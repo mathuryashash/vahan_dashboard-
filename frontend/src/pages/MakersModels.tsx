@@ -2,8 +2,8 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears } from '../api/vahan';
-import { estimateTripleCells, MIN_CATEGORY_SHARE } from '../utils/tripleEstimate';
+import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears, getBrandOptions } from '../api/vahan';
+import { estimateTripleCells } from '../utils/tripleEstimate';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
 import { TruncatedYAxisTick } from '../components/ChartAxisTick';
@@ -84,12 +84,15 @@ export function MakersModelsPage() {
   const { data: fuelYearTotals } = useQuery({
     queryKey: ['makersFuelYear', year, selectedState],
     queryFn: () => getFuelBreakdown({ year, month: null, state: selectedState }),
-    enabled: !!fuelGroup && !!month,
+    enabled: !!fuelGroup && !!month && !selectedCategory,
   });
   const { data: fuelMonthTotals } = useQuery({
     queryKey: ['makersFuelMonth', year, month, selectedState],
     queryFn: () => getFuelBreakdown({ year, month, state: selectedState }),
-    enabled: !!fuelGroup && !!month,
+    // Only read when no category is set (monthRatio's else-if) -- with one,
+    // this and the query above were dead requests, and a 400 for
+    // category-scoped accounts.
+    enabled: !!fuelGroup && !!month && !selectedCategory,
   });
 
   let monthRatio: number | null = null;
@@ -143,15 +146,19 @@ export function MakersModelsPage() {
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
     enabled: comboImpossible,
   });
-  // Also enabled for the plain (non-triple) selectedCategory branch below --
-  // makerChartData's negligible-share filter needs the same real per-maker
-  // year totals as the triple estimate does, to catch the identical issue
-  // (a maker with a real but noise-level presence in the selected category)
-  // on the real-data chart too, not just the modeled one.
   const { data: makerYearTotalsList, isLoading: makerYearLoading } = useQuery({
     queryKey: ['tripleMakerYear', year, selectedState],
     queryFn: ({ signal }) => getTopMakers({ year, state: selectedState, limit: 100 }, signal),
-    enabled: comboImpossible || !!selectedCategory,
+    enabled: comboImpossible,
+  });
+  // Who counts as a maker IN the selected category: the same server rule as
+  // Overview's brand picker (same queryKey, so one cached request), so the
+  // two pages can't disagree. It replaced a 1%-of-own-volume rule here that
+  // let Mercedes-Benz's 72 stray bikes rank it among two-wheeler makers.
+  const { data: categoryBrands } = useQuery({
+    queryKey: ['brandOptions', year, selectedCategory, selectedState],
+    queryFn: ({ signal }) => getBrandOptions({ year, vehicle_category: selectedCategory, state: selectedState }, signal),
+    enabled: !!selectedCategory && !comboImpossible,
   });
   // Found in review (still applies): tracking only one of these queries'
   // isLoading gave a false "no data" message on the primary way to explore
@@ -184,21 +191,9 @@ export function MakersModelsPage() {
     return ranked;
   }, [tripleDataReady, rMcList, rMfList, makerYearTotalsList, rCf, month, monthRatio]);
 
-  // Same negligible-share reasoning as estimateTripleCells (tripleEstimate.ts)
-  // applied to the real (non-estimated) per-category ranking too -- a maker
-  // can have a real but noise-level count in the selected category (e.g. a
-  // two-wheeler maker's handful of real Four-Wheeler registrations) that
-  // shouldn't rank them in that category's leaderboard. Fails open (keeps
-  // the maker) when their own year total isn't in the fetched top-100 list,
-  // rather than hiding a real category specialist just because myTotal is
-  // unknown here.
-  const myTotalMap = new Map<string, number>((makerYearTotalsList || []).map((m: { maker: string; count: number }) => [m.maker, m.count]));
+  const members = categoryBrands ? new Set(categoryBrands.map((b) => b.maker)) : null;
   const makerChartData = (makers || [])
-    .filter((m: { maker: string; count: number }) => {
-      if (!selectedCategory) return true;
-      const myTotal = myTotalMap.get(m.maker);
-      return !myTotal || m.count / myTotal >= MIN_CATEGORY_SHARE;
-    })
+    .filter((m: { maker: string }) => !selectedCategory || !members || members.has(m.maker))
     .map((m: { maker: string; count: number; partial?: boolean }) => ({
       name: m.maker,
       count: isEstimated ? Math.round(m.count * monthRatio!) : m.count,
@@ -261,6 +256,10 @@ export function MakersModelsPage() {
             className={selectClass}
           >
             <option value="">All Categories</option>
+            {/* Same as Overview: still filtering, so show it, not "All". */}
+            {selectedCategory && !(categories || []).some((c: { vehicle_category: string }) => c.vehicle_category === selectedCategory) && (
+              <option value={selectedCategory}>{selectedCategory}</option>
+            )}
             {(categories || []).map((c: { vehicle_category: string }) => (
               <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
             ))}

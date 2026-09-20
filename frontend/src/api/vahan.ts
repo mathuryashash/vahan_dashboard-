@@ -44,10 +44,10 @@ export const getStatesComparison = (year: number, limit?: number, vehicle_catego
   api.get('/comparison/all-states', { params: { year, limit, vehicle_category, fuel_group } }).then(r => r.data);
 export const compareStates = (state_a: string, state_b?: string, year?: number, vehicle_category?: string | null, fuel_group?: string | null) =>
   api.get('/comparison/states', { params: { state_a, state_b, year, vehicle_category, fuel_group } }).then(r => r.data);
-export const getYoYMonthly = (year_a: number, year_b: number, state?: string, start_month?: number, end_month?: number) =>
-  api.get('/yoy/monthly', { params: { year_a, year_b, state, start_month, end_month } }).then(r => r.data);
-export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number) =>
-  api.get('/yoy/summary', { params: { year_a, year_b, start_month, end_month } }).then(r => r.data);
+export const getYoYMonthly = (year_a: number, year_b: number, state?: string, start_month?: number, end_month?: number, vehicle_category?: string | null) =>
+  api.get('/yoy/monthly', { params: { year_a, year_b, state, start_month, end_month, vehicle_category } }).then(r => r.data);
+export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number, vehicle_category?: string | null) =>
+  api.get('/yoy/summary', { params: { year_a, year_b, start_month, end_month, vehicle_category } }).then(r => r.data);
 export const getCategories = (params?: FilterParams, signal?: AbortSignal) =>
   api.get('/categories/', { params, signal }).then(r => r.data);
 export const getTopMakers = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>
@@ -115,7 +115,7 @@ export const getCrosstabDetail = (params: { year: number; state?: string | null;
 // (state, year, maker, fuel) combo. No AbortSignal: an in-flight live
 // scrape shouldn't be cancelled by a stray unmount/refetch the way a cheap
 // DB-query request can be -- it'd waste the CAPTCHA-solve that already ran.
-export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null; rto?: string | null }) =>
+export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null; rto?: string | null; vehicle_category?: string | null }) =>
   api.get('/live-query/maker', { params, timeout: 30000 }).then(r => r.data as {
     state_code: string;
     year: number;
@@ -136,7 +136,7 @@ export const getLiveRtos = (stateCode: string): Promise<string[]> =>
 // not modeled) by their live-scraped fuel-scoped total. Longer timeout than
 // getLiveMakerQuery -- an uncached call here pays up to `limit` real
 // CAPTCHA-solves, not one, even though they run concurrently server-side.
-export const getLiveMakerLeaderboard = (params: { state_code: string; year: number; fuel?: string | null; limit?: number }) =>
+export const getLiveMakerLeaderboard = (params: { state_code: string; year: number; fuel?: string | null; limit?: number; vehicle_category?: string | null }) =>
   api.get('/live-query/leaderboard', { params, timeout: 60000 }).then(r => r.data as {
     state_code: string;
     year: number;
@@ -151,8 +151,8 @@ export const getLiveMakerLeaderboard = (params: { state_code: string; year: numb
 export const searchLiveMakers = (q: string, signal?: AbortSignal): Promise<string[]> =>
   api.get('/live-query/makers/search', { params: { q }, signal }).then(r => r.data);
 
-export const getRtosForState = (stateCode: string, year: number) =>
-  api.get(`/rto/${stateCode}/list`, { params: { year } }).then(r => r.data);
+export const getRtosForState = (stateCode: string, year: number, vehicle_category?: string | null) =>
+  api.get(`/rto/${stateCode}/list`, { params: { year, vehicle_category } }).then(r => r.data);
 // With a year, the server returns only districts that resolve to registration
 // data in that FY -- see get_districts_in_state in backend geo.py for why a
 // third of districts would otherwise dead-end.
@@ -160,5 +160,5 @@ export const getDistrictsForState = (stateCode: string, year?: number) =>
   api.get(`/geo/states/${stateCode}/districts`, { params: { year } }).then(r => r.data);
 export const getRtosForDistrict = (districtCode: string) =>
   api.get(`/geo/districts/${districtCode}/rtos`).then(r => r.data);
-export const getRtoAnalysis = (rtoCode: string, year: number) =>
-  api.get(`/rto/${rtoCode}/analysis`, { params: { year } }).then(r => r.data);
+export const getRtoAnalysis = (rtoCode: string, year: number, vehicle_category?: string | null) =>
+  api.get(`/rto/${rtoCode}/analysis`, { params: { year, vehicle_category } }).then(r => r.data);

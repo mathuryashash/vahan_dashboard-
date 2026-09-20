@@ -7,6 +7,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { getCategories, getTopMakers, getFuelBreakdown } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
+import { useScopeLock } from '../hooks/useScopeLock';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { TruncatedYAxisTick, insidePieLabel } from '../components/ChartAxisTick';
@@ -19,6 +20,9 @@ export function CategoriesPage() {
   const navigate = useNavigate();
   const chart = useChartTheme();
   const { selectedYear, selectedState } = useAppStore();
+  // The server narrows both charts below to a scoped account's own segment.
+  const { lockedCategory } = useScopeLock();
+  const scopeLabel = lockedCategory ?? 'All Categories';
 
   // selectedState is shared app-wide, and this page used to ignore it: pick
   // Maharashtra on Overview, come here, and the mix was silently all-India.
@@ -138,8 +142,8 @@ export function CategoriesPage() {
             above state-filtered, the page showed one geography at the top
             and all-India underneath, which reads worse than being uniformly
             national. */}
-        <CategoryChart title="Top Makers — All Categories" queryKey="makers" fn={() => getTopMakers({ year: selectedYear, state: selectedState || undefined })} year={selectedYear} state={selectedState} chart={chart} index={0} />
-        <FuelBreakdownChart title="Fuel Type Breakdown — All Categories" year={selectedYear} state={selectedState} chart={chart} index={1} />
+        <CategoryChart title={`Top Makers — ${scopeLabel}`} queryKey="makers" fn={() => getTopMakers({ year: selectedYear, state: selectedState || undefined })} year={selectedYear} state={selectedState} chart={chart} index={0} />
+        <FuelBreakdownChart title={`Fuel Type Breakdown — ${scopeLabel}`} year={selectedYear} state={selectedState} chart={chart} index={1} />
       </div>
     </div>
   );

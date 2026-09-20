@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
 from app.core.query_filters import apply_total_filters, exclude_supplementary
-from app.core.scope import require_rto_code, require_state_code, scoped_category, scoped_rto
+from app.core.scope import get_effective_category, require_rto_code, require_state_code, scoped_rto
 from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, Registration
 from app.schemas.schemas import RtoAnalysis, RtoListItem
@@ -44,7 +44,7 @@ def fy_filter(fy_year: int):
 async def get_rtos_for_state(
     state_code: str = Depends(require_state_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
-    user_category: str | None = Depends(scoped_category),
+    user_category: str | None = Depends(get_effective_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
@@ -106,7 +106,7 @@ async def get_rtos_for_state(
 async def get_rto_analysis(
     rto_code: str = Depends(require_rto_code),
     year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
-    user_category: str | None = Depends(scoped_category),
+    user_category: str | None = Depends(get_effective_category),
     db: AsyncSession = Depends(get_db),
 ):
     """Company (maker) % breakdown for one RTO/FY, plus an overview:

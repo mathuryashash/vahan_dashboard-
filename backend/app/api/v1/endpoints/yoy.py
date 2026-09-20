@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.query_filters import apply_total_filters, latest_month_with_data
 from app.core.auth import get_current_user
-from app.core.scope import get_effective_state, scoped_category, scoped_rto
+from app.core.scope import get_effective_category, get_effective_state, scoped_rto
 from app.models.models import Registration, User
 
 router = APIRouter()
@@ -20,7 +20,7 @@ async def get_yoy_monthly(
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),
-    user_category: str | None = Depends(scoped_category),
+    user_category: str | None = Depends(get_effective_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
 ):
@@ -85,7 +85,7 @@ async def get_yoy_summary(
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),
-    user_category: str | None = Depends(scoped_category),
+    user_category: str | None = Depends(get_effective_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),

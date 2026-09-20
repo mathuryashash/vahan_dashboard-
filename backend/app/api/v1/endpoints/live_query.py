@@ -5,7 +5,7 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import category_makers, classify_live_category
 from app.core.rate_limit import limiter
-from app.core.scope import require_state_code, scoped_category, scoped_rto
+from app.core.scope import get_effective_category, require_state_code, scoped_category, scoped_rto
 from app.models.models import User, UserScope
 from app.services.live_scrape_service import (
     UnknownRtoCodeError, UnknownStateCodeError, get_or_scrape_maker_query, get_site_rto_codes,
@@ -25,7 +25,7 @@ async def get_maker_query(
     fuel: str | None = Query(None, max_length=50),
     rto: str | None = Query(None, max_length=10),
     state_code: str = Depends(require_state_code),
-    user_category: str | None = Depends(scoped_category),
+    user_category: str | None = Depends(get_effective_category),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -119,7 +119,7 @@ async def get_leaderboard(
     fuel: str | None = None,
     limit: int = Query(10, ge=1, le=20),
     state_code: str = Depends(require_state_code),
-    user_category: str | None = Depends(scoped_category),
+    user_category: str | None = Depends(get_effective_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),

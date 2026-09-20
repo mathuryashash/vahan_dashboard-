@@ -25,7 +25,7 @@ export function RtoAnalysisPage() {
   const auth = useAuth();
   // Year and State are shared across every tab (see useAppStore) -- picking
   // a state/year on Overview should carry over here too, and vice versa.
-  const { selectedYear: fyYear, setSelectedYear: setFyYear, selectedState, setSelectedState } = useAppStore();
+  const { selectedYear: fyYear, setSelectedYear: setFyYear, selectedState, setSelectedState, selectedCategory } = useAppStore();
   // RTO-scoped: only one RTO exists to show -- skip both pickers and the
   // ranked-RTO-list panel entirely, go straight to that RTO's own breakdown.
   // State-scoped: only the State dropdown is locked; they can still drill
@@ -86,8 +86,8 @@ export function RtoAnalysisPage() {
   });
 
   const { data: rtos, isLoading: rtosLoading, isError: rtosError, refetch: refetchRtos } = useQuery<RTOListItem[]>({
-    queryKey: ['rtoList', stateCode, fyYear],
-    queryFn: () => getRtosForState(stateCode, fyYear),
+    queryKey: ['rtoList', stateCode, fyYear, selectedCategory],
+    queryFn: () => getRtosForState(stateCode, fyYear, selectedCategory),
     enabled: !!stateCode,
   });
 
@@ -102,8 +102,8 @@ export function RtoAnalysisPage() {
   });
 
   const { data: analysis, isLoading: analysisLoading } = useQuery<RTOAnalysis>({
-    queryKey: ['rtoAnalysis', rtoCode, fyYear],
-    queryFn: () => getRtoAnalysis(rtoCode!, fyYear),
+    queryKey: ['rtoAnalysis', rtoCode, fyYear, selectedCategory],
+    queryFn: () => getRtoAnalysis(rtoCode!, fyYear, selectedCategory),
     enabled: !!rtoCode,
   });
 
@@ -130,7 +130,7 @@ export function RtoAnalysisPage() {
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">RTO Analysis</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-          State → District → RTO → company share breakdown — FY {fyYear}-{String((fyYear + 1) % 100).padStart(2, '0')}
+          State → District → RTO → company share breakdown — FY {fyYear}-{String((fyYear + 1) % 100).padStart(2, '0')} — {selectedCategory ?? 'All categories'}
         </p>
       </div>
 

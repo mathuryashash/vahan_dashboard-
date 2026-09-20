@@ -1,9 +1,10 @@
 // frontend/src/pages/CategoryDetail.tsx
 import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router-dom';
 import { PieChart, Pie, Cell, BarChart, Bar, LabelList, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { getTopMakers, getFuelBreakdown, getCategories } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
+import { useScopeLock } from '../hooks/useScopeLock';
 import { ArrowLeft } from '../components/Icons';
 import { Link } from 'react-router-dom';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -24,6 +25,7 @@ export function CategoryDetailPage() {
   const { vehicleClass } = useParams<{ vehicleClass: string }>();
   const decoded = decodeURIComponent(vehicleClass || '');
   const { selectedYear, selectedState } = useAppStore();
+  const { lockedCategory } = useScopeLock();
   const chart = useChartTheme();
 
   // Same shared-filter fix as Categories.tsx -- these three queries ignored
@@ -49,6 +51,12 @@ export function CategoryDetailPage() {
   });
 
   const totalFuelCount = (fuel || []).reduce((sum: number, f: { count: number }) => sum + f.count, 0);
+
+  // The server answers a scoped account with its OWN segment whatever the
+  // URL says, which rendered one segment's data under another's heading.
+  if (lockedCategory && decoded !== lockedCategory) {
+    return <Navigate to={`/categories/${encodeURIComponent(lockedCategory)}`} replace />;
+  }
 
   return (
     <div className="p-6 space-y-6">

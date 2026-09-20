@@ -233,13 +233,17 @@ export function ComparisonPage() {
             number exists for this pair. Clear either filter to compare states:
           </p>
           <div className="flex gap-2 mt-3">
-            <button
-              type="button"
-              onClick={() => setSelectedCategory(null)}
-              className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] transition-colors"
-            >
-              Compare on {fuelGroup} only
-            </button>
+            {/* A scoped account's category can't be cleared (the scope lock
+                re-pins it), so this button would do nothing. */}
+            {!isCategoryLocked && (
+              <button
+                type="button"
+                onClick={() => setSelectedCategory(null)}
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] transition-colors"
+              >
+                Compare on {fuelGroup} only
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setFuelGroup(null)}

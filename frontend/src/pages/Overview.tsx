@@ -139,7 +139,9 @@ export function OverviewPage() {
     queryKey: ['makerFuelBreakdown', selectedYear, selectedMaker, fuelGroup, selectedState],
     queryFn: ({ signal }) => getMakerFuelBreakdown({ year: selectedYear, maker: selectedMaker!, fuel_group: fuelGroup!, state: selectedState }, signal),
     // kpiComboImpossible, same reasoning as crosstabMakerCategory above.
-    enabled: kpiComboImpossible && !!selectedMaker && !!fuelGroup,
+    // Never for a category-scoped account: Maker x Fuel has no category
+    // column, so the server refuses it ([]) rather than leak other segments.
+    enabled: kpiComboImpossible && !!selectedMaker && !!fuelGroup && !isCategoryLocked,
   });
 
   // /maker-category-breakdown, /fuel-category-breakdown and
@@ -509,6 +511,11 @@ export function OverviewPage() {
         ) : (
           <LabeledSelect label="Category" value={selectedCategory || ''} onChange={(e) => setSelectedCategory(e.target.value || null)} className={selectClass}>
             <option value="">All Categories</option>
+            {/* Still filtering even when this period/state lists no such
+                category -- show it rather than "All" over its zeros. */}
+            {selectedCategory && !(categoryOptions || []).some((c: { vehicle_category: string }) => c.vehicle_category === selectedCategory) && (
+              <option value={selectedCategory}>{selectedCategory}</option>
+            )}
             {(categoryOptions || []).map((c: { vehicle_category: string }) => (
               <option key={c.vehicle_category} value={c.vehicle_category}>{c.vehicle_category}</option>
             ))}
@@ -590,7 +597,7 @@ export function OverviewPage() {
             />
             <KPICard
               label="Maker × Powertrain"
-              value={mfNoData ? 'Not scraped' : (mfTotal ?? 0)}
+              value={isCategoryLocked ? '—' : mfNoData ? 'Not scraped' : (mfTotal ?? 0)}
               icon={<Bike className="w-4 h-4" />}
               loading={crosstabMakerFuelLoading}
               index={1}
@@ -923,6 +930,10 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
  * Vehicle Class cross-tab (see FuelCategoryTotal / fuel-category-breakdown).
  * Rendered only when both selectedCategory and fuelGroup are set. */
 function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearData }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
+  // A category-scoped account can't get a fuel figure across all categories
+  // (the server pins its category, and category + month is a 400 there), so
+  // those rows would sit on "···" forever. They're left out instead.
+  const { isCategoryLocked } = useScopeLock();
   const { data, isLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', year, category, fuelGroup, state],
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }, signal),
@@ -948,7 +959,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
   const { data: fuelMonthly } = useQuery({
     queryKey: ['fuelMonthlyOnly', year, month, state],
     queryFn: () => getFuelBreakdown({ year, month, state }),
-    enabled: !!month,
+    enabled: !!month && !isCategoryLocked,
   });
   const fuelMonthlyCount = (fuelMonthly || []).find(
     (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
@@ -975,7 +986,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
   const { data: fuelYearly } = useQuery({
     queryKey: ['fuelYearOnly', year, state],
     queryFn: () => getFuelBreakdown({ year, month: null, state }),
-    enabled: !!month,
+    enabled: !!month && !isCategoryLocked,
   });
   const fuelYearCount = (fuelYearly || []).find(
     (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
@@ -1032,12 +1043,14 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
                 {categoryMonthlyCount != null ? categoryMonthlyCount.toLocaleString('en-IN') : '···'}
               </span>
             </div>
-            <div className="flex items-center justify-between text-[11px]">
-              <span>{fuelGroup} (all categories)</span>
-              <span className="font-mono font-semibold text-[var(--text-primary)]">
-                {fuelMonthlyCount != null ? fuelMonthlyCount.toLocaleString('en-IN') : '···'}
-              </span>
-            </div>
+            {!isCategoryLocked && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span>{fuelGroup} (all categories)</span>
+                <span className="font-mono font-semibold text-[var(--text-primary)]">
+                  {fuelMonthlyCount != null ? fuelMonthlyCount.toLocaleString('en-IN') : '···'}
+                </span>
+              </div>
+            )}
           </div>
           <div className="mt-2 pt-2 border-t border-dashed border-[var(--border)] flex flex-col gap-1">
             <p className="text-[10px] text-[var(--text-muted)]">
@@ -1049,12 +1062,14 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
                 {estimateByCategoryCurve != null ? `~${Math.round(estimateByCategoryCurve).toLocaleString('en-IN')}` : '···'}
               </span>
             </div>
-            <div className="flex items-center justify-between text-[11px]">
-              <span>~ by {fuelGroup}'s monthly pattern</span>
-              <span className="font-mono font-semibold text-[var(--accent)]">
-                {estimateByFuelCurve != null ? `~${Math.round(estimateByFuelCurve).toLocaleString('en-IN')}` : '···'}
-              </span>
-            </div>
+            {!isCategoryLocked && (
+              <div className="flex items-center justify-between text-[11px]">
+                <span>~ by {fuelGroup}'s monthly pattern</span>
+                <span className="font-mono font-semibold text-[var(--accent)]">
+                  {estimateByFuelCurve != null ? `~${Math.round(estimateByFuelCurve).toLocaleString('en-IN')}` : '···'}
+                </span>
+              </div>
+            )}
           </div>
         </>
       )}

@@ -36,7 +36,7 @@ const SELECTABLE_YEARS = Array.from({ length: CURRENT_YEAR - 2002 }, (_, i) => C
 
 export function YoYPage() {
   const chart = useChartTheme();
-  const { comparisonYearA, comparisonYearB, setComparisonYears } = useAppStore();
+  const { comparisonYearA, comparisonYearB, setComparisonYears, selectedCategory } = useAppStore();
   // Full year (1-12) by default -- same behavior as before this range picker
   // existed. A custom range (e.g. Apr-Jul) compares that exact window across
   // both selected years instead of the whole year.
@@ -45,13 +45,13 @@ export function YoYPage() {
   const isCustomRange = startMonth !== 1 || endMonth !== 12;
 
   const { data: monthly, isLoading, isError, refetch } = useQuery({
-    queryKey: ['yoy', comparisonYearA, comparisonYearB, startMonth, endMonth],
-    queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB, undefined, startMonth, endMonth),
+    queryKey: ['yoy', comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory],
+    queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB, undefined, startMonth, endMonth, selectedCategory),
   });
 
   const { data: summary } = useQuery({
-    queryKey: ['yoySummary', comparisonYearA, comparisonYearB, startMonth, endMonth],
-    queryFn: () => getYoYSummary(comparisonYearA, comparisonYearB, startMonth, endMonth),
+    queryKey: ['yoySummary', comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory],
+    queryFn: () => getYoYSummary(comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory),
   });
 
   // growth_percent is null for months comparisonYearB hasn't reached yet
@@ -117,7 +117,7 @@ export function YoYPage() {
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Year-over-Year Analysis</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-            {isCustomRange ? `${MONTH_NAMES[startMonth - 1]}-${MONTH_NAMES[endMonth - 1]}` : 'Full Year'} comparison — {comparisonYearA} vs {comparisonYearB}
+            {isCustomRange ? `${MONTH_NAMES[startMonth - 1]}-${MONTH_NAMES[endMonth - 1]}` : 'Full Year'} comparison — {comparisonYearA} vs {comparisonYearB} — {selectedCategory ?? 'All categories'}
           </p>
         </div>
         <div className="flex items-center gap-3 animate-entrance" style={{ animationDelay: '50ms' }}>

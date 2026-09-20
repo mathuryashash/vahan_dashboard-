@@ -53,7 +53,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
   rtoScope?: { stateCode: string; rtoCode: string; rtoName: string };
 }) {
   const auth = useAuth();
-  const { selectedState } = useAppStore();
+  const { selectedState, selectedCategory } = useAppStore();
   const { data: states, isLoading: statesLoading } = useQuery({ queryKey: ['states'], queryFn: getStates });
 
   // This page has no state selector of its own elsewhere (found in review:
@@ -101,7 +101,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
   });
 
   const [fuel, setFuel] = useState('');
-  const [submitted, setSubmitted] = useState<{ maker: string; fuel: string } | null>(null);
+  const [submitted, setSubmitted] = useState<{ maker: string; fuel: string; category: string | null } | null>(null);
   // ErrorBanner hides itself on its own Retry click (before the retry's
   // outcome is known), so re-mount it fresh per attempt -- otherwise a
   // second failure in a row (a real case for 502/503/429) shows no banner
@@ -109,10 +109,10 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
   const [attempt, setAttempt] = useState(0);
 
   const { data, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ['liveMakerQuery', stateCode, year, submitted?.maker, submitted?.fuel, rtoScope?.rtoCode],
+    queryKey: ['liveMakerQuery', stateCode, year, submitted?.maker, submitted?.fuel, submitted?.category, rtoScope?.rtoCode],
     queryFn: () => getLiveMakerQuery({
       state_code: stateCode!, year, maker: submitted!.maker, fuel: submitted!.fuel || null,
-      rto: rtoScope?.rtoCode ?? null,
+      rto: rtoScope?.rtoCode ?? null, vehicle_category: submitted!.category,
     }),
     enabled: !!stateCode && !!submitted,
     retry: false, // a 502/503/429 is a real answer to show, not a transient glitch to silently retry (each retry re-pays the ~7s cost)
@@ -157,7 +157,9 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
         className="flex items-end gap-3 flex-wrap mt-4"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canSubmit) setSubmitted({ maker: makerInput.trim(), fuel });
+          // The page's category rides along like fuel: captured at submit,
+          // since a current-year lookup re-scrapes (a real CAPTCHA) each time.
+          if (canSubmit) setSubmitted({ maker: makerInput.trim(), fuel, category: selectedCategory });
         }}
       >
         {rtoScope ? (
@@ -284,14 +286,15 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
             <EmptyState
               variant="no-data"
               title="No registrations found"
-              description={`${submitted.maker}${submitted.fuel ? ` × ${submitted.fuel}` : ''} in ${year} — confirmed zero, not a failed lookup.`}
+              description={`${submitted.maker}${submitted.fuel ? ` × ${submitted.fuel}` : ''}${submitted.category ? ` × ${submitted.category}` : ''} in ${year} — confirmed zero, not a failed lookup.`}
             />
           </div>
         ) : (
           <div className="mt-4" role="status" aria-live="polite">
             <p className="text-xs text-[var(--text-secondary)] mb-2">
               <span className="font-semibold text-[var(--accent)]">{total.toLocaleString('en-IN')}</span> total registrations
-              {submitted.fuel ? <> — <span className="font-semibold">{submitted.fuel}</span></> : null}, {year}
+              {submitted.fuel ? <> — <span className="font-semibold">{submitted.fuel}</span></> : null}
+              {submitted.category ? <> — <span className="font-semibold">{submitted.category}</span></> : null}, {year}
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -329,12 +332,16 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
   // press here. An uncached call costs up to `limit` (20) real CAPTCHA-
   // solves server-side -- that should only ever happen on an explicit
   // "Show Leaderboard" click, same as every other param here.
-  const [submitted, setSubmitted] = useState<{ stateCode: string; fuel: string; limit: number } | null>(null);
+  const { selectedCategory } = useAppStore();
+  const [submitted, setSubmitted] = useState<{ stateCode: string; fuel: string; limit: number; category: string | null } | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   const { data, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ['liveMakerLeaderboard', submitted?.stateCode, year, submitted?.fuel, submitted?.limit],
-    queryFn: () => getLiveMakerLeaderboard({ state_code: submitted!.stateCode, year, fuel: submitted!.fuel || null, limit: submitted!.limit }),
+    queryKey: ['liveMakerLeaderboard', submitted?.stateCode, year, submitted?.fuel, submitted?.limit, submitted?.category],
+    queryFn: () => getLiveMakerLeaderboard({
+      state_code: submitted!.stateCode, year, fuel: submitted!.fuel || null, limit: submitted!.limit,
+      vehicle_category: submitted!.category,
+    }),
     enabled: !!submitted,
     retry: false,
   });
@@ -354,7 +361,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
         className="flex items-end gap-3 flex-wrap mt-4"
         onSubmit={(e) => {
           e.preventDefault();
-          if (stateCode) setSubmitted({ stateCode, fuel, limit });
+          if (stateCode) setSubmitted({ stateCode, fuel, limit, category: selectedCategory });
         }}
       >
         <LabeledSelect
@@ -417,7 +424,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
             <EmptyState
               variant="no-data"
               title="No registrations found"
-              description={`No real data for the top ${submitted.limit} makers${submitted.fuel ? ` × ${submitted.fuel}` : ''} in ${year}.`}
+              description={`No real data for the top ${submitted.limit} makers${submitted.fuel ? ` × ${submitted.fuel}` : ''}${submitted.category ? ` × ${submitted.category}` : ''} in ${year}.`}
             />
           </div>
         ) : (
