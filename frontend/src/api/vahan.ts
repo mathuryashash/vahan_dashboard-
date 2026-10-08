@@ -121,12 +121,13 @@ export const getCrosstabDetail = (params: { year: number; state?: string | null;
 // (state, year, maker, fuel) combo. No AbortSignal: an in-flight live
 // scrape shouldn't be cancelled by a stray unmount/refetch the way a cheap
 // DB-query request can be -- it'd waste the CAPTCHA-solve that already ran.
-export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null; rto?: string | null; vehicle_category?: string | null }) =>
+export const getLiveMakerQuery = (params: { state_code: string; year: number; maker: string; fuel?: string | null; fuel_group?: string | null; rto?: string | null; vehicle_category?: string | null }) =>
   api.get('/live-query/maker', { params, timeout: 30000 }).then(r => r.data as {
     state_code: string;
     year: number;
     maker: string;
     fuel: string | null;
+    fuel_group?: string | null;
     rto: string | null;
     records: { month: number; category: string; count: number }[];
     // 'live' = scraped from the source site just now / from the live cache;
@@ -153,7 +154,7 @@ export const getLiveRtos = (stateCode: string): Promise<string[]> =>
 // not modeled) by their live-scraped fuel-scoped total. Longer timeout than
 // getLiveMakerQuery -- an uncached call here pays up to `limit` real
 // CAPTCHA-solves, not one, even though they run concurrently server-side.
-export const getLiveMakerLeaderboard = (params: { state_code: string; year: number; fuel?: string | null; limit?: number; vehicle_category?: string | null }) =>
+export const getLiveMakerLeaderboard = (params: { state_code: string; year: number; fuel?: string | null; fuel_group?: string | null; limit?: number; vehicle_category?: string | null }) =>
   api.get('/live-query/leaderboard', { params, timeout: 60000 }).then(r => r.data as {
     state_code: string;
     year: number;
@@ -171,6 +172,51 @@ export const getLiveMakerLeaderboard = (params: { state_code: string; year: numb
 // the real entity is "HONDA MOTORCYCLE AND SCOOTER INDIA (P) LTD").
 export const searchLiveMakers = (q: string, signal?: AbortSignal): Promise<string[]> =>
   api.get('/live-query/makers/search', { params: { q }, signal }).then(r => r.data);
+
+// The six fuel groups the Maker Lookup / Top Makers offer, mapped from raw
+// VAHAN fuel labels server-side (backend services/fuel_groups.py).
+export const MAKER_FUEL_GROUPS = ['Petrol', 'Diesel', 'CNG/LPG', 'Electric', 'Hybrid', 'Other'] as const;
+export type MakerFuelGroup = typeof MAKER_FUEL_GROUPS[number];
+
+// Makers with stored registrations for this state (+ RTO) + year (+ fuel group),
+// largest first, scope-clamped server-side -- the Maker Lookup's dropdown.
+export const getMakerOptions = (params: { state_code: string; year: number; fuel_group?: string | null; rto?: string | null; vehicle_category?: string | null }, signal?: AbortSignal) =>
+  api.get('/live-query/maker-options', { params, signal }).then(r => r.data as {
+    state_code: string;
+    year: number;
+    fuel_group: string | null;
+    rto: string | null;
+    makers: { maker: string; total: number }[];
+    unanswerable_reason?: string | null;
+    live_fallback?: boolean;
+  });
+
+// Category x powertrain per state (calendar year) from fuel_category_totals.
+export const getCategoryFuelComparison = (params: { year: number; vehicle_category: string; fuel_group: string }) =>
+  api.get('/comparison/category-fuel', { params }).then(r => r.data as {
+    year: number;
+    vehicle_category: string | null;
+    fuel_group: string;
+    source: string;
+    grain: 'year';
+    available: boolean;
+    unanswerable_reason: string | null;
+    coverage_pct_off: number | null;
+    coverage_incomplete: boolean;
+    total: number;
+    states: { state_name: string; count: number; share_percent: number; coverage_pct_off: number | null; incomplete: boolean }[];
+  });
+
+// Real month figure for Category x Powertrain, when the monthly source agrees
+// with the year crosstab for that scope; otherwise available=false + reason.
+export const getCategoryFuelMonth = (params: { year: number; month: number; vehicle_category: string; fuel_group: string; state?: string | null }, signal?: AbortSignal) =>
+  api.get('/categories/category-fuel-month', { params, signal }).then(r => r.data as {
+    available: boolean;
+    count: number | null;
+    coverage_pct_off: number | null;
+    unanswerable_reason: string | null;
+    source: string;
+  });
 
 export const getRtosForState = (stateCode: string, year: number, vehicle_category?: string | null) =>
   api.get(`/rto/${stateCode}/list`, { params: { year, vehicle_category } }).then(r => r.data);

@@ -320,6 +320,14 @@ export function RtoAnalysisPage() {
                   no VAHAN table carries company, segment and month together. Shares are unaffected; the totals are broader.
                 </p>
               )}
+              {selectedCategory && fyYear <= 2024 && (
+                // N6: a category total reads the vehicle-class pass, which is
+                // known to be under-counted for some RTO-months up to 2024
+                // (re-scrape pending). Disclosed, not hidden.
+                <p className="text-[10px] text-[var(--text-muted)] mb-4 leading-relaxed" data-testid="rto-class-pass-note">
+                  {selectedCategory} totals up to 2024 come from VAHAN's vehicle-class report, which is incomplete for some RTOs and months, so they may read low.
+                </p>
+              )}
 
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-1">Company Share</h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mb-4">% of this RTO's registrations, top {makerPieData.length} companies</p>
@@ -370,7 +378,7 @@ export function RtoAnalysisPage() {
           />
         ) : (
           <p className="text-[10px] text-[var(--text-muted)] font-mono px-1">
-            The source site doesn't list {rtoCode} among its own RTOs, so no live maker lookup is available for it.
+            No maker lookup is available for {rtoCode}: it has no maker x fuel data stored.
           </p>
         )
       )}

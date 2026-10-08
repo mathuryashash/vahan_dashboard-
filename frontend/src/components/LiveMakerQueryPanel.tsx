@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getLiveMakerLeaderboard, getLiveMakerQuery, getStates, searchLiveMakers } from '../api/vahan';
+import { MAKER_FUEL_GROUPS, getLiveMakerLeaderboard, getLiveMakerQuery, getMakerOptions, getStates } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCompact } from '../utils/format';
@@ -11,21 +11,17 @@ import { TruncatedYAxisTick } from './ChartAxisTick';
 import { LabeledSelect } from './LabeledSelect';
 import { EmptyState } from './EmptyState';
 import { ErrorBanner } from './ErrorBanner';
+import { SearchableSelect } from './SearchableSelect';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// The source site's own static fuel enum (see backend/scraper/
-// analytics_scraper.py's FUEL_VALUES) -- a small, rarely-changing list kept
-// in sync by hand rather than adding a round trip just to fetch 34 strings.
-const FUEL_VALUES = [
-  'BIO-CNG/BIO-GAS', 'CNG ONLY', 'DI-METHYL ETHER', 'DIESEL', 'DIESEL/HYBRID',
-  'DUAL DIESEL/BIO CNG', 'DUAL DIESEL/CNG', 'DUAL DIESEL/LNG', 'ELECTRIC(BOV)',
-  'ETHANOL(E100)', 'FLEX-FUEL(BIO-DIESEL)', 'FLEX-FUEL(ETHANOL)', 'FUEL CELL HYDROGEN',
-  'HCNG', 'HYDROGEN(ICE)', 'LNG', 'LPG ONLY', 'METHANOL', 'NOT APPLICABLE', 'PETROL',
-  'PETROL(E20)', 'PETROL(E20)/CNG', 'PETROL(E20)/HYBRID', 'PETROL(E20)/HYBRID/CNG',
-  'PETROL(E20)/LPG', 'PETROL/CNG', 'PETROL/HYBRID', 'PETROL/HYBRID/CNG', 'PETROL/LPG',
-  'PETROL/METHANOL', 'PLUG-IN HYBRID EV', 'PURE EV', 'SOLAR', 'STRONG HYBRID EV',
-];
+// Six fuel groups instead of VAHAN's ~34 raw labels; the server folds every
+// raw label into one of them (backend services/fuel_groups.py), so picking
+// "Petrol" sums PETROL, PETROL(E20), PETROL/ETHANOL, ...
+const FUEL_GROUP_HINT: Record<string, string> = {
+  Petrol: 'Petrol, E20, petrol/ethanol', Diesel: 'Diesel, bio-diesel', 'CNG/LPG': 'CNG, LPG, LNG and bi-fuel',
+  Electric: 'Battery EV, fuel cell', Hybrid: 'Strong / plug-in / mild hybrids', Other: 'Ethanol, methanol, solar, n/a',
+};
 
 // The backend gives each failure mode a distinct status specifically so the
 // caller can explain what actually happened (bad state vs. rate-limited vs.
@@ -39,7 +35,7 @@ function errorMessageFor(error: unknown): string {
     case 429: return 'Too many live lookups in a row -- wait a minute and try again.';
     case 502: return 'Could not reach the source site right now. Try again shortly.';
     case 503: return 'Live lookups are temporarily unavailable on the server right now.';
-    default: return 'Something went wrong fetching this combination.';
+    default: return 'Something went wrong loading this combination.';
   }
 }
 
@@ -63,13 +59,13 @@ function SourceNote({ source, asOf }: { source?: string; asOf?: string | null })
   if (source === 'stored') {
     return (
       <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2" data-testid="live-source-note">
-        Stored data as of {formatAsOf(asOf)} — answered from the dashboard's own tables, not a fresh scrape.
+        Stored data as of {formatAsOf(asOf)}.
       </p>
     );
   }
   return (
     <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2" data-testid="live-source-note">
-      Live from the source site{asOf ? ` · fetched ${formatAsOf(asOf)}` : ''}.
+      Fetched live{asOf ? ` · ${formatAsOf(asOf)}` : ''}.
     </p>
   );
 }
@@ -113,27 +109,33 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
     onStateCodeChange?.(stateCode);
   }, [stateCode, onStateCodeChange]);
 
-  // Free text alone lets a user submit "honda" and get a real, genuinely-
-  // empty result back (confirmed live) -- the source site's maker field
-  // needs the EXACT full legal name ("HONDA MOTORCYCLE AND SCOOTER INDIA
-  // (P) LTD"), indistinguishable in the response from a real zero. This
-  // debounced search-as-you-type against the site's own maker lookup lets
-  // a user find and pick a real name instead of guessing one.
-  const [makerInput, setMakerInput] = useState('');
-  const [debouncedMaker, setDebouncedMaker] = useState('');
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedMaker(makerInput.trim()), 300);
-    return () => clearTimeout(t);
-  }, [makerInput]);
-  const { data: makerSuggestions } = useQuery({
-    queryKey: ['makerSearch', debouncedMaker],
-    queryFn: ({ signal }) => searchLiveMakers(debouncedMaker, signal),
-    enabled: debouncedMaker.length >= 2,
-  });
-
   const [fuel, setFuel] = useState('');
+  const [maker, setMaker] = useState('');
   const [submitted, setSubmitted] = useState<{ maker: string; fuel: string; category: string | null } | null>(null);
+
+  // The Maker dropdown lists ONLY makers with stored registrations for this
+  // state (+ RTO) + year + fuel group, biggest first, scope-clamped by the
+  // server -- so a combination with nothing in it (Karnataka x Hero x
+  // Diesel) can't be picked in the first place.
+  const { data: makerOptions, isFetching: makerOptionsLoading } = useQuery({
+    queryKey: ['makerOptions', stateCode, year, fuel, rtoScope?.rtoCode, selectedCategory],
+    queryFn: ({ signal }) => getMakerOptions({
+      state_code: stateCode!, year, fuel_group: fuel || null, rto: rtoScope?.rtoCode ?? null,
+      vehicle_category: selectedCategory,
+    }, signal),
+    enabled: !!stateCode,
+    staleTime: 5 * 60 * 1000,
+  });
+  const optionList = makerOptions?.makers ?? [];
+  // A maker the new fuel / state / year doesn't carry is dropped, not kept
+  // as a stale pick that would come back empty.
+  useEffect(() => {
+    if (maker && makerOptions && !makerOptions.makers.some((m) => m.maker === maker)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMaker('');
+    }
+  }, [maker, makerOptions]);
+  const liveWording = !!makerOptions?.live_fallback;
   // ErrorBanner hides itself on its own Retry click (before the retry's
   // outcome is known), so re-mount it fresh per attempt -- otherwise a
   // second failure in a row (a real case for 502/503/429) shows no banner
@@ -143,14 +145,14 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
   const { data, isFetching, isError, error, refetch } = useQuery({
     queryKey: ['liveMakerQuery', stateCode, year, submitted?.maker, submitted?.fuel, submitted?.category, rtoScope?.rtoCode],
     queryFn: () => getLiveMakerQuery({
-      state_code: stateCode!, year, maker: submitted!.maker, fuel: submitted!.fuel || null,
+      state_code: stateCode!, year, maker: submitted!.maker, fuel_group: submitted!.fuel || null,
       rto: rtoScope?.rtoCode ?? null, vehicle_category: submitted!.category,
     }),
     enabled: !!stateCode && !!submitted,
     retry: false, // a 502/503/429 is a real answer to show, not a transient glitch to silently retry (each retry re-pays the ~7s cost)
   });
 
-  const canSubmit = !!stateCode && makerInput.trim().length > 0;
+  const canSubmit = !!stateCode && maker.length > 0;
   const records = data?.records ?? [];
   const total = records.reduce((sum, r) => sum + r.count, 0);
   // grain 'year' (or any month-0 row) = the stored table only holds a
@@ -185,15 +187,15 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance relative z-20" style={{ animationDelay: '120ms' }}>
       <div className="mb-1">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">
-          {rtoScope ? `Live Maker Lookup — ${rtoScope.rtoName}` : 'Live Maker Lookup'}
+          {`${liveWording ? 'Live ' : ''}Maker Lookup${rtoScope ? ` — ${rtoScope.rtoName}` : ''}`}
         </h3>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
           {/* Only claim a live fetch when the backend said so: lookups are now
               answered from stored tables (source 'stored') unless the server
               has the live fallback enabled. */}
           {data?.source === 'live'
-            ? 'Look up one manufacturer, optionally by fuel type, directly from the source site — fetched on demand.'
-            : 'Look up one manufacturer, optionally by fuel type, from the registration data this dashboard has stored.'}
+            ? 'Look up one manufacturer, optionally by fuel, fetched on demand.'
+            : 'Pick a fuel, then a manufacturer — only makers with registrations for that fuel are listed, largest first.'}
           {rtoScope ? ' Scoped to this RTO only, month by month.' : ''}
         </p>
       </div>
@@ -204,7 +206,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
           e.preventDefault();
           // The page's category rides along like fuel: captured at submit,
           // since a current-year lookup re-scrapes (a real CAPTCHA) each time.
-          if (canSubmit) setSubmitted({ maker: makerInput.trim(), fuel, category: selectedCategory });
+          if (canSubmit) setSubmitted({ maker, fuel, category: selectedCategory });
         }}
       >
         {rtoScope ? (
@@ -234,55 +236,6 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
             </div>
           </div>
         )}
-        <div className="flex flex-col gap-1.5 relative">
-          <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold" htmlFor="live-maker-input">Maker</label>
-          <input
-            id="live-maker-input"
-            value={makerInput}
-            onChange={(e) => { setMakerInput(e.target.value); setShowSuggestions(true); }}
-            onFocus={() => setShowSuggestions(true)}
-            // Delayed so a click on a suggestion below registers before the
-            // list disappears -- a plain onBlur closing immediately would
-            // eat the click.
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-            placeholder="Start typing a manufacturer, e.g. Honda"
-            autoComplete="off"
-            role="combobox"
-            aria-expanded={showSuggestions && !!makerSuggestions?.length}
-            aria-controls="live-maker-suggestions"
-            aria-autocomplete="list"
-            className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl w-80 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-          />
-          {showSuggestions && debouncedMaker.length >= 2 && (
-            <ul
-              id="live-maker-suggestions"
-              role="listbox"
-              className="absolute top-full mt-1 left-0 w-80 max-h-56 overflow-y-auto bg-[var(--bg-card)] border border-[var(--border)] rounded-xl shadow-lg z-10 text-xs"
-            >
-              {makerSuggestions === undefined ? (
-                <li className="px-3 py-2 text-[var(--text-muted)]">Searching…</li>
-              ) : makerSuggestions.length === 0 ? (
-                <li className="px-3 py-2 text-[var(--text-muted)]">No manufacturer matches "{debouncedMaker}" -- pick the exact full legal name from the list.</li>
-              ) : (
-                makerSuggestions.map((name) => (
-                  <li key={name}>
-                    <button
-                      type="button"
-                      // onMouseDown, not onClick: fires before the input's
-                      // onBlur (which runs on the input losing focus first),
-                      // so the selected value lands after blur's delayed
-                      // close instead of racing it.
-                      onMouseDown={() => { setMakerInput(name); setShowSuggestions(false); }}
-                      className="w-full text-left px-3 py-2 hover:bg-[var(--bg-card-hover)] text-[var(--text-primary)]"
-                    >
-                      {name}
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
-          )}
-        </div>
         <LabeledSelect
           label="Fuel"
           value={fuel}
@@ -290,25 +243,42 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
           className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer"
         >
           <option value="">Any fuel</option>
-          {FUEL_VALUES.map((f) => <option key={f} value={f}>{f}</option>)}
+          {MAKER_FUEL_GROUPS.map((g) => <option key={g} value={g} title={FUEL_GROUP_HINT[g]}>{g}</option>)}
         </LabeledSelect>
+        <div className="w-80" data-testid="maker-lookup-maker">
+          <SearchableSelect
+            label={makerOptionsLoading ? 'Maker (loading…)' : `Maker (${optionList.length.toLocaleString('en-IN')} with data)`}
+            value={maker}
+            onChange={setMaker}
+            allLabel="Select a manufacturer…"
+            options={optionList.map((m) => ({ value: m.maker, label: m.maker, note: `${m.total.toLocaleString('en-IN')} registrations` }))}
+          />
+        </div>
         <button
           type="submit"
           disabled={!canSubmit || isFetching}
           className="bg-[var(--accent)] text-[var(--accent-contrast)] text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
         >
-          {isFetching ? 'Fetching…' : 'Fetch'}
+          {isFetching ? 'Loading…' : 'Look up'}
         </button>
       </form>
 
       {stateHint && (
         <p className="text-xs text-[var(--text-muted)] mt-3">{stateHint}</p>
       )}
+      {stateCode && makerOptions?.unanswerable_reason && (
+        <p className="text-xs text-[var(--text-muted)] mt-3" data-testid="maker-options-unanswerable">{makerOptions.unanswerable_reason}</p>
+      )}
+      {stateCode && makerOptions && !makerOptions.unanswerable_reason && optionList.length === 0 && (
+        <p className="text-xs text-[var(--text-muted)] mt-3" data-testid="maker-options-empty">
+          No manufacturer has {fuel || 'any'} registrations stored for this {rtoScope ? 'RTO' : 'state'} in {year}.
+        </p>
+      )}
 
       {isError && (
         <ErrorBanner
           key={attempt}
-          title="Couldn't fetch this combination"
+          title="Couldn't load this combination"
           description={errorMessageFor(error)}
           action={{ label: 'Retry', onClick: () => { setAttempt((n) => n + 1); refetch(); } }}
           className="mt-4"
@@ -321,7 +291,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
           aria-live="polite"
           className="mt-4 h-32 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft flex items-center justify-center text-xs text-[var(--text-muted)] text-center px-6"
         >
-          Fetching…
+          Loading…
         </div>
       )}
 
@@ -394,7 +364,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
   const { data, isFetching, isError, error, refetch } = useQuery({
     queryKey: ['liveMakerLeaderboard', submitted?.stateCode, year, submitted?.fuel, submitted?.limit, submitted?.category],
     queryFn: () => getLiveMakerLeaderboard({
-      state_code: submitted!.stateCode, year, fuel: submitted!.fuel || null, limit: submitted!.limit,
+      state_code: submitted!.stateCode, year, fuel_group: submitted!.fuel || null, limit: submitted!.limit,
       vehicle_category: submitted!.category,
     }),
     enabled: !!submitted,
@@ -406,9 +376,9 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
   return (
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
       <div className="mb-1">
-        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{data?.source === 'stored' ? 'Top Makers by Fuel — real numbers' : 'Live Top Makers — real numbers'}</h3>
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{data?.source === 'live' ? 'Live Top Makers' : 'Top Makers'}{fuel ? ` — ${fuel}` : ''}</h3>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
-          The actual (not modeled) fuel-scoped ranking for this state's real biggest manufacturers — the real-data counterpart to the estimated chart above when a fuel filter alone has no month-level real data.
+          Real (not modelled) calendar-year ranking of this state's manufacturers, optionally within one fuel group.
         </p>
       </div>
 
@@ -426,7 +396,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
           className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer"
         >
           <option value="">Any fuel</option>
-          {FUEL_VALUES.map((f) => <option key={f} value={f}>{f}</option>)}
+          {MAKER_FUEL_GROUPS.map((g) => <option key={g} value={g} title={FUEL_GROUP_HINT[g]}>{g}</option>)}
         </LabeledSelect>
         <div className="flex flex-col gap-1.5">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold" htmlFor="leaderboard-limit">Top N</label>
@@ -445,7 +415,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
           disabled={!stateCode || isFetching}
           className="bg-[var(--accent)] text-[var(--accent-contrast)] text-xs font-semibold px-4 py-2 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
         >
-          {isFetching ? 'Fetching…' : 'Show Leaderboard'}
+          {isFetching ? 'Loading…' : 'Show Top Makers'}
         </button>
       </form>
 
@@ -456,7 +426,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
       {isError && (
         <ErrorBanner
           key={attempt}
-          title="Couldn't fetch this leaderboard"
+          title="Couldn't load the top makers"
           description={errorMessageFor(error)}
           action={{ label: 'Retry', onClick: () => { setAttempt((n) => n + 1); refetch(); } }}
           className="mt-4"
@@ -469,7 +439,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
           aria-live="polite"
           className="mt-4 h-32 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft flex items-center justify-center text-xs text-[var(--text-muted)] text-center px-6"
         >
-          Fetching the top {submitted?.limit ?? limit} makers…
+          Loading the top {submitted?.limit ?? limit} makers…
         </div>
       )}
 
