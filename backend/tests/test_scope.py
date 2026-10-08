@@ -201,6 +201,9 @@ async def test_rto_scoped_user_cannot_widen_live_query_by_omitting_rto(client, d
         return []
 
     monkeypatch.setattr("app.api.v1.endpoints.live_query.get_or_scrape_maker_query", _capture)
+    # This exercises the LIVE path's clamp (default is now stored answers --
+    # see tests/test_stored_live.py for the same guarantee on that path).
+    monkeypatch.setattr("app.api.v1.endpoints.live_query.settings.LIVE_SCRAPE_FALLBACK", True)
 
     await _seed_two_states(db_session)
     _login_as(**MH_RTO)

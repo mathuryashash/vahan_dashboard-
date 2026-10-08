@@ -1,4 +1,8 @@
+import asyncio
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
@@ -8,6 +12,9 @@ from app.core.rate_limit import limiter
 from app.core.scope import get_effective_category, require_state_code, scoped_category, scoped_rto
 from app.core.validation import MAX_YEAR, MIN_YEAR
 from app.models.models import User, UserScope
+from app.core.config import settings
+from app.models.models import RTO
+from app.services import stored_live_service as stored
 from app.services.live_scrape_service import (
     UnknownRtoCodeError, UnknownStateCodeError, get_or_scrape_maker_query, get_site_rto_codes,
     get_top_makers_leaderboard, search_makers,
@@ -15,6 +22,12 @@ from app.services.live_scrape_service import (
 from scraper.analytics_scraper import CaptchaSolveError, TesseractUnavailableError
 
 router = APIRouter()
+
+# Server-side caps kept BELOW the browser timeouts in frontend/src/api/
+# vahan.ts (30s for /maker, 60s for /leaderboard): a server that outlives the
+# client leaves the user staring at a timeout while it keeps scraping.
+LIVE_MAKER_SERVER_TIMEOUT_S = 25
+LEADERBOARD_SERVER_TIMEOUT_S = 55
 
 
 @router.get("/maker")
@@ -54,8 +67,26 @@ async def get_maker_query(
         if rto and rto != user.scope_rto_code:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not permitted to view this state/RTO")
         rto = user.scope_rto_code
+    if not settings.LIVE_SCRAPE_FALLBACK:
+        # Phase A: answered from our own tables, no government-site request.
+        answer = await stored.maker_query(db, state_code, year, maker, fuel, rto, user_category)
+        return {
+            "state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "rto": rto,
+            "records": answer.records, "source": "stored", "as_of": await stored.as_of(db),
+            "grain": answer.grain, "unanswerable_reason": answer.unanswerable_reason,
+        }
     try:
-        records = await get_or_scrape_maker_query(db, state_code, year, maker, fuel, rto)
+        # Server cap below the browser's 30s timeout (vahan.ts), so the user
+        # gets a real error instead of a client timeout while we keep working.
+        records = await asyncio.wait_for(
+            get_or_scrape_maker_query(db, state_code, year, maker, fuel, rto),
+            timeout=LIVE_MAKER_SERVER_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="The source site is too slow right now. Try again shortly.",
+        )
     except UnknownStateCodeError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown state_code {state_code!r}.")
     except UnknownRtoCodeError:
@@ -88,12 +119,17 @@ async def get_maker_query(
         # months as well. classify_live_category bridges the live site's own
         # category vocabulary onto the buckets a user is scoped to.
         records = [r for r in records if classify_live_category(r["category"]) == user_category]
-    return {"state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "rto": rto, "records": records}
+    return {
+        "state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "rto": rto, "records": records,
+        "source": "live", "as_of": datetime.now(timezone.utc).date().isoformat(), "grain": stored.GRAIN_MONTH,
+        "unanswerable_reason": None,
+    }
 
 
 @router.get("/rtos")
 async def list_live_rtos(
     state_code: str = Depends(require_state_code),
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Our rto_codes that the source site actually lists for this state --
@@ -103,10 +139,15 @@ async def list_live_rtos(
     Cheap and cached process-side (see get_site_rto_codes), so no dedicated
     rate limit -- unlike /maker, a miss here costs one plain GET, not a
     CAPTCHA-solve."""
-    try:
-        codes = sorted(await get_site_rto_codes(state_code))
-    except Exception:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="Could not reach the source site right now.")
+    if not settings.LIVE_SCRAPE_FALLBACK:
+        # Stored answers work for every RTO we hold, not only the subset the
+        # source site lists.
+        codes = sorted((await db.execute(select(RTO.rto_code).where(RTO.state_code == state_code))).scalars().all())
+    else:
+        try:
+            codes = sorted(await get_site_rto_codes(state_code))
+        except Exception:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail="Could not reach the source site right now.")
     if user.scope_type == UserScope.RTO:
         codes = [c for c in codes if c == user.scope_rto_code]
     return codes
@@ -141,9 +182,24 @@ async def get_leaderboard(
     # subscriber. Same shape as the /rto/{state}/list leak, and the fourth
     # recurrence in this codebase; the sibling /maker route above already
     # narrows RTO unconditionally for exactly this reason.
+    if not settings.LIVE_SCRAPE_FALLBACK:
+        answer = await stored.leaderboard(db, state_code, year, fuel, limit, user_category, user_rto)
+        return {
+            "state_code": state_code, "year": year, "fuel": fuel, "makers": answer.records,
+            "source": "stored", "as_of": await stored.as_of(db), "grain": answer.grain,
+            "unanswerable_reason": answer.unanswerable_reason,
+        }
     try:
-        makers = await get_top_makers_leaderboard(
-            db, state_code, year, fuel, limit, vehicle_category=user_category, rto=user_rto,
+        makers = await asyncio.wait_for(
+            get_top_makers_leaderboard(
+                db, state_code, year, fuel, limit, vehicle_category=user_category, rto=user_rto,
+            ),
+            timeout=LEADERBOARD_SERVER_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="The source site is too slow right now. Try again shortly.",
         )
     except UnknownStateCodeError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Unknown state_code {state_code!r}.")
@@ -162,7 +218,11 @@ async def get_leaderboard(
             status.HTTP_502_BAD_GATEWAY,
             detail="Could not fetch this data right now. Try again shortly.",
         )
-    return {"state_code": state_code, "year": year, "fuel": fuel, "makers": makers}
+    return {
+        "state_code": state_code, "year": year, "fuel": fuel, "makers": makers,
+        "source": "live", "as_of": datetime.now(timezone.utc).date().isoformat(), "grain": stored.GRAIN_YEAR,
+        "unanswerable_reason": None,
+    }
 
 
 @router.get("/makers/search")
@@ -183,6 +243,8 @@ async def search_makers_endpoint(
     CAPTCHA involved, so no require_state_code dependency and no dedicated
     rate limit beyond the API's blanket default -- unlike /maker and
     /leaderboard, a miss here costs one cheap GET, not a live scrape."""
+    if not settings.LIVE_SCRAPE_FALLBACK:
+        return await stored.search_makers(db, q, category=user_category)
     try:
         results = await search_makers(q)
         if user_category:
