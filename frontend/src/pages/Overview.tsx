@@ -14,7 +14,7 @@ import { ExportCsvButton } from '../components/ExportCsvButton';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
-import { getKPIs, getTrend, getStateRanking, getStates, getBrandOptions, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getStates, getBrandOptions, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown, getCategoryFuelMonth } from '../api/vahan';
 import { useScopeLock } from '../hooks/useScopeLock';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
@@ -170,10 +170,32 @@ export function OverviewPage() {
     crosstabTotal = mfTotal;
     crosstabLoading = crosstabMakerFuelLoading;
   }
-  // Cross-tabs are year totals, no day-level granularity to divide by the
-  // actual elapsed days -- 365 is the same coarse approximation the rest of
-  // this page already uses elsewhere for a full-year average.
-  const crosstabAvgDaily = crosstabTotal !== undefined ? Math.round(crosstabTotal / 365) : undefined;
+  // Category x Powertrain + Month: a REAL month figure exists in the analytics
+  // portal's monthly table for the category/powertrain pairs where it agrees
+  // with the year crosstab (server decides, see category_fuel_month.py). When
+  // it does, the cards show that number; when it doesn't, they show the one
+  // calendar-year total, labelled as such. No modelled estimates either way.
+  const cfMonthEnabled = exactlyOnePairActive && !!selectedCategory && !!fuelGroup && selectedMonth != null;
+  const { data: cfMonth, isLoading: cfMonthLoading } = useQuery({
+    queryKey: ['categoryFuelMonth', selectedYear, selectedMonth, selectedCategory, fuelGroup, selectedState],
+    queryFn: ({ signal }) => getCategoryFuelMonth({ year: selectedYear, month: selectedMonth!, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
+    enabled: cfMonthEnabled,
+  });
+  const { data: cfMonthPrior } = useQuery({
+    queryKey: ['categoryFuelMonth', selectedYear - 1, selectedMonth, selectedCategory, fuelGroup, selectedState],
+    queryFn: ({ signal }) => getCategoryFuelMonth({ year: selectedYear - 1, month: selectedMonth!, vehicle_category: selectedCategory!, fuel_group: fuelGroup!, state: selectedState }, signal),
+    enabled: cfMonthEnabled && !!cfMonth?.available,
+  });
+  const cfMonthReal = cfMonthEnabled && !!cfMonth?.available && cfMonth.count != null;
+  if (cfMonthEnabled) crosstabLoading = crosstabLoading || cfMonthLoading;
+  if (cfMonthReal) crosstabTotal = cfMonth!.count!;
+  const cfMonthYoy = cfMonthReal && cfMonthPrior?.available && cfMonthPrior.count
+    ? ((cfMonth!.count! - cfMonthPrior.count) / cfMonthPrior.count) * 100
+    : null;
+  // Year totals divide by 365 (the coarse full-year average used elsewhere on
+  // this page); a real month figure divides by that month's days.
+  const crosstabDays = cfMonthReal ? new Date(selectedYear, selectedMonth!, 0).getDate() : 365;
+  const crosstabAvgDaily = crosstabTotal !== undefined ? Math.round(crosstabTotal / crosstabDays) : undefined;
 
   // ---- All 3 filters at once: three real pairwise numbers, not a
   // combined estimate ----
@@ -409,7 +431,7 @@ export function OverviewPage() {
   // reported as "exact same data for both months"). The banner above the
   // cards already said this; saying it on the card itself is what actually
   // lands, since the card is where the unchanging number is.
-  const kpiPeriodSuffix = kpiComboImpossible && selectedMonth != null ? ' · year total' : '';
+  const kpiPeriodSuffix = kpiComboImpossible && selectedMonth != null && !cfMonthReal ? ' · CY total' : '';
 
   const pieData = capForDonut(
     selectedMaker
@@ -623,11 +645,15 @@ export function OverviewPage() {
         />
       )}
 
-      {exactlyOnePairActive && (
-        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance">
-          All four cards below are sourced from the cross-tab panel (a <span className="font-semibold text-[var(--accent)]">year total</span>, not this month) since VAHAN has no single table for this combination.
+      {exactlyOnePairActive && (cfMonthReal ? (
+        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance" data-testid="kpi-source-banner">
+          The cards below are the <span className="font-semibold text-[var(--accent)]">real {MONTH_NAMES[selectedMonth! - 1]} {selectedYear}</span> figure from VAHAN's monthly category × fuel report.
         </div>
-      )}
+      ) : (
+        <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance" data-testid="kpi-source-banner">
+          The cards below are a <span className="font-semibold text-[var(--accent)]">{cyLabel(selectedYear)} total</span>{selectedMonth != null ? ', not this month' : ''}, from the cross-tab report.
+        </div>
+      ))}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {allThreeActive ? (
@@ -668,7 +694,9 @@ export function OverviewPage() {
             <KPICard
               label={`Total Registrations${kpiPeriodSuffix}`}
               value={kpiComboImpossible ? (crosstabTotal ?? NO_VALUE) : (kpis?.total_this_month ?? 0)}
-              sub={kpiComboImpossible ? undefined : `${cyLabel(selectedYear)}${selectedMonth ? ` · ${MONTH_NAMES[selectedMonth - 1]}` : ' · year to date'}`}
+              sub={kpiComboImpossible
+                ? (cfMonthReal ? `${cyLabel(selectedYear)} · ${MONTH_NAMES[selectedMonth! - 1]}` : `${cyLabel(selectedYear)} · full year`)
+                : `${cyLabel(selectedYear)}${selectedMonth ? ` · ${MONTH_NAMES[selectedMonth - 1]}` : ' · year to date'}`}
               icon={<Car className="w-4 h-4" />}
               loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
               index={0}
@@ -677,7 +705,7 @@ export function OverviewPage() {
               // One source of truth for the YoY card: a % with its arrow, or
               // a dash + "no prior-year data" -- never "— " over "▲ 0.0%".
               const yoy = kpiComboImpossible
-                ? (exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? null : null)
+                ? (cfMonthReal ? cfMonthYoy : exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? null : null)
                 : (yoyKnown ? (yoyRaw ?? null) : null);
               const loading = kpiComboImpossible ? crosstabLoading : (kpisLoading || (yoyRaw === 0 && priorKpisLoading));
               return (
@@ -686,9 +714,11 @@ export function OverviewPage() {
                   value={yoy == null ? NO_VALUE : `${yoy >= 0 ? '+' : ''}${yoy.toFixed(1)}%`}
                   // Name the window the % actually compares (the backend
                   // cuts at the last complete month), e.g. "Jan–Aug vs Jan–Aug".
+                  noChangeLabel={cfMonthReal && cfMonthPrior && !cfMonthPrior.available ? `no reliable ${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear - 1} figure` : undefined}
                   sub={yoy == null ? undefined : (() => {
+                    if (cfMonthReal) return `${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear} vs ${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear - 1}`;
                     const through = !kpiComboImpossible ? kpis?.yoy_compare_through_month : null;
-                    if (!through) return `vs ${cyLabel(selectedYear - 1)}, same months`;
+                    if (!through) return `${cyLabel(selectedYear)} vs ${cyLabel(selectedYear - 1)}`;
                     const w = selectedMonth ? monthWindow(selectedMonth, selectedMonth) : monthWindow(1, through);
                     return `${w} ${selectedYear} vs ${w} ${selectedYear - 1}`;
                   })()}
@@ -1028,141 +1058,53 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
  * Vehicle Class cross-tab (see FuelCategoryTotal / fuel-category-breakdown).
  * Rendered only when both selectedCategory and fuelGroup are set. */
 function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearData }: { year: number; category: string; fuelGroup: string; month: number | null; state: string | null; hasYearData: boolean }) {
-  // A category-scoped account can't get a fuel figure across all categories
-  // (the server pins its category, and category + month is a 400 there), so
-  // those rows would sit on "···" forever. They're left out instead.
-  const { isCategoryLocked } = useScopeLock();
   const { data, isLoading } = useQuery({
     queryKey: ['fuelCategoryBreakdown', year, category, fuelGroup, state],
     queryFn: ({ signal }) => getFuelCategoryBreakdown({ year, vehicle_category: category, fuel_group: fuelGroup, state }, signal),
   });
-
-  // The exact combo (e.g. "EV Two-Wheelers in March") only exists as a year
-  // total -- but each half of it, taken alone, IS real month-level data
-  // (Category alone from the vehicle_class-dimension pass, Fuel alone from
-  // the fuel-dimension pass -- see Registration.is_supplementary). Surfacing
-  // both next to the year total gives an honest closest answer instead of
-  // just explaining why the exact number isn't available (found: users
-  // expect a month number here and don't know a narrower single-filter
-  // query would actually give them one).
-  // Shared key with Overview's own /categories/ query (same year/month/
-  // state) -- this used to be a separate 'categoryMonthlyOnly' key that
-  // re-sent the identical request.
-  const { data: categoryMonthly } = useCategoriesQuery({ year, month, state }, { enabled: !!month });
-  const categoryMonthlyCount = (categoryMonthly || []).find((c) => c.vehicle_category === category)?.total_count;
-
-  const { data: fuelMonthly } = useQuery({
-    queryKey: ['fuelMonthlyOnly', year, month, state],
-    queryFn: () => getFuelBreakdown({ year, month, state }),
-    enabled: !!month && !isCategoryLocked,
+  // Month picked: ask for the REAL month figure (same query key as the KPI
+  // row, so one request). It replaces the two modelled "~" estimates this
+  // card used to show -- those also waited on an all-India /fuel-breakdown
+  // that could leave "···" on screen indefinitely.
+  const { data: monthAnswer, isLoading: monthLoading } = useQuery({
+    queryKey: ['categoryFuelMonth', year, month, category, fuelGroup, state],
+    queryFn: ({ signal }) => getCategoryFuelMonth({ year, month: month!, vehicle_category: category, fuel_group: fuelGroup, state }, signal),
+    enabled: month != null,
   });
-  const fuelMonthlyCount = (fuelMonthly || []).find(
-    (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
-  )?.count;
-
-  // Two ESTIMATES (not real data) for the exact combo-by-month, built by
-  // prorating the real year-total crosstab down using each side's own real
-  // monthly curve -- e.g. "category X was 7% of its FY total in this month,
-  // so assume the combo was too." Two valid bases (category's curve vs
-  // fuel's curve) can disagree meaningfully (confirmed live: 20% apart on a
-  // real example) since there's no real month-level combo data anywhere to
-  // check either against -- shown side by side, clearly marked as modeled,
-  // specifically so that disagreement stays visible rather than picking one
-  // and presenting it as settled.
-  // Year-only: same cache entry Categories/CategoryDetail use for this
-  // year+state (was its own 'categoryYearOnly' key).
-  const { data: categoryYearly } = useCategoriesQuery({ year, month: null, state }, { enabled: !!month });
-  const categoryYearCount = (categoryYearly || []).find((c) => c.vehicle_category === category)?.total_count;
-
-  const { data: fuelYearly } = useQuery({
-    queryKey: ['fuelYearOnly', year, state],
-    queryFn: () => getFuelBreakdown({ year, month: null, state }),
-    enabled: !!month && !isCategoryLocked,
-  });
-  const fuelYearCount = (fuelYearly || []).find(
-    (f: { fuel_type: string; count: number }) => f.fuel_type === fuelGroup
-  )?.count;
 
   // See MakerCategoryPanel's comment above -- hasYearData (not an empty
   // filtered response) tells "not scraped this year" apart from a real zero.
   const noDataForYear = !hasYearData;
   const count = (data || []).find((r: { vehicle_category: string; count: number }) => r.vehicle_category === category)?.count ?? 0;
-
-  // noDataForYear-gated: `count` falls back to 0 when the crosstab simply
-  // hasn't been scraped for this year/state (see the comment on
-  // noDataForYear above) -- without this guard, an unscraped combo would
-  // estimate to a confident-looking "~0" instead of the "unknown" that it
-  // actually is (found in review: categoryMonthlyCount/fuelMonthlyCount
-  // come from separate, independently-scraped endpoints and can be real
-  // even when the crosstab itself has nothing for this year).
-  const estimateByCategoryCurve = (!noDataForYear && categoryYearCount && categoryMonthlyCount != null)
-    ? count * (categoryMonthlyCount / categoryYearCount)
-    : undefined;
-  const estimateByFuelCurve = (!noDataForYear && fuelYearCount && fuelMonthlyCount != null)
-    ? count * (fuelMonthlyCount / fuelYearCount)
-    : undefined;
+  const monthReal = month != null && !!monthAnswer?.available && monthAnswer.count != null;
+  const loading = isLoading || (month != null && monthLoading);
+  const value = monthReal ? monthAnswer!.count! : count;
 
   return (
     // Standard card shell -- see MakerCategoryPanel's comment above.
-    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
+    <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" data-testid="fuel-category-panel">
       <div className="mb-4">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{fuelGroup} {category}</h3>
         <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-          {cyLabel(year)}{state && <> · {state}</>} — year total
+          {monthReal ? `${MONTH_NAMES[month! - 1]} ${year}` : cyLabel(year)}{state && <> · {state}</>} — {monthReal ? 'monthly figure' : 'calendar-year total'}
         </p>
       </div>
       <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
         <span>Registrations</span>
-        {isLoading ? (
+        {loading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
-        ) : noDataForYear ? (
+        ) : noDataForYear && !monthReal ? (
           <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for {cyLabel(year)}</span>
         ) : (
-          <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
+          <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{value.toLocaleString('en-IN')}</span>
         )}
       </div>
-      {month && (
-        <>
-          <p className="text-[10px] text-[var(--text-muted)] mt-1">
-            This is a year total — the underlying data has no month breakdown, so the Month filter doesn't apply here.
-          </p>
-          <div className="mt-2 pt-2 border-t border-[var(--border)] flex flex-col gap-1">
-            <p className="text-[10px] text-[var(--text-muted)]">Closest real numbers for {MONTH_NAMES[month - 1]} {year} (each alone, not combined):</p>
-            <div className="flex items-center justify-between text-[11px]">
-              <span>{category} (all powertrains)</span>
-              <span className="font-mono font-semibold text-[var(--text-primary)]">
-                {categoryMonthlyCount != null ? categoryMonthlyCount.toLocaleString('en-IN') : '···'}
-              </span>
-            </div>
-            {!isCategoryLocked && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span>{fuelGroup} (all categories)</span>
-                <span className="font-mono font-semibold text-[var(--text-primary)]">
-                  {fuelMonthlyCount != null ? fuelMonthlyCount.toLocaleString('en-IN') : '···'}
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="mt-2 pt-2 border-t border-dashed border-[var(--border)] flex flex-col gap-1">
-            <p className="text-[10px] text-[var(--text-muted)]">
-              Estimated {fuelGroup} {category} for {MONTH_NAMES[month - 1]} {year} — modeled from the year total above, not observed. VAHAN has no real month-level data for this combo; the two methods below can disagree.
-            </p>
-            <div className="flex items-center justify-between text-[11px]">
-              <span>~ by {category}'s monthly pattern</span>
-              <span className="font-mono font-semibold text-[var(--accent)]">
-                {estimateByCategoryCurve != null ? `~${Math.round(estimateByCategoryCurve).toLocaleString('en-IN')}` : '···'}
-              </span>
-            </div>
-            {!isCategoryLocked && (
-              <div className="flex items-center justify-between text-[11px]">
-                <span>~ by {fuelGroup}'s monthly pattern</span>
-                <span className="font-mono font-semibold text-[var(--accent)]">
-                  {estimateByFuelCurve != null ? `~${Math.round(estimateByFuelCurve).toLocaleString('en-IN')}` : '···'}
-                </span>
-              </div>
-            )}
-          </div>
-        </>
+      {month != null && !loading && (
+        <p className="text-[10px] text-[var(--text-muted)] mt-1" data-testid="fuel-category-month-note">
+          {monthReal
+            ? `From VAHAN's monthly category × fuel report. ${cyLabel(year)} total: ${count.toLocaleString('en-IN')}.`
+            : `No reliable ${MONTH_NAMES[month - 1]} figure for this pair${monthAnswer?.unanswerable_reason ? ` — ${monthAnswer.unanswerable_reason}` : ''} Showing the ${cyLabel(year)} total instead.`}
+        </p>
       )}
     </div>
   );
