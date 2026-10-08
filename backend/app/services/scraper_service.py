@@ -29,6 +29,10 @@ class ScrapeFailedError(RuntimeError):
 PARTIAL_EXIT_CODE = 3
 # dimension -> state names the last run left partial (from its PARTIAL_STATES line)
 _partial_states: dict[str, list[str]] = {}
+# dimension -> count of RTOs that were empty AND had no data for the year
+# before the run (closed offices, catch-all codes). Informational only; they
+# do not make the run partial (see run_full_scrape.classify_state).
+_structurally_empty: dict[str, int] = {}
 
 
 def _clear_response_caches() -> None:
@@ -290,6 +294,11 @@ def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool 
             logger.info("[scraper:%s] %s", dimension, line.rstrip())
             if line.startswith("PARTIAL_STATES:"):
                 _partial_states[dimension] = [s.strip() for s in line.split(":", 1)[1].split(",") if s.strip()]
+            elif line.startswith("STRUCTURALLY_EMPTY_RTOS:"):
+                try:
+                    _structurally_empty[dimension] = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
     return proc.wait()
 
 
@@ -339,7 +348,9 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     settings.REFRESH_STATUS = "running"
     settings.REFRESH_ERROR = None
     settings.REFRESH_PARTIAL_STATES = []
+    settings.REFRESH_STRUCTURALLY_EMPTY_RTOS = {}
     _partial_states.clear()
+    _structurally_empty.clear()
     settings.LAST_REFRESH_STARTED_AT = datetime.now(timezone.utc)
     logger.info("Starting live VAHAN4 scrape at %s (concurrent_states=%s, force=%s, year=%s)", settings.LAST_REFRESH_STARTED_AT, concurrent_states, force, year or "current")
 
@@ -395,6 +406,7 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     except Exception:
         logger.exception("Post-scrape VACUUM ANALYZE failed -- scrape data itself is still valid, just not vacuumed yet")
 
+    settings.REFRESH_STRUCTURALLY_EMPTY_RTOS = dict(_structurally_empty)
     if partial_dimensions:
         # Honest status: the run finished and wrote data, but some states
         # have empty/failed RTOs (and, on the maker pass, kept their
@@ -405,7 +417,8 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
         settings.REFRESH_ERROR = (
             f"Partial refresh: {len(states) or 'some'} state(s) incomplete in "
             f"{', '.join(partial_dimensions)} pass(es)" + (f": {', '.join(states)}" if states else "")
-            + ". They are re-scraped on the next run."
+            + ". Incomplete = an RTO failed/was skipped, or returned zero records after having data "
+            "before; RTOs that never had data for the year are not counted. Re-scraped on the next run."
         )
         logger.warning("Live VAHAN4 scrape finished PARTIAL (year=%s): %s", scraped_year, settings.REFRESH_ERROR)
     else:

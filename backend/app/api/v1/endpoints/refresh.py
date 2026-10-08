@@ -89,6 +89,9 @@ async def get_refresh_status(db: AsyncSession = Depends(get_db), _user: User = D
         "status": settings.REFRESH_STATUS,
         "error": settings.REFRESH_ERROR,
         "partial_states": list(settings.REFRESH_PARTIAL_STATES),
+        # Additive (older clients ignore it): RTOs per pass that were empty
+        # but never had data for the year -- not counted as partial.
+        "structurally_empty_rtos": dict(settings.REFRESH_STRUCTURALLY_EMPTY_RTOS),
     }
 
 

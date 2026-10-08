@@ -109,28 +109,53 @@ async def _purge_synthetic_for_state(db, state_name: str, year: int) -> int:
 PARTIAL_EXIT_CODE = 3
 
 
-def classify_state(dimension: str, total: int, skipped: int, succeeded: int, empty: int) -> str:
+def classify_state(dimension: str, total: int, skipped: int, succeeded: int, empty: int,
+                   newly_empty: int | None = None) -> str:
     """What a finished state means for the run.
 
-    'partial_empty' -- some RTOs answered with blank tables. Never purge, and
-                       report the state partial (re-scraped next run).
-    'purge'         -- maker pass, every RTO done with records (this run or an
-                       earlier one): safe to delete the synthetic fallback.
-    'done'          -- vehicle_class/fuel pass fully done (those passes are
-                       additive and never purge).
-    'partial'       -- some RTOs failed / were skipped / state never loaded.
+    'partial'         -- some RTOs failed / were quarantined / state never
+                         loaded. Re-scraped next run.
+    'partial_empty'   -- every RTO answered, but at least one NEWLY-empty RTO
+                         (it had data for this year+dimension before this run
+                         and now returned a blank table). That is VAHAN
+                         degrading, not a closed office: report partial.
+    'done_with_empty' -- every RTO answered; the only empty ones were already
+                         empty before this run (no rows for this year+dimension
+                         in the DB: catch-all codes, closed offices -- ~376 of
+                         1,784 RTOs have no 2026 maker data). Not partial, so
+                         status can reach 'success' -- but NEVER purged.
+    'purge'           -- maker pass, every RTO done with records (this run or
+                         an earlier one): safe to delete the synthetic fallback.
+    'done'            -- vehicle_class/fuel pass fully done with records.
+
+    The purge guard stays strict: ANY empty RTO (newly or structurally) blocks
+    the purge -- an empty RTO produced nothing to replace synthetic rows with.
 
     `succeeded` counts only RTOs that returned records (see
-    vahan_scraper._scrape_state). Only purge on the maker pass -- see
-    _purge_synthetic_for_state.
+    vahan_scraper._scrape_state). `newly_empty` defaults to `empty` (every
+    empty RTO treated as newly empty -- the conservative reading when the
+    caller has no prior-data information).
     """
+    if newly_empty is None:
+        newly_empty = empty
     if total <= 0:
         return "partial"
-    if empty:
+    if skipped + succeeded + empty < total:
+        return "partial"
+    if newly_empty:
         return "partial_empty"
-    if skipped + succeeded >= total:
-        return "purge" if dimension == "maker" else "done"
-    return "partial"
+    if empty:
+        return "done_with_empty"
+    return "purge" if dimension == "maker" else "done"
+
+
+def split_empty(empty_codes, had_data_before: frozenset[str]) -> tuple[list[str], list[str]]:
+    """(newly_empty, structurally_empty): an empty RTO that had rows for this
+    (year, dimension) before the run is a regression; one that never had any
+    is a structurally empty office."""
+    newly = [c for c in empty_codes if c in had_data_before]
+    structural = [c for c in empty_codes if c not in had_data_before]
+    return newly, structural
 
 
 async def main(year: int, dimension: str, concurrent_states: int = 1, force: bool = False) -> int:
@@ -148,7 +173,11 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
         # attempt of *this* run" apart from "already has data from a normal
         # scrape weeks ago"; without force, a full re-scrape intended to
         # correct stale numbers silently skips almost every RTO instead.
-        skip_rtos = {} if force else await _already_done_rtos(db, year, dimension)
+        # RTOs that had data for this (year, dimension) BEFORE this run -- the
+        # baseline for telling a newly-empty RTO (VAHAN degraded: report
+        # partial) from a structurally empty one (never had data: not partial).
+        had_data = await _already_done_rtos(db, year, dimension)
+        skip_rtos = {} if force else had_data
         if skip_rtos:
             total_skipped = sum(len(v) for v in skip_rtos.values())
             logger.info("Resuming: %d RTOs across %d states already scraped this run", total_skipped, len(skip_rtos))
@@ -157,6 +186,7 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
         states_replaced = 0
         states_partial = 0
         partial_states: list[str] = []
+        structurally_empty: dict[str, list[str]] = {}
         async for item in scrape_all_india(year=year, dimension=dimension, skip_rtos=skip_rtos, max_concurrent_states=concurrent_states):
             if item.get("state_complete"):
                 state_name = item["state_name"]
@@ -170,15 +200,29 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
                 # VAHAN answering with blank tables instead of erroring is a
                 # real degradation mode (it is how the 2017 run failed).
                 done_now = skipped + succeeded
-                outcome = classify_state(dimension, total, skipped, succeeded, empty)
+                empty_codes = item.get("rto_empty_codes")
+                if empty_codes is None:  # producer without per-code detail: conservative
+                    newly, structural = [None] * empty, []
+                else:
+                    newly, structural = split_empty(empty_codes, had_data.get(state_name, frozenset()))
+                outcome = classify_state(dimension, total, skipped, succeeded, empty, len(newly))
+                if structural:
+                    structurally_empty[state_name] = structural
                 if outcome == "partial_empty":
                     states_partial += 1
                     partial_states.append(state_name)
                     logger.error(
-                        "%s: %d/%d RTOs returned zero records -- state left partial%s; "
-                        "re-scraping next run",
-                        state_name, empty, total,
+                        "%s: %d/%d RTOs returned zero records (%d of them had data before: %s) -- "
+                        "state left partial%s; re-scraping next run",
+                        state_name, empty, total, len(newly), ", ".join(c for c in newly if c) or "?",
                         " (synthetic rows kept, not purged)" if dimension == "maker" else "",
+                    )
+                elif outcome == "done_with_empty":
+                    states_replaced += 1
+                    logger.info(
+                        "%s: %d/%d RTOs done; %d structurally empty (no data for %d before this run either: %s)%s",
+                        state_name, done_now, total, empty, year, ", ".join(structural),
+                        " -- synthetic rows kept, not purged" if dimension == "maker" else "",
                     )
                 elif outcome == "purge":
                     purged = await _purge_synthetic_for_state(db, state_name, year)
@@ -218,6 +262,11 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
     if partial_states:
         # Parsed by app.services.scraper_service to report the run as partial.
         print(f"PARTIAL_STATES: {', '.join(partial_states)}", flush=True)
+    if structurally_empty:
+        n = sum(len(v) for v in structurally_empty.values())
+        logger.info("%d structurally empty RTOs across %d states (not counted as partial)", n, len(structurally_empty))
+        # Parsed by scraper_service -> /refresh/status structurally_empty_rtos.
+        print(f"STRUCTURALLY_EMPTY_RTOS: {n}", flush=True)
     return states_partial
 
 

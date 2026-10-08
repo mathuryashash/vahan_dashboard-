@@ -896,6 +896,7 @@ async def _scrape_state(
 
     succeeded = 0
     empty = 0
+    empty_codes: list[str] = []
     quarantined = 0
     tracker = rto_retry.default_tracker()
     for rto_index, rto in enumerate(rtos):
@@ -918,6 +919,7 @@ async def _scrape_state(
                 tracker.record_success(dimension, rto["rto_code"])
             if not records:
                 empty += 1
+                empty_codes.append(rto["rto_code"])
                 logger.warning(
                     "%s / %s: zero records (dimension=%s, year=%d)",
                     state_name, rto["rto_code"], dimension, year,
@@ -963,6 +965,9 @@ async def _scrape_state(
         "rto_skipped": skipped_count,
         "rto_succeeded": succeeded,
         "rto_empty": empty,
+        # Which RTOs were empty, so run_full_scrape can tell a structurally
+        # empty office (no data before this run either) from a newly-empty one.
+        "rto_empty_codes": empty_codes,
         "rto_quarantined": quarantined,
     })
     return items

@@ -79,6 +79,95 @@ def test_state_with_some_empty_rtos_is_partial_never_purged():
     assert classify_state("maker", total=0, skipped=0, succeeded=0, empty=0) == "partial"
 
 
+def test_structurally_empty_rtos_do_not_make_a_state_partial_forever():
+    """P2-1: ~376 of 1,784 RTOs have no 2026 maker data at all (closed
+    offices, catch-all codes). Counting them as partial pinned the run status
+    at 'partial' on every run. Only NEWLY-empty RTOs (had data before) or
+    real failures make a state partial -- and NO empty RTO ever allows a purge."""
+    # 3 RTOs: 2 with records, 1 empty that never had data -> not partial, not purged.
+    assert classify_state("maker", total=3, skipped=0, succeeded=2, empty=1, newly_empty=0) == "done_with_empty"
+    assert classify_state("fuel", total=3, skipped=0, succeeded=2, empty=1, newly_empty=0) == "done_with_empty"
+    # The same empty RTO that HAD data before this run -> partial.
+    assert classify_state("maker", total=3, skipped=0, succeeded=2, empty=1, newly_empty=1) == "partial_empty"
+    # Structurally empty + one failed RTO -> still partial (the failure).
+    assert classify_state("maker", total=4, skipped=0, succeeded=2, empty=1, newly_empty=0) == "partial"
+    # Earlier-run RTOs count toward completeness.
+    assert classify_state("maker", total=4, skipped=1, succeeded=2, empty=1, newly_empty=0) == "done_with_empty"
+
+
+def test_split_empty_uses_prior_data_baseline():
+    from scraper.run_full_scrape import split_empty
+    newly, structural = split_empty(["MH4", "MH99"], frozenset({"MH4", "MH12"}))
+    assert newly == ["MH4"] and structural == ["MH99"]
+
+
+async def test_scrape_state_reports_which_rtos_were_empty(monkeypatch):
+    summary, _ = await _run_state(monkeypatch, {"1": [REC], "2": [[]], "3": [[]]})
+    assert summary["rto_empty"] == 2 and summary["rto_empty_codes"] == ["MH1", "MH4"]
+
+
+async def test_run_full_scrape_main_status_with_structural_and_new_empties(monkeypatch, capsys):
+    """End-to-end over main(): a state whose only empty RTO never had data is
+    done (exit 0 path, no purge); a state whose empty RTO had data is partial."""
+    from scraper import run_full_scrape as rfs
+
+    class _DB:
+        async def commit(self):
+            pass
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _DB()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Lock:
+        def __call__(self, *a, **k):
+            return self
+
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *exc):
+            return False
+
+    async def noop(*a, **k):
+        return None
+
+    async def had_data(db, year, dimension):
+        return {"Sikkim": frozenset({"SK1"}), "Haryana": frozenset({"HR26", "HR51"})}
+
+    async def codes(db):
+        return {"Sikkim": "SK", "Haryana": "HR"}
+
+    purged = []
+
+    async def purge(db, state_name, year):
+        purged.append(state_name)
+        return 0
+
+    async def scrape(**kw):
+        yield {"state_complete": True, "state_name": "Sikkim", "rto_total": 2, "rto_skipped": 0,
+               "rto_succeeded": 1, "rto_empty": 1, "rto_empty_codes": ["SK99"]}
+        yield {"state_complete": True, "state_name": "Haryana", "rto_total": 2, "rto_skipped": 0,
+               "rto_succeeded": 1, "rto_empty": 1, "rto_empty_codes": ["HR51"]}
+
+    monkeypatch.setattr(rfs, "init_db", noop)
+    monkeypatch.setattr(rfs, "scrape_write_lock", _Lock())
+    monkeypatch.setattr(rfs, "AsyncSessionLocal", _Ctx)
+    monkeypatch.setattr(rfs, "_already_done_rtos", had_data)
+    monkeypatch.setattr(rfs, "_state_code_lookup", codes)
+    monkeypatch.setattr(rfs, "_purge_synthetic_for_state", purge)
+    monkeypatch.setattr(rfs, "scrape_all_india", scrape)
+    partial = await rfs.main(2026, "maker", force=True)
+    out = capsys.readouterr().out
+    assert partial == 1, "only Haryana (HR51 had data, now empty) is partial"
+    assert "PARTIAL_STATES: Haryana" in out and "Sikkim" not in out.split("PARTIAL_STATES:")[1].splitlines()[0]
+    assert "STRUCTURALLY_EMPTY_RTOS: 1" in out
+    assert purged == [], "purge guard stays strict: any empty RTO blocks the purge"
+
+
 async def test_crosstab_path_does_not_count_empty_as_succeeded(monkeypatch):
     class _Client:
         async def __aenter__(self):
@@ -135,8 +224,36 @@ async def test_refresh_status_exposes_partial_states(client, monkeypatch):
     monkeypatch.setattr(settings, "REFRESH_STATUS", "partial")
     monkeypatch.setattr(settings, "REFRESH_PARTIAL_STATES", ["Haryana"])
     monkeypatch.setattr(settings, "LAST_UPDATED", "2026-10-08 10:00 UTC")
+    monkeypatch.setattr(settings, "REFRESH_STRUCTURALLY_EMPTY_RTOS", {"maker": 376})
     body = (await client.get("/api/v1/refresh/status")).json()
     assert body["status"] == "partial" and body["partial_states"] == ["Haryana"]
+    assert body["structurally_empty_rtos"] == {"maker": 376}
+    assert set(body) >= {"last_updated", "status", "error", "partial_states"}, "backward compatible"
+
+
+async def test_structurally_empty_only_run_reports_success(monkeypatch):
+    from app.services import scraper_service
+
+    def fake_dim(dimension, concurrent_states=1, force=True, year=None):
+        if dimension == "maker":
+            scraper_service._structurally_empty["maker"] = 376
+        return 0  # run_full_scrape exits 0 when only structural empties
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(scraper_service, "_run_dimension_sync", fake_dim)
+    monkeypatch.setattr(scraper_service, "vacuum_tables", noop)
+    monkeypatch.setattr("app.services.scrape_quality.check_scrape_quality", noop)
+    try:
+        await scraper_service.run_scraper()
+        assert settings.REFRESH_STATUS == "success"
+        assert settings.REFRESH_PARTIAL_STATES == []
+        assert settings.REFRESH_STRUCTURALLY_EMPTY_RTOS == {"maker": 376}
+    finally:
+        settings.REFRESH_STATUS = "idle"
+        settings.REFRESH_STRUCTURALLY_EMPTY_RTOS = {}
+        settings.REFRESH_ERROR = None
 
 
 # ---- retries ----------------------------------------------------------------

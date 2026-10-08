@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # States the last run left incomplete (empty or failed RTOs); see
     # scraper_service.run_scraper. Non-empty only when REFRESH_STATUS == "partial".
     REFRESH_PARTIAL_STATES: list[str] = []
+    # dimension -> RTOs empty in the last run that had no data for the year
+    # before it either (structurally empty; NOT a reason for 'partial').
+    REFRESH_STRUCTURALLY_EMPTY_RTOS: dict[str, int] = {}
     # Minimum time between manually-triggered scrapes. POST /refresh/ is now
     # admin-only (require_role), but the cooldown still matters even
     # authenticated: an admin fat-fingering the button twice shouldn't launch
