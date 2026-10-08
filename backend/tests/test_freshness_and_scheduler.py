@@ -262,3 +262,45 @@ async def test_successful_scrape_clears_response_caches(monkeypatch):
     monkeypatch.setattr("app.services.scrape_quality.check_scrape_quality", noop)
     await scraper_service.run_scraper()
     assert probe.get("k") is None
+
+
+async def test_single_flight_never_shares_across_scopes():
+    """The flight key must include resolved scope args: two tenants asking
+    the same question concurrently get their OWN answers."""
+    gate = asyncio.Event()
+    calls = []
+
+    @single_flight
+    async def endpoint(year: int, user_rto: str | None = None, user_category: str | None = None, db=None):
+        calls.append((user_rto, user_category))
+        await gate.wait()
+        return (year, user_rto, user_category)
+
+    national = asyncio.create_task(endpoint(2026))
+    rto = asyncio.create_task(endpoint(2026, user_rto="MH1"))
+    cat = asyncio.create_task(endpoint(2026, user_category="Two-Wheeler"))
+    await asyncio.sleep(0.01)
+    gate.set()
+    assert await national == (2026, None, None)
+    assert await rto == (2026, "MH1", None)
+    assert await cat == (2026, None, "Two-Wheeler")
+    assert len(calls) == 3
+
+
+async def test_single_flight_dedupes_concurrent_kpis_requests(client, db_session, monkeypatch):
+    """Router level: N concurrent identical /summary/kpis requests run the
+    endpoint body once."""
+    from app.api.v1.endpoints import summary
+
+    runs = []
+    real = summary.latest_month_with_data
+
+    async def counting(db, year):
+        runs.append(year)
+        await asyncio.sleep(0.05)
+        return await real(db, year)
+    monkeypatch.setattr(summary, "latest_month_with_data", counting)
+    rs = await asyncio.gather(*[client.get("/api/v1/summary/kpis", params={"year": 2026}) for _ in range(4)])
+    assert all(r.status_code == 200 for r in rs)
+    assert len({r.text for r in rs}) == 1
+    assert runs == [2026], f"expected one execution, got {len(runs)}"

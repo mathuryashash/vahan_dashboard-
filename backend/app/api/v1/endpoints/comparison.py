@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters
 from app.core.scope import enforce_state, get_effective_category, scoped_rto
-from app.core.cache import TTLCache
+from app.core.cache import TTLCache, single_flight
 from app.models.models import Registration, User, UserScope
 from app.schemas.schemas import StateComparisonData, StateComparisonRanking
 from app.core.validation import MAX_YEAR, MIN_YEAR
@@ -37,6 +37,7 @@ _compare_cache = TTLCache(_COMPARE_CACHE_TTL_SECONDS)
 
 
 @router.get("/states", response_model=StateComparisonData)
+@single_flight
 async def compare_states(
     state_a: str,
     state_b: str | None = None,
@@ -97,6 +98,7 @@ async def compare_states(
 
 
 @router.get("/all-states", response_model=list[StateComparisonRanking])
+@single_flight
 async def get_all_states_comparison(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     # Bounded, matching summary.get_state_ranking and categories.get_top_makers.

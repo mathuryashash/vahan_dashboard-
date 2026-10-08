@@ -4,7 +4,7 @@ from sqlalchemy import select, func, desc, or_, and_
 from app.core.database import get_db
 from app.core.query_filters import apply_total_filters, exclude_supplementary
 from app.core.scope import get_effective_category, require_rto_code, require_state_code, scoped_rto
-from app.core.cache import TTLCache
+from app.core.cache import TTLCache, single_flight
 from app.models.models import MakerCategoryTotal, Registration
 from app.schemas.schemas import RtoAnalysis, RtoListItem
 from app.core.validation import MAX_YEAR, MIN_YEAR
@@ -43,6 +43,7 @@ def fy_filter(fy_year: int):
 
 
 @router.get("/{state_code}/list", response_model=list[RtoListItem])
+@single_flight
 async def get_rtos_for_state(
     state_code: str = Depends(require_state_code),
     year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR, description="Financial year start (April `year` - March `year+1`)"),
@@ -105,6 +106,7 @@ async def get_rtos_for_state(
 
 
 @router.get("/{rto_code}/analysis", response_model=RtoAnalysis)
+@single_flight
 async def get_rto_analysis(
     rto_code: str = Depends(require_rto_code),
     year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR, description="Financial year start (April `year` - March `year+1`)"),

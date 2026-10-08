@@ -167,6 +167,7 @@ async def get_crosstab_coverage(
 
 
 @router.get("/")
+@single_flight
 async def get_categories(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
@@ -264,6 +265,7 @@ async def get_categories(
 
 
 @router.get("/top-makers")
+@single_flight
 async def get_top_makers(
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
@@ -346,6 +348,7 @@ async def get_top_makers(
 
 
 @router.get("/fuel-breakdown")
+@single_flight
 async def get_fuel_breakdown(
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
@@ -420,6 +423,7 @@ async def get_fuel_breakdown(
 
 
 @router.get("/maker-category-breakdown")
+@single_flight
 async def get_maker_category_breakdown(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
@@ -488,6 +492,7 @@ _MIN_BRAND_UNITS = 100
 
 
 @router.get("/brand-options")
+@single_flight
 async def get_brand_options(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
@@ -543,6 +548,7 @@ async def get_brand_options(
 
 
 @router.get("/fuel-category-breakdown")
+@single_flight
 async def get_fuel_category_breakdown(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
@@ -593,6 +599,7 @@ async def get_fuel_category_breakdown(
 
 
 @router.get("/maker-fuel-breakdown")
+@single_flight
 async def get_maker_fuel_breakdown(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
@@ -668,6 +675,7 @@ async def get_maker_fuel_breakdown(
 
 
 @router.get("/crosstab-detail", response_model=CrosstabDetail)
+@single_flight
 async def get_crosstab_detail(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),

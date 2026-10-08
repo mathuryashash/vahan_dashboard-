@@ -218,6 +218,7 @@ _trend_cache = TTLCache(_TREND_CACHE_TTL_SECONDS)
 
 
 @router.get("/trend", response_model=list[MonthCount])
+@single_flight
 async def get_trend(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
@@ -262,6 +263,7 @@ _state_ranking_cache = TTLCache(_STATE_RANKING_CACHE_TTL_SECONDS)
 
 
 @router.get("/state-ranking", response_model=list[StateRankingItem])
+@single_flight
 async def get_state_ranking(
     year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
