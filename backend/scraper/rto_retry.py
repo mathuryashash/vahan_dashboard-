@@ -95,7 +95,11 @@ class RtoFailureTracker:
     other passes' counts were lost. Each process only ever writes its own
     dimension's file, through a pid+uuid-unique temp name (a shared
     `rto_failures.tmp` also collided across processes). A legacy combined
-    `rto_failures.json` is still read on load.
+    `rto_failures.json` is migrated ONCE on load: its entries are merged
+    into the per-dimension files (per-dimension values win -- they are
+    newer) and the file is renamed to `rto_failures.json.migrated`, so it is
+    never read again (it was never rewritten either, so cleared failures
+    kept coming back from it on every load).
 
     Quarantine is not permanent: a skipped RTO is re-probed every
     `recheck_every`-th run it would otherwise be skipped (default
@@ -112,13 +116,42 @@ class RtoFailureTracker:
         self._lock = threading.Lock()
         self._data: dict[str, dict] = {}
         if self.path:
-            files = [self.path] if self.path.exists() else []
-            files += sorted(self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}"))
-            for f in files:
+            for f in sorted(self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}")):
                 try:
                     self._data.update(json.loads(f.read_text(encoding="utf-8")))
                 except (OSError, ValueError):
                     logger.warning("Ignoring unreadable RTO failure file %s", f)
+            if self.path.exists():
+                self._migrate_legacy()
+
+    def _migrate_legacy(self) -> None:
+        """Fold the legacy combined file into the per-dimension files, then
+        rename it out of the way. Concurrent passes may race here: whoever
+        loses the rename just finds the file gone, and every writer merged
+        the same legacy entries under per-dimension ones, so nothing is lost."""
+        try:
+            legacy = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError):
+            logger.warning("Legacy RTO failure file %s is unreadable; leaving it in place", self.path)
+            return
+        dims = set()
+        with self._lock:
+            for key, entry in legacy.items():
+                if ":" not in key:
+                    continue
+                dims.add(key.split(":", 1)[0])
+                self._data.setdefault(key, entry)
+            for dim in sorted(dims):
+                self._save(dim)
+        try:
+            self.path.replace(self.path.with_name(self.path.name + ".migrated"))
+            logger.info("Migrated legacy %s into per-dimension files (%s)", self.path.name, ", ".join(sorted(dims)))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.warning("Could not rename legacy %s after migrating it", self.path)
 
     @staticmethod
     def _key(dimension: str, rto_code: str) -> str:

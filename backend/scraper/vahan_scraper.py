@@ -68,12 +68,16 @@ XAXIS_SELECT_ID = "xaxisVar"
 YEAR_SELECT_ID = "selectedYear"
 REFRESH_BUTTON_ID = "irclay"
 TABLE_ID = "groupingTable"
-PAGE_SIZE = 25
-# Safety net, not a real limit: a single RTO's pivot table has at most a few
-# hundred rows in practice. This guards against a parsing bug (row_count
-# misread from a malformed response) turning the pagination loop below into
-# an unbounded hammer against the live site.
-MAX_PAGES = 200
+# There is deliberately NO paged-fetch path in this module any more (see
+# scrape_pivot_table). The retired one (fetch_table_page + _iter_table_pages,
+# 25 rows a page) is what truncated the 2003-2025 history: the DataTable's
+# paginator offset is server-side view state that SURVIVES an RTO switch in
+# the same JSF session. After paging RTO A to offset 25, the next RTO's
+# click_refresh rendered rows 26..N (verified live 2026-10-09: TG9 paged to 25,
+# then TG13 2019 vehicle_class rendered only S No 26 'VEHICLE FITTED WITH RIG'
+# of 26 rows), and the loop then fetched from offset 25 again -- so every RTO
+# after a paged one lost its first 25 rows, i.e. the alphabetical head (2W
+# classes, Bajaj/Hero/Honda). The single xlsx export ignores the paginator.
 
 
 class SourceUnavailableError(RuntimeError):
@@ -145,27 +149,11 @@ def _parse_options(text: str, select_id: str) -> list[tuple[str, str]]:
     ]
 
 
-def _parse_month_columns(text: str) -> list[str]:
-    """Month abbreviations in column order, e.g. ['JAN', 'FEB', ...] — the
-    report only has columns for months with data so far in the target year,
-    so this is read from the response rather than assumed to be all 12.
-    Header labels are padded with non-breaking spaces (e.g.
-    'aria-label="\\xa0\\xa0 JAN \\xa0\\xa0"'), not plain whitespace."""
-    return [m for m in re.findall(r'aria-label="[\s\xa0]*([A-Z]{3})[\s\xa0]*"', text) if m in MONTH_ABBR]
-
-
-def _parse_table_rows(text: str, num_month_cols: int) -> list[list[str]]:
-    """Row cell text values in order: [S No, Maker, <month>..., Total]."""
-    cells = re.findall(rf'<label id="{TABLE_ID}:\d+:[^"]*"[^>]*>([^<]*)</label>', text)
-    row_len = 2 + num_month_cols + 1
-    if row_len <= 0:
-        return []
-    return [cells[i : i + row_len] for i in range(0, len(cells) - row_len + 1, row_len)]
-
-
-def _parse_row_count(text: str) -> int:
+def _parse_row_count(text: str) -> int | None:
+    """The DataTable's own row count from a click_refresh response
+    (`rowCount:N` in the widget config), or None when absent."""
     m = re.search(r"rowCount:(\d+)", text)
-    return int(m.group(1)) if m else 0
+    return int(m.group(1)) if m else None
 
 
 _XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -283,6 +271,21 @@ def _validate_export(
         )
 
 
+def _check_row_count(rows: list[list[str]], data_start: int, declared: int | None, *, context: str) -> None:
+    """The export must hold exactly as many data rows as the rendered table
+    says it has (`rowCount:N` in the click_refresh response). _validate_export
+    catches a head-truncated export (S No not starting at 1); this catches a
+    TAIL-truncated one, which S No contiguity alone cannot see. Skipped when
+    the response carries no rowCount (nothing to compare against)."""
+    if declared is None:
+        return
+    exported = sum(1 for r in rows[data_start:] if r and r[0].strip().isdigit())
+    if exported != declared:
+        raise ExportIntegrityError(
+            f"{context}: export has {exported} data rows but the rendered table declares rowCount={declared}"
+        )
+
+
 def _exported_header_row(rows: list[list[str]], data_start: int) -> list[str] | None:
     """The nearest non-blank row above the first data row -- this is the
     leaf column-header row (class names / month abbreviations) regardless
@@ -395,8 +398,7 @@ def _parse_maker_category_table_rows(
 ) -> list[list[str]]:
     """Row cell text values, normalized to [S No, <label>, Total, <class>...]
     regardless of which header shape produced them (see _parse_header_layout)
-    -- same cell-extraction mechanism as _parse_table_rows (same
-    TABLE_ID-based label regex), just a different column layout."""
+    -- TABLE_ID-based label regex over the rendered HTML table."""
     cells = re.findall(rf'<label id="{TABLE_ID}:\d+:[^"]*"[^>]*>([^<]*)</label>', text)
     row_len = 2 + 1 + num_class_cols
     if row_len <= 0:
@@ -539,43 +541,6 @@ class _VahanSession:
     async def click_refresh(self) -> str:
         return await self._post(REFRESH_BUTTON_ID, "@all", "tablePnl", is_click=True)
 
-    async def fetch_table_page(self, first: int) -> str:
-        data = dict(self._form)
-        data.update(
-            {
-                "javax.faces.partial.ajax": "true",
-                "javax.faces.source": TABLE_ID,
-                "javax.faces.partial.execute": TABLE_ID,
-                "javax.faces.partial.render": TABLE_ID,
-                "javax.faces.ViewState": self._viewstate,
-                f"{TABLE_ID}_pagination": "true",
-                f"{TABLE_ID}_first": str(first),
-                f"{TABLE_ID}_rows": str(PAGE_SIZE),
-                f"{TABLE_ID}_skipChildren": "true",
-                f"{TABLE_ID}_encodeFeature": "true",
-            }
-        )
-        resp = await self._client.post(
-            REPORT_URL,
-            data=data,
-            headers={
-                "Faces-Request": "partial/ajax",
-                "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Referer": REPORT_URL,
-                "Origin": "https://vahan.parivahan.gov.in",
-                "Accept": "application/xml, text/xml, */*; q=0.01",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-            },
-        )
-        resp.raise_for_status()
-        text = resp.text
-        vs = _extract_viewstate(text)
-        if vs:
-            self._viewstate = vs
-        return text
-
     async def export_xlsx(self) -> bytes:
         """Triggers the report table's own "Download EXCEL file" button (a
         PrimeFaces <p:dataExporter>, found in the table markup as a plain
@@ -585,12 +550,13 @@ class _VahanSession:
 
         This is a normal (non-AJAX) form POST -- no javax.faces.partial.*
         fields -- and the response dumps the ENTIRE current table in one
-        shot, regardless of row count. That's why callers use this instead
-        of paginating through fetch_table_page: that AJAX pagination
-        occasionally re-served a stale duplicate of the previous page under
-        load (confirmed live, see _iter_table_pages/SessionExpiredError's
-        history), silently corrupting or losing data. A single response
-        with no follow-up requests can't suffer that failure mode."""
+        shot, regardless of row count and regardless of the paginator
+        offset the server-side view is sitting on. That's why callers use
+        this instead of the retired 25-row AJAX pagination, which both
+        re-served stale duplicate pages under load and -- the bigger loss --
+        started each RTO at the PREVIOUS RTO's page offset (see TABLE_ID's
+        comment). A single response with no follow-up requests can't suffer
+        either failure mode."""
         data = dict(self._form)
         data["javax.faces.ViewState"] = self._viewstate
         data["groupingTable:xls"] = "groupingTable:xls"
@@ -681,7 +647,7 @@ async def scrape_yaxis_by_vehicle_class_table(
     this response at all -- returns [{label_key: str, column_key: str,
     'count': int}, ...] for the whole year in one shot."""
     await _configure_pivot(session, year, yaxis_value, xaxis_value=xaxis_value)
-    await session.click_refresh()  # renders the report server-side; export reads that state
+    rendered = await session.click_refresh()  # renders the report server-side; export reads that state
     rows = parse_exported_xlsx(await session.export_xlsx())
 
     data_start = _exported_data_start(rows)
@@ -692,6 +658,7 @@ async def scrape_yaxis_by_vehicle_class_table(
         return []
     column_names = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
     _validate_export(rows, data_start, len(column_names), context=f"{yaxis_value} x {xaxis_value} {year}")
+    _check_row_count(rows, data_start, _parse_row_count(rendered), context=f"{yaxis_value} x {xaxis_value} {year}")
 
     records: list[dict] = []
     for row in rows[data_start:]:
@@ -733,58 +700,6 @@ async def scrape_maker_fuel_table(session: _VahanSession, year: int) -> list[dic
     )
 
 
-PAGE_FETCH_DELAY_SECONDS = 0.5
-
-
-async def _iter_table_pages(session: _VahanSession, row_count: int, parse_page, first_page_rows: list[list[str]] | None = None):
-    """Yields parsed rows for every page beyond the already-parsed first page
-    (offsets PAGE_SIZE, 2*PAGE_SIZE, ...). Pass the first page's already-
-    parsed rows as `first_page_rows` so a duplicate of *that* page can be
-    detected too, not just duplicates between later pages.
-
-    VAHAN occasionally serves a stale duplicate of the previous page when
-    successive pagination AJAX requests fire with no gap between them --
-    confirmed live: two different `first` offsets returning byte-identical
-    table content. Undetected, this both double-counts that page's rows AND
-    silently drops whichever page never actually got fetched, which is what
-    was corrupting maker/fuel-category totals in production (e.g. Bajaj
-    Auto's real per-RTO rows replaced by a duplicate of a different page).
-    Detected here by comparing each page's first parsed row to the previous
-    page's; retries with a short backoff before giving up and accepting
-    what came back."""
-    first = PAGE_SIZE
-    pages_fetched = 0
-    prev_first_row: list[str] | None = first_page_rows[0] if first_page_rows else None
-    while first < row_count and pages_fetched < MAX_PAGES:
-        rows: list[list[str]] = []
-        for attempt in range(5):
-            await asyncio.sleep(PAGE_FETCH_DELAY_SECONDS)
-            page_html = await session.fetch_table_page(first)
-            rows = parse_page(page_html)
-            first_row = rows[0] if rows else None
-            if not rows or first_row != prev_first_row:
-                break
-            logger.warning(
-                "Stale/duplicate page at offset %d (attempt %d/5), retrying...", first, attempt + 1
-            )
-            await asyncio.sleep(3 * (attempt + 1))
-        else:
-            # All 5 attempts returned a duplicate of the previous page.
-            # Persisting this page would double-count its rows AND silently
-            # drop whichever page never arrived -- raise rather than accept,
-            # so the caller's per-RTO handler skips this RTO and a later
-            # resume pass can retry it, instead of writing corrupted rows
-            # that look exactly like real data.
-            raise RuntimeError(
-                f"Pagination stuck: offset {first} returned a duplicate of the "
-                f"previous page on all 5 attempts (row_count={row_count})"
-            )
-        prev_first_row = rows[0] if rows else prev_first_row
-        yield rows
-        first += PAGE_SIZE
-        pages_fetched += 1
-
-
 async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) -> list[dict]:
     """Assumes state + RTO are already selected. Configures the
     <dimension> x Month pivot (dimension is one of DIMENSIONS' keys), reads
@@ -794,7 +709,10 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
     the caller (persist_rto_batch) maps it to the right column."""
     yaxis_value = DIMENSIONS[dimension]
     await _configure_pivot(session, year, yaxis_value)
-    await session.click_refresh()  # renders the report server-side; export reads that state
+    # Renders the report server-side; the export reads that state. Its
+    # response also carries the table's own rowCount -- an independent
+    # statement of how many rows the export must contain.
+    rendered = await session.click_refresh()
     rows = parse_exported_xlsx(await session.export_xlsx())
 
     data_start = _exported_data_start(rows)
@@ -805,6 +723,7 @@ async def scrape_pivot_table(session: _VahanSession, year: int, dimension: str) 
         return []
     month_labels = [cell.strip("\xa0 \t") for cell in header_row[2:-1]]
     _validate_export(rows, data_start, len(month_labels), context=f"{dimension} x Month {year}")
+    _check_row_count(rows, data_start, _parse_row_count(rendered), context=f"{dimension} x Month {year}")
 
     records: list[dict] = []
     for row in rows[data_start:]:
@@ -842,8 +761,12 @@ async def _scrape_state(
     dimension: str,
     delay_seconds: float,
     already_done: frozenset[str],
+    only: frozenset[str] | None = None,
 ) -> list[dict]:
-    """Scrape all RTOs for a single state. Returns list of yielded items (RTO batches + state_complete)."""
+    """Scrape all RTOs for a single state. Returns list of yielded items (RTO batches + state_complete).
+
+    `only` (targeted re-scrapes): restrict to these rto_codes; the rest of the
+    state's RTOs are neither scraped nor counted (rto_total = targets found)."""
     state_name = state["state_name"]
     items: list[dict] = []
     try:
@@ -889,6 +812,11 @@ async def _scrape_state(
         err.remaining_rtos = None
         raise err
 
+    if only is not None:
+        missing = sorted(only - {r["rto_code"] for r in all_rtos})
+        if missing:
+            logger.warning("%s: targeted RTO(s) not offered by VAHAN any more: %s", state_name, ", ".join(missing))
+        all_rtos = [r for r in all_rtos if r["rto_code"] in only]
     rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
     skipped_count = len(all_rtos) - len(rtos)
     if skipped_count:
@@ -943,9 +871,17 @@ async def _scrape_state(
                 # session. Carry what already succeeded in `items` on the
                 # exception so the caller can still yield it before
                 # re-authenticating and resuming this state from here.
+                #
+                # Only RTOs that returned RECORDS travel as done. A dying
+                # session can answer with blank tables before it finally
+                # raises ViewExpiredException; an RTO that came back empty on
+                # it is not evidence of anything, and carrying it in
+                # partial_items made the caller add it to already_done, so it
+                # was never re-asked on the fresh session and the state's
+                # summary counted it as skipped == done.
                 err = SessionExpiredError(str(exc))
-                err.partial_items = items
-                err.remaining_rtos = rtos[rto_index:]
+                err.partial_items = [i for i in items if i.get("records")]
+                err.remaining_rtos = [r for r in rtos[:rto_index] if r["rto_code"] in empty_codes] + rtos[rto_index:]
                 raise err from exc
             tracker.record_failure(dimension, rto["rto_code"], str(exc))
             logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
@@ -980,6 +916,7 @@ async def _scrape_state_worker(
     dimension: str,
     delay_seconds: float,
     already_done: frozenset[str],
+    only: frozenset[str] | None = None,
 ) -> list[dict]:
     """Independent worker: creates its own HTTP client + session, scrapes one state fully.
 
@@ -1001,7 +938,8 @@ async def _scrape_state_worker(
         own_select_id = discover_state_select_id(page_html) or state_select_id
         try:
             return await _scrape_state(
-                session, state, own_select_id, year, dimension, delay_seconds, already_done
+                session, state, own_select_id, year, dimension, delay_seconds, already_done,
+                **({"only": only} if only is not None else {}),
             )
         except SessionExpiredError as exc:
             # The serial path gets a 5-refresh budget; this one had nothing,
@@ -1017,7 +955,8 @@ async def _scrape_state_worker(
             retry_html = await retry_session.load()
             retry_select_id = discover_state_select_id(retry_html) or own_select_id
             rest = await _scrape_state(
-                retry_session, state, retry_select_id, year, dimension, delay_seconds, done
+                retry_session, state, retry_select_id, year, dimension, delay_seconds, done,
+                **({"only": only} if only is not None else {}),
             )
             return list(exc.partial_items) + rest
 
@@ -1028,6 +967,7 @@ async def scrape_all_india(
     delay_seconds: float = REQUEST_DELAY_SECONDS,
     skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006 - never mutated
     max_concurrent_states: int = 1,
+    only_rtos: dict[str, frozenset[str]] | None = None,
 ):
     """Async generator yielding one dict per (state, rto) combination:
     {'state_name': str, 'rto_code': str, 'rto_name': str, 'records': [ {label, month, year, count}, ... ]}
@@ -1053,6 +993,9 @@ async def scrape_all_india(
     (delay_seconds between RTO requests), so N concurrent states means N
     requests every ~delay_seconds instead of 1. Default=1 preserves the
     original serial behavior.
+
+    `only_rtos` (targeted re-scrape): {state_name: {rto_code, ...}} -- scrape
+    just those RTOs; states not in the map are skipped without any request.
     """
     async with httpx.AsyncClient(
         headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
@@ -1068,6 +1011,14 @@ async def scrape_all_india(
             )
         states = await get_states(session, page_html, state_select_id)
         logger.info("Discovered %d states", len(states))
+        if only_rtos is not None:
+            unknown = sorted(set(only_rtos) - {s["state_name"] for s in states})
+            if unknown:
+                logger.warning("Targeted state(s) not offered by VAHAN: %s", ", ".join(unknown))
+            states = [s for s in states if s["state_name"] in only_rtos]
+
+        def _only(state_name: str) -> dict:
+            return {} if only_rtos is None else {"only": only_rtos[state_name]}
 
         if max_concurrent_states <= 1:
             # Original serial path - reuse the discovery session (client stays open)
@@ -1087,7 +1038,8 @@ async def scrape_all_india(
                 while True:
                     try:
                         items = await _scrape_state(
-                            session, state, state_select_id, year, dimension, delay_seconds, already_done
+                            session, state, state_select_id, year, dimension, delay_seconds, already_done,
+                            **_only(state_name),
                         )
                         for item in items:
                             yield item
@@ -1130,7 +1082,8 @@ async def scrape_all_india(
         async def _worker(state: dict) -> list[dict]:
             async with semaphore:
                 already_done = skip_rtos.get(state["state_name"], frozenset())
-                return await _scrape_state_worker(state, state_select_id, year, dimension, delay_seconds, already_done)
+                return await _scrape_state_worker(state, state_select_id, year, dimension, delay_seconds, already_done,
+                                                  **_only(state["state_name"]))
 
         # Launch all state workers
         tasks = [_worker(state) for state in states]
@@ -1146,6 +1099,7 @@ async def scrape_all_india_crosstab(
     dimension_label: str,
     delay_seconds: float = REQUEST_DELAY_SECONDS,
     skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006 - never mutated
+    only_rtos: dict[str, frozenset[str]] | None = None,
 ):
     """Async generator for a <Y-axis> x Vehicle Class pivot -- same shape of
     yields as scrape_all_india (RTO batches + state-complete summaries), but
@@ -1156,6 +1110,8 @@ async def scrape_all_india_crosstab(
     these are new, not-yet-backfilled capabilities (see the design spec's
     "out of scope" section), not a proven-at-scale path that needs the same
     throughput levers yet.
+
+    `only_rtos`: same targeted-re-scrape filter as scrape_all_india's.
     """
     async with httpx.AsyncClient(
         headers={"User-Agent": _USER_AGENT}, timeout=30, follow_redirects=True
@@ -1171,6 +1127,8 @@ async def scrape_all_india_crosstab(
             )
         states = await get_states(session, page_html, state_select_id)
         logger.info("Discovered %d states", len(states))
+        if only_rtos is not None:
+            states = [s for s in states if s["state_name"] in only_rtos]
 
         # Same ViewExpiredException handling as scrape_all_india (see its
         # comment) -- without it, a mid-run session expiry here silently ate
@@ -1214,6 +1172,8 @@ async def scrape_all_india_crosstab(
                     for parsed in [parse_rto_option(text)]
                     if parsed
                 ]
+                if only_rtos is not None:
+                    all_rtos = [r for r in all_rtos if r["rto_code"] in only_rtos[state_name]]
                 rtos = [rto for rto in all_rtos if rto["rto_code"] not in already_done]
                 skipped_count = len(all_rtos) - len(rtos)
                 if skipped_count:
@@ -1243,10 +1203,13 @@ async def scrape_all_india_crosstab(
                             "rto_name": rto["rto_name"],
                             "records": records,
                         }
-                        # Same rule as _scrape_state: empty is not success.
+                        # Same rule as _scrape_state: empty is not success --
+                        # and not "done" either: if the session expires later
+                        # in this state, an RTO that answered blank on the
+                        # dying session is re-asked on the fresh one.
                         if records:
                             succeeded += 1
-                        already_done = already_done | {rto["rto_code"]}
+                            already_done = already_done | {rto["rto_code"]}
                     except Exception as exc:
                         if _is_session_expired(exc):
                             session_expired_mid_state = True
@@ -1290,19 +1253,22 @@ async def scrape_all_india_crosstab(
                 break
 
 
-def scrape_all_india_maker_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
+def scrape_all_india_maker_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006
+        only_rtos: dict[str, frozenset[str]] | None = None):
     """Maker x Vehicle Class -- see scrape_all_india_crosstab."""
-    return scrape_all_india_crosstab(year, scrape_maker_category_table, "maker_category", delay_seconds, skip_rtos)
+    return scrape_all_india_crosstab(year, scrape_maker_category_table, "maker_category", delay_seconds, skip_rtos, only_rtos)
 
 
-def scrape_all_india_fuel_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
+def scrape_all_india_fuel_category(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006
+        only_rtos: dict[str, frozenset[str]] | None = None):
     """Fuel x Vehicle Class -- see scrape_all_india_crosstab."""
-    return scrape_all_india_crosstab(year, scrape_fuel_category_table, "fuel_category", delay_seconds, skip_rtos)
+    return scrape_all_india_crosstab(year, scrape_fuel_category_table, "fuel_category", delay_seconds, skip_rtos, only_rtos)
 
 
-def scrape_all_india_maker_fuel(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {}):  # noqa: B006
+def scrape_all_india_maker_fuel(year: int, delay_seconds: float = REQUEST_DELAY_SECONDS, skip_rtos: dict[str, frozenset[str]] = {},  # noqa: B006
+        only_rtos: dict[str, frozenset[str]] | None = None):
     """Maker x Fuel -- see scrape_all_india_crosstab."""
-    return scrape_all_india_crosstab(year, scrape_maker_fuel_table, "maker_fuel", delay_seconds, skip_rtos)
+    return scrape_all_india_crosstab(year, scrape_maker_fuel_table, "maker_fuel", delay_seconds, skip_rtos, only_rtos)
 
 
 if __name__ == "__main__":
