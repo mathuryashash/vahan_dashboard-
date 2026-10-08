@@ -49,6 +49,7 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
+from scraper import rto_retry
 from scraper.parsing import MONTH_ABBR, parse_count, parse_rto_option, parse_state_option
 
 logger = logging.getLogger("vahan_scraper")
@@ -895,10 +896,26 @@ async def _scrape_state(
 
     succeeded = 0
     empty = 0
+    quarantined = 0
+    tracker = rto_retry.default_tracker()
     for rto_index, rto in enumerate(rtos):
+        if tracker.should_skip(dimension, rto["rto_code"]):
+            # Opt-in skip-list (SCRAPER_SKIP_AFTER_FAILED_RUNS): not counted
+            # as done, so the state is reported partial, never purged.
+            quarantined += 1
+            logger.warning("%s / %s: skipped -- failed %d consecutive runs (dimension=%s)",
+                           state_name, rto["rto_code"], tracker.consecutive_failures(dimension, rto["rto_code"]),
+                           dimension)
+            continue
         try:
-            await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
-            records = await scrape_pivot_table(session, year, dimension)
+            async def _fetch(rto=rto):
+                await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
+                return await scrape_pivot_table(session, year, dimension)
+            records = await rto_retry.with_retries(
+                _fetch, label=f"{state_name} / {rto['rto_code']} ({dimension})", no_retry=_is_session_expired,
+            )
+            if records:
+                tracker.record_success(dimension, rto["rto_code"])
             if not records:
                 empty += 1
                 logger.warning(
@@ -911,7 +928,13 @@ async def _scrape_state(
                 "rto_name": rto["rto_name"],
                 "records": records,
             })
-            succeeded += 1
+            # An empty RTO is NOT a success: the request completed but it
+            # produced nothing to replace the synthetic fallback with. Counted
+            # here, a state with some empty RTOs reached skipped+succeeded ==
+            # total and purged the whole state-year. It is reported in
+            # rto_empty instead, and the state stays partial.
+            if records:
+                succeeded += 1
         except Exception as exc:
             if _is_session_expired(exc):
                 # Every RTO after this one would fail the same way on this
@@ -922,14 +945,15 @@ async def _scrape_state(
                 err.partial_items = items
                 err.remaining_rtos = rtos[rto_index:]
                 raise err from exc
+            tracker.record_failure(dimension, rto["rto_code"], str(exc))
             logger.warning("Failed scraping %s / %s: %s", state_name, rto["rto_code"], exc)
         finally:
             await asyncio.sleep(delay_seconds)
 
     if empty:
         logger.warning(
-            "%s: %d/%d scraped RTOs returned zero records (dimension=%s, year=%d)",
-            state_name, empty, succeeded, dimension, year,
+            "%s: %d/%d attempted RTOs returned zero records (dimension=%s, year=%d)",
+            state_name, empty, succeeded + empty, dimension, year,
         )
 
     items.append({
@@ -939,6 +963,7 @@ async def _scrape_state(
         "rto_skipped": skipped_count,
         "rto_succeeded": succeeded,
         "rto_empty": empty,
+        "rto_quarantined": quarantined,
     })
     return items
 
@@ -1194,8 +1219,13 @@ async def scrape_all_india_crosstab(
                 session_expired_mid_state = False
                 for rto in rtos:
                     try:
-                        await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
-                        records = await table_scraper(session, year)
+                        async def _fetch(rto=rto):
+                            await session.select(RTO_SELECT_ID, rto["rto_value"], RTO_SELECT_ID, YAXIS_SELECT_ID)
+                            return await table_scraper(session, year)
+                        records = await rto_retry.with_retries(
+                            _fetch, label=f"{state_name} / {rto['rto_code']} ({dimension_label})",
+                            no_retry=_is_session_expired,
+                        )
                         if not records:
                             empty += 1
                             logger.warning(
@@ -1208,7 +1238,9 @@ async def scrape_all_india_crosstab(
                             "rto_name": rto["rto_name"],
                             "records": records,
                         }
-                        succeeded += 1
+                        # Same rule as _scrape_state: empty is not success.
+                        if records:
+                            succeeded += 1
                         already_done = already_done | {rto["rto_code"]}
                     except Exception as exc:
                         if _is_session_expired(exc):

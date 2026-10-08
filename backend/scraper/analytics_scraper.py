@@ -26,6 +26,7 @@ here.
 """
 import asyncio
 import logging
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -83,6 +84,15 @@ class UnexpectedPageError(RuntimeError):
     """The response was not a results page at all. Distinct from a state with
     no registrations, which still renders a table of zeros -- see
     parse_month_category_table for why the two must not be conflated."""
+
+
+class TableIntegrityError(UnexpectedPageError):
+    """The results table disagrees with its own arithmetic (row Total vs
+    cells, footer Total row vs column sums, or a gap/duplicate in the month
+    sequence). Same role as vahan_scraper.ExportIntegrityError: a consistency
+    check on what we parsed, not an authenticity check on what was sent.
+    Subclasses UnexpectedPageError so every caller that already skips a bad
+    page (keeping what it had) skips this one too instead of persisting it."""
 
 
 class TesseractUnavailableError(RuntimeError):
@@ -297,6 +307,7 @@ def parse_month_category_table(html: str) -> list[dict]:
 
     header, *body_rows = rows
     categories = header[1:-1]  # header[0] is "Month", header[-1] is "Total"
+    validate_month_category_table(header, body_rows)
     records = []
     for row in body_rows:
         if not row or row[0] == "Total":
@@ -307,6 +318,64 @@ def parse_month_category_table(html: str) -> list[dict]:
             if count:
                 records.append({"month": month, "category": category, "count": count})
     return records
+
+
+_MONTH_LABEL_RE = re.compile(r"^(\d{4})-(\d{2})$")
+
+
+def validate_month_category_table(header: list[str], body_rows: list[list[str]]) -> None:
+    """Port of vahan_scraper._validate_export to the analytics results table.
+
+    That table has no S No column; its rows are months, so the S-No
+    contiguity check becomes a month-sequence check (labels YYYY-MM, one
+    year, strictly consecutive, no duplicates -- a dropped or repeated row
+    breaks it). Then the arithmetic the page states about itself:
+    1. each month row's Total == sum of its category cells;
+    2. the footer 'Total' row (when present) == column sums of the month rows,
+       per category and for the grand total.
+    Exact integer equality: both sides come from the same response. The
+    CAPTCHA is OCR-solved, so a wrong-but-valid page is a real risk; this
+    catches a mangled/partial table, not a correct table for the wrong query.
+    """
+    if not header or header[-1].strip().lower() != "total" or len(header) < 3:
+        raise TableIntegrityError(f"unexpected header shape: {header[:3]}...{header[-2:]}")
+    width = len(header)
+    months: list[tuple[int, int]] = []
+    col_sums = [0] * (width - 1)
+    footer = None
+    for row in body_rows:
+        if row and row[0] == "Total":
+            footer = row
+            continue
+        m = _MONTH_LABEL_RE.match(row[0].strip()) if row else None
+        if not m:
+            raise TableIntegrityError(f"unexpected row label {row[0] if row else row!r} (want YYYY-MM)")
+        if len(row) != width:
+            raise TableIntegrityError(f"row {row[0]}: {len(row)} cells, header has {width}")
+        months.append((int(m.group(1)), int(m.group(2))))
+        cells = [parse_count(c) for c in row[1:-1]]
+        declared = parse_count(row[-1])
+        if sum(cells) != declared:
+            raise TableIntegrityError(
+                f"row {row[0]}: cells sum to {sum(cells)} but the table's own Total says {declared}")
+        for i, v in enumerate(cells + [declared]):
+            col_sums[i] += v
+    if months:
+        years = {y for y, _ in months}
+        nums = [mo for _, mo in months]
+        if len(years) != 1 or nums != list(range(nums[0], nums[0] + len(nums))) or not 1 <= nums[0] <= 12 \
+                or nums[-1] > 12:
+            raise TableIntegrityError(
+                f"month rows are not one contiguous run within a year: {[f'{y}-{mo:02d}' for y, mo in months]}")
+    if footer is not None:
+        if len(footer) != width:
+            raise TableIntegrityError(f"Total row: {len(footer)} cells, header has {width}")
+        declared_cols = [parse_count(c) for c in footer[1:]]
+        if declared_cols != col_sums:
+            bad = next(i for i, (a, b) in enumerate(zip(declared_cols, col_sums)) if a != b)
+            raise TableIntegrityError(
+                f"Total row column {header[bad + 1]!r} says {declared_cols[bad]} but the month rows sum to "
+                f"{col_sums[bad]} -- rows are missing or altered")
 
 
 async def scrape_state_year(

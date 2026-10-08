@@ -1,0 +1,146 @@
+"""Per-RTO retry with jittered exponential backoff, plus an opt-in skip-list
+for RTOs that keep failing run after run.
+
+Before this, one transient error on an RTO request (a ConnectError, a 5xx, a
+half-rendered table that failed _validate_export) dropped that RTO for the
+whole run: the state stayed partial and the next 5h run tried once more. A
+couple of quick retries recover nearly all of those. Jitter keeps the
+concurrent state workers from retrying in lock-step against the same site.
+
+The skip-list is OFF by default (SCRAPER_SKIP_AFTER_FAILED_RUNS=0). When set
+to N > 0, an RTO that failed in N consecutive runs (per dimension) is skipped
+-- reported, never silently treated as done -- so a permanently broken office
+stops costing retries and delay on every run. Its state is reported partial.
+State lives in a small JSON file (SCRAPER_DATA_DIR/rto_failures.json), never
+in the database. Delete the file (or one entry) to un-skip.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import random
+import threading
+import uuid
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+RTO_RETRIES = _env_int("SCRAPER_RTO_RETRIES", 2)  # extra attempts after the first
+RTO_RETRY_BASE_SECONDS = _env_float("SCRAPER_RTO_RETRY_BASE_SECONDS", 2.0)
+RTO_RETRY_MAX_SECONDS = _env_float("SCRAPER_RTO_RETRY_MAX_SECONDS", 30.0)
+SKIP_AFTER_FAILED_RUNS = _env_int("SCRAPER_SKIP_AFTER_FAILED_RUNS", 0)  # 0 = off
+
+
+def backoff_delay(attempt: int, base: float = RTO_RETRY_BASE_SECONDS, cap: float = RTO_RETRY_MAX_SECONDS,
+                  rng: random.Random | None = None) -> float:
+    """Full-jitter exponential backoff: uniform(0, min(cap, base * 2**attempt)),
+    floored at base/2 so a retry never fires instantly."""
+    rng = rng or random
+    ceiling = min(cap, base * (2 ** attempt))
+    return max(base / 2, rng.uniform(0, ceiling))
+
+
+async def with_retries(fn, *, label: str, retries: int | None = None, no_retry=lambda exc: False,
+                       sleep=asyncio.sleep, base: float | None = None, cap: float | None = None):
+    """Await fn() up to 1 + retries times. Exceptions for which no_retry(exc)
+    is true (e.g. a dead JSF session -- every retry on it would fail the same
+    way, and the caller has its own re-authentication path) propagate at once."""
+    retries = RTO_RETRIES if retries is None else retries
+    base = RTO_RETRY_BASE_SECONDS if base is None else base
+    cap = RTO_RETRY_MAX_SECONDS if cap is None else cap
+    for attempt in range(retries + 1):
+        try:
+            return await fn()
+        except Exception as exc:
+            if no_retry(exc) or attempt == retries:
+                raise
+            delay = backoff_delay(attempt, base, cap)
+            logger.warning("%s: attempt %d/%d failed (%s) -- retrying in %.1fs",
+                           label, attempt + 1, retries + 1, exc, delay)
+            await sleep(delay)
+
+
+class RtoFailureTracker:
+    """Consecutive failed RUNS per (dimension, rto_code), persisted to JSON.
+
+    A run counts once per RTO no matter how many retries failed inside it;
+    any success resets the count. threshold <= 0 disables skipping entirely
+    (failures are still recorded so turning it on later has history)."""
+
+    def __init__(self, path: str | os.PathLike | None, threshold: int = SKIP_AFTER_FAILED_RUNS,
+                 run_id: str | None = None):
+        self.path = Path(path) if path else None
+        self.threshold = threshold
+        self.run_id = run_id or uuid.uuid4().hex
+        self._lock = threading.Lock()
+        self._data: dict[str, dict] = {}
+        if self.path and self.path.exists():
+            try:
+                self._data = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                logger.warning("Ignoring unreadable RTO failure file %s", self.path)
+                self._data = {}
+
+    @staticmethod
+    def _key(dimension: str, rto_code: str) -> str:
+        return f"{dimension}:{rto_code}"
+
+    def consecutive_failures(self, dimension: str, rto_code: str) -> int:
+        return int(self._data.get(self._key(dimension, rto_code), {}).get("failed_runs", 0))
+
+    def should_skip(self, dimension: str, rto_code: str) -> bool:
+        return self.threshold > 0 and self.consecutive_failures(dimension, rto_code) >= self.threshold
+
+    def record_failure(self, dimension: str, rto_code: str, error: str = "") -> None:
+        with self._lock:
+            entry = self._data.setdefault(self._key(dimension, rto_code), {"failed_runs": 0})
+            if entry.get("last_run") != self.run_id:
+                entry["failed_runs"] = int(entry.get("failed_runs", 0)) + 1
+                entry["last_run"] = self.run_id
+            entry["last_error"] = error[:300]
+            self._save()
+
+    def record_success(self, dimension: str, rto_code: str) -> None:
+        with self._lock:
+            if self._data.pop(self._key(dimension, rto_code), None) is not None:
+                self._save()
+
+    def _save(self) -> None:
+        if not self.path:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._data, indent=1, sort_keys=True), encoding="utf-8")
+            tmp.replace(self.path)
+        except OSError:
+            logger.exception("Could not persist RTO failure file %s", self.path)
+
+
+_default_tracker: RtoFailureTracker | None = None
+
+
+def default_tracker() -> RtoFailureTracker:
+    """Process-wide tracker (one scraper run = one process = one run_id)."""
+    global _default_tracker
+    if _default_tracker is None:
+        data_dir = os.environ.get("SCRAPER_DATA_DIR", "./data")
+        _default_tracker = RtoFailureTracker(Path(data_dir) / "rto_failures.json")
+    return _default_tracker

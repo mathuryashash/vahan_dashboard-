@@ -14,6 +14,7 @@ breakdowns for a year means running this three times with different
 import argparse
 import asyncio
 import logging
+import sys
 from datetime import datetime, timezone
 
 from scraper import pool_sizing
@@ -102,7 +103,37 @@ async def _purge_synthetic_for_state(db, state_name: str, year: int) -> int:
     return result.rowcount or 0
 
 
-async def main(year: int, dimension: str, concurrent_states: int = 1, force: bool = False) -> None:
+# Exit code for "ran to completion but some states are incomplete". Distinct
+# from 1 (crash) so scraper_service can report the run as partial instead of
+# either failed or a clean success.
+PARTIAL_EXIT_CODE = 3
+
+
+def classify_state(dimension: str, total: int, skipped: int, succeeded: int, empty: int) -> str:
+    """What a finished state means for the run.
+
+    'partial_empty' -- some RTOs answered with blank tables. Never purge, and
+                       report the state partial (re-scraped next run).
+    'purge'         -- maker pass, every RTO done with records (this run or an
+                       earlier one): safe to delete the synthetic fallback.
+    'done'          -- vehicle_class/fuel pass fully done (those passes are
+                       additive and never purge).
+    'partial'       -- some RTOs failed / were skipped / state never loaded.
+
+    `succeeded` counts only RTOs that returned records (see
+    vahan_scraper._scrape_state). Only purge on the maker pass -- see
+    _purge_synthetic_for_state.
+    """
+    if total <= 0:
+        return "partial"
+    if empty:
+        return "partial_empty"
+    if skipped + succeeded >= total:
+        return "purge" if dimension == "maker" else "done"
+    return "partial"
+
+
+async def main(year: int, dimension: str, concurrent_states: int = 1, force: bool = False) -> int:
     logger.info(
         "Starting live VAHAN4 scrape (year=%s, dimension=%s, concurrent_states=%s, force=%s) at %s",
         year, dimension, concurrent_states, force, datetime.now(timezone.utc),
@@ -125,32 +156,31 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
         rto_count = 0
         states_replaced = 0
         states_partial = 0
+        partial_states: list[str] = []
         async for item in scrape_all_india(year=year, dimension=dimension, skip_rtos=skip_rtos, max_concurrent_states=concurrent_states):
             if item.get("state_complete"):
                 state_name = item["state_name"]
                 total, skipped, succeeded = item["rto_total"], item["rto_skipped"], item["rto_succeeded"]
                 empty = item.get("rto_empty", 0)
+                # rto_succeeded counts only RTOs that returned records (see
+                # vahan_scraper._scrape_state): an RTO answering with a blank
+                # table produced nothing to replace the synthetic fallback
+                # with. Counted as success, a state with SOME empty RTOs
+                # reached done_now == total and purged the whole state-year.
+                # VAHAN answering with blank tables instead of erroring is a
+                # real degradation mode (it is how the 2017 run failed).
                 done_now = skipped + succeeded
-                # An RTO returning zero records still counts as succeeded --
-                # the request completed -- but it produced nothing to replace
-                # the synthetic fallback with. A state where EVERY RTO came
-                # back empty therefore looked 100% complete and purged its
-                # synthetic rows down to a hole. VAHAN answering with blank
-                # tables instead of erroring is a real degradation mode (it is
-                # how the 2017 run failed), so require at least one RTO with
-                # actual records before deleting anything.
-                produced_records = succeeded > empty
-                # Only purge on the maker pass -- see _purge_synthetic_for_state
-                # docstring. vehicle_class/fuel passes are additive and never
-                # touch the synthetic fallback data.
-                if dimension == "maker" and total > 0 and done_now == total and not produced_records:
+                outcome = classify_state(dimension, total, skipped, succeeded, empty)
+                if outcome == "partial_empty":
                     states_partial += 1
+                    partial_states.append(state_name)
                     logger.error(
-                        "%s: all %d/%d RTOs returned zero records -- keeping the synthetic "
-                        "rows and re-scraping next run rather than purging to nothing",
+                        "%s: %d/%d RTOs returned zero records -- state left partial%s; "
+                        "re-scraping next run",
                         state_name, empty, total,
+                        " (synthetic rows kept, not purged)" if dimension == "maker" else "",
                     )
-                elif dimension == "maker" and total > 0 and done_now == total:
+                elif outcome == "purge":
                     purged = await _purge_synthetic_for_state(db, state_name, year)
                     await db.commit()
                     states_replaced += 1
@@ -158,11 +188,12 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
                         "%s: %d/%d RTOs done (%d this run, %d earlier) -- purged %d leftover synthetic rows",
                         state_name, done_now, total, succeeded, skipped, purged,
                     )
-                elif total > 0 and done_now == total:
+                elif outcome == "done":
                     states_replaced += 1
                     logger.info("%s: %d/%d RTOs done (%d this run, %d earlier)", state_name, done_now, total, succeeded, skipped)
                 else:
                     states_partial += 1
+                    partial_states.append(state_name)
                     logger.warning(
                         "%s: only %d/%d RTOs done so far -- will resume this state next run",
                         state_name, done_now, total,
@@ -184,6 +215,10 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
         "Live VAHAN4 scrape complete (year=%s, dimension=%s). %d RTOs processed, %d states fully done, %d states left for next run.",
         year, dimension, rto_count, states_replaced, states_partial,
     )
+    if partial_states:
+        # Parsed by app.services.scraper_service to report the run as partial.
+        print(f"PARTIAL_STATES: {', '.join(partial_states)}", flush=True)
+    return states_partial
 
 
 if __name__ == "__main__":
@@ -193,4 +228,5 @@ if __name__ == "__main__":
     parser.add_argument("--concurrent-states", type=int, default=1, help="Number of states to scrape in parallel (default: 1)")
     parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data (vs. only resuming an interrupted run)")
     args = parser.parse_args()
-    asyncio.run(main(args.year, args.dimension, args.concurrent_states, args.force))
+    partial = asyncio.run(main(args.year, args.dimension, args.concurrent_states, args.force))
+    sys.exit(PARTIAL_EXIT_CODE if partial else 0)

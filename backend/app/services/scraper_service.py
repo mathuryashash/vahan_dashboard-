@@ -23,6 +23,14 @@ class ScrapeFailedError(RuntimeError):
     """A completed scraper run that could not refresh the source data."""
 
 
+# Exit code scraper.run_full_scrape uses for "finished, but some states are
+# incomplete" (empty or failed RTOs). Not imported from there: importing that
+# module sets scraper pool-size env defaults as a side effect.
+PARTIAL_EXIT_CODE = 3
+# dimension -> state names the last run left partial (from its PARTIAL_STATES line)
+_partial_states: dict[str, list[str]] = {}
+
+
 def _clear_response_caches() -> None:
     """Every endpoint TTL cache (and the data-freshness cache) holds numbers
     computed from the pre-scrape data; drop them so the first request after a
@@ -278,6 +286,8 @@ def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool 
             break
         if line:
             logger.info("[scraper:%s] %s", dimension, line.rstrip())
+            if line.startswith("PARTIAL_STATES:"):
+                _partial_states[dimension] = [s.strip() for s in line.split(":", 1)[1].split(",") if s.strip()]
     return proc.wait()
 
 
@@ -326,6 +336,8 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     """
     settings.REFRESH_STATUS = "running"
     settings.REFRESH_ERROR = None
+    settings.REFRESH_PARTIAL_STATES = []
+    _partial_states.clear()
     settings.LAST_REFRESH_STARTED_AT = datetime.now(timezone.utc)
     logger.info("Starting live VAHAN4 scrape at %s (concurrent_states=%s, force=%s, year=%s)", settings.LAST_REFRESH_STARTED_AT, concurrent_states, force, year or "current")
 
@@ -345,12 +357,16 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
         logger.error("Scraper failed: %s", exc)
         raise ScrapeFailedError(message) from exc
 
+    partial_dimensions = []
     for dimension, result in zip(DIMENSIONS, results):
         if isinstance(result, BaseException):
             message = f"Scraper subprocess for {dimension} raised: {result}"
             _mark_retry_pending(message)
             logger.error(message)
             raise ScrapeFailedError(message) from result
+        if result == PARTIAL_EXIT_CODE:
+            partial_dimensions.append(dimension)
+            continue
         if result != 0:
             message = f"Scraper subprocess for {dimension} exited with code {result}"
             _mark_retry_pending(message)
@@ -377,8 +393,22 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     except Exception:
         logger.exception("Post-scrape VACUUM ANALYZE failed -- scrape data itself is still valid, just not vacuumed yet")
 
-    settings.REFRESH_STATUS = "success"
-    logger.info("Live VAHAN4 scrape complete (year=%s).", scraped_year)
+    if partial_dimensions:
+        # Honest status: the run finished and wrote data, but some states
+        # have empty/failed RTOs (and, on the maker pass, kept their
+        # synthetic rows). Not "success", not a failure to retry at once.
+        states = sorted({s for d in partial_dimensions for s in _partial_states.get(d, [])})
+        settings.REFRESH_STATUS = "partial"
+        settings.REFRESH_PARTIAL_STATES = states
+        settings.REFRESH_ERROR = (
+            f"Partial refresh: {len(states) or 'some'} state(s) incomplete in "
+            f"{', '.join(partial_dimensions)} pass(es)" + (f": {', '.join(states)}" if states else "")
+            + ". They are re-scraped on the next run."
+        )
+        logger.warning("Live VAHAN4 scrape finished PARTIAL (year=%s): %s", scraped_year, settings.REFRESH_ERROR)
+    else:
+        settings.REFRESH_STATUS = "success"
+        logger.info("Live VAHAN4 scrape complete (year=%s).", scraped_year)
     _clear_response_caches()
 
     # All 3 dimensions just finished for `scraped_year` -- this is the one

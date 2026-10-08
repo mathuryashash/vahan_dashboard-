@@ -31,6 +31,19 @@ def _clear_ttl_caches():
 
 
 @pytest.fixture(autouse=True)
+def _isolated_rto_retry(monkeypatch):
+    """scraper.rto_retry keeps a process-wide failure tracker backed by a JSON
+    file under SCRAPER_DATA_DIR. Tests get an in-memory one (path=None, skip
+    disabled) and near-zero retry backoff so a fake failing RTO costs
+    milliseconds, not seconds."""
+    from scraper import rto_retry
+    monkeypatch.setattr(rto_retry, "_default_tracker", rto_retry.RtoFailureTracker(None, threshold=0))
+    monkeypatch.setattr(rto_retry, "RTO_RETRY_BASE_SECONDS", 0.001)
+    monkeypatch.setattr(rto_retry, "RTO_RETRY_MAX_SECONDS", 0.002)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_login_rate_limiter():
     """login_rate_limiter is module-level state (see app/core/rate_limit.py)
     -- without this, a test that deliberately fails login 5x to exercise the

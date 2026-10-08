@@ -17,8 +17,11 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = []
     CORS_ORIGIN_REGEX: str | None = r"^http://(localhost|127\.0\.0\.1):\d+$"
     LAST_UPDATED: str | None = None
-    REFRESH_STATUS: str = "idle"  # idle | running | success | error
+    REFRESH_STATUS: str = "idle"  # idle | running | success | partial | retrying | error
     REFRESH_ERROR: str | None = None
+    # States the last run left incomplete (empty or failed RTOs); see
+    # scraper_service.run_scraper. Non-empty only when REFRESH_STATUS == "partial".
+    REFRESH_PARTIAL_STATES: list[str] = []
     # Minimum time between manually-triggered scrapes. POST /refresh/ is now
     # admin-only (require_role), but the cooldown still matters even
     # authenticated: an admin fat-fingering the button twice shouldn't launch

@@ -168,3 +168,70 @@ def test_map_site_rtos_skips_entries_with_no_suffix_separator():
     # Without the guard, a name with no " - " lands in the map under its
     # whole name, which can never match a real rto_code anyway.
     assert map_site_rtos([{"id": 1, "rtoCode": 4, "rtoName": "AGRA", "stateCode": "UP"}]) == {}
+
+
+# ---- _validate_export port: month contiguity + row/footer Total checks -------
+
+from scraper.analytics_scraper import TableIntegrityError  # noqa: E402
+
+
+def _fixture_html() -> str:
+    return (FIXTURES / "analytics_monthwise_category_sample.html").read_text(encoding="utf-8")
+
+
+def test_real_fixture_passes_its_own_arithmetic():
+    # Bihar 2024: 12 contiguous months, every row Total and the footer agree.
+    records = parse_month_category_table(_fixture_html())
+    assert sum(r["count"] for r in records) == 1_395_217  # the page's own grand total
+
+
+def test_a_dropped_month_row_is_rejected_by_the_footer_total():
+    html = _fixture_html()
+    start = html.index("2024-05")
+    row_start = html.rindex("<tr", 0, start)
+    row_end = html.index("</tr>", start) + len("</tr>")
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(html[:row_start] + html[row_end:])
+
+
+def test_an_altered_cell_is_rejected_by_the_row_total():
+    html = """
+    <table>
+      <tr><th>Month</th><th>Two Wheeler</th><th>Four Wheeler</th><th>Total</th></tr>
+      <tr><td>2024-01</td><td>1,001</td><td>200</td><td>1,200</td></tr>
+    </table>
+    """
+    with pytest.raises(TableIntegrityError, match="row 2024-01"):
+        parse_month_category_table(html)
+
+
+def test_a_duplicated_or_out_of_order_month_is_rejected():
+    dup = """
+    <table>
+      <tr><th>Month</th><th>Two Wheeler</th><th>Total</th></tr>
+      <tr><td>2024-01</td><td>5</td><td>5</td></tr>
+      <tr><td>2024-01</td><td>5</td><td>5</td></tr>
+    </table>
+    """
+    gap = dup.replace("<tr><td>2024-01</td><td>5</td><td>5</td></tr>\n    </table>",
+                      "<tr><td>2024-03</td><td>5</td><td>5</td></tr>\n    </table>")
+    for html in (dup, gap):
+        with pytest.raises(TableIntegrityError, match="contiguous"):
+            parse_month_category_table(html)
+
+
+def test_footer_mismatch_names_the_column():
+    html = """
+    <table>
+      <tr><th>Month</th><th>Two Wheeler</th><th>Four Wheeler</th><th>Total</th></tr>
+      <tr><td>2024-01</td><td>1,000</td><td>200</td><td>1,200</td></tr>
+      <tr><td>2024-02</td><td>0</td><td>50</td><td>50</td></tr>
+      <tr><td>Total</td><td>1,000</td><td>260</td><td>1,260</td></tr>
+    </table>
+    """
+    with pytest.raises(TableIntegrityError, match="Four Wheeler"):
+        parse_month_category_table(html)
+
+
+def test_integrity_error_is_an_unexpected_page_so_callers_skip_it():
+    assert issubclass(TableIntegrityError, UnexpectedPageError)

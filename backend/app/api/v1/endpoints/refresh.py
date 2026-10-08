@@ -88,6 +88,7 @@ async def get_refresh_status(db: AsyncSession = Depends(get_db), _user: User = D
         "last_updated": await effective_last_updated(db),
         "status": settings.REFRESH_STATUS,
         "error": settings.REFRESH_ERROR,
+        "partial_states": list(settings.REFRESH_PARTIAL_STATES),
     }
 
 
