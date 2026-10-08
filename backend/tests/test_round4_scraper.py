@@ -297,3 +297,28 @@ def test_targeted_plan_spec_per_dimension():
     assert _plan_file_for("maker=a.csv,fuel=b.csv", "fuel") == "b.csv"
     with pytest.raises(SystemExit):
         _plan_file_for("maker=a.csv", "fuel")
+
+
+async def test_rtos_backfill_fills_gaps_and_only_rewrites_changed_rows(db_session):
+    """Boot-time safety net (loose index scan version): refreshes a stale
+    name from the LATEST (year, month) row and leaves correct rows alone.
+    (A missing rtos row can't be staged here: the FK forbids it, which is
+    the point of ensure_rto.)"""
+    from app.core.migrations import ensure_rtos_backfilled
+    await _seed_assam(db_session)
+    db_session.add_all([RTO(rto_code="AS1", rto_name="OLD NAME", state_code="AS"),
+                        RTO(rto_code="AS2", rto_name="SAME", state_code="AS")])
+    await db_session.commit()
+    common = dict(state_code="AS", state_name="Assam", vehicle_class="All", count=1, is_supplementary=False)
+    db_session.add_all([
+        Registration(rto_code="AS1", rto_name="ANCIENT", year=2020, month=1, maker="A", **common),
+        Registration(rto_code="AS1", rto_name="NEW NAME", year=2026, month=3, maker="A", **common),
+        Registration(rto_code="AS2", rto_name="SAME", year=2026, month=3, maker="A", **common),
+    ])
+    await db_session.commit()
+    eng = create_async_engine(TEST_DATABASE_URL)
+    await ensure_rtos_backfilled(eng)
+    await eng.dispose()
+    db_session.expire_all()
+    names = dict((await db_session.execute(select(RTO.rto_code, RTO.rto_name))).all())
+    assert names["AS1"] == "NEW NAME" and names["AS2"] == "SAME"

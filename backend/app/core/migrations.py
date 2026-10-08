@@ -116,8 +116,8 @@ async def ensure_rtos_backfilled(engine: AsyncEngine) -> None:
     naming convention recently, e.g. "BALASORE RTO" -> "RTO BALESHWAR" --
     confirmed by checking: state_code was identical across every one of
     these, only the name/format changed, and the new format has far fewer
-    rows, meaning it's the newer of the two). DISTINCT ON ... ORDER BY id
-    DESC picks each rto_code's most recently scraped name/state, so this
+    rows, meaning it's the newer of the two). The latest (year, month)
+    row picks each rto_code's most recently scraped name/state, so this
     both fills real gaps and refreshes stale names in one pass -- ON
     CONFLICT DO UPDATE keeps every existing row in sync with the latest
     scrape too, not just the ones that didn't exist yet. Safe to run on
@@ -126,19 +126,38 @@ async def ensure_rtos_backfilled(engine: AsyncEngine) -> None:
     literal no-op the way the other ensure_* functions' early-return checks
     are (rtos is small, ~1100 rows, so this stays cheap regardless).
 
-    Postgres-only (DISTINCT ON is Postgres syntax) -- rtos is a small
-    reference table, not a real SQLite dev-mode concern.
+    Postgres-only -- rtos is a small reference table, not a real SQLite
+    dev-mode concern.
+
+    Round 4: the scraper now upserts each newly-seen RTO itself
+    (scraper_service.ensure_rto) before writing rows that reference it, so
+    this is only a safety net. The old statement was a Parallel Seq Scan of
+    all ~18M registrations with a 257 MB external sort plus an UPSERT of every
+    rtos row, ~53 s-2 min on EVERY boot and every scrape subprocess. This is
+    the DDL doc's loose index scan (one probe per distinct rto_code through an
+    index leading on rto_code) with a lateral pick of the latest (year,
+    month) name, and it only writes rows that actually changed.
     """
     if str(engine.url).startswith("sqlite"):
         return
     async with engine.begin() as conn:
         result = await conn.execute(text("""
+            WITH RECURSIVE c AS (
+                (SELECT rto_code FROM registrations WHERE rto_code IS NOT NULL ORDER BY rto_code LIMIT 1)
+                UNION ALL
+                SELECT (SELECT r.rto_code FROM registrations r WHERE r.rto_code > c.rto_code
+                        ORDER BY r.rto_code LIMIT 1)
+                FROM c WHERE c.rto_code IS NOT NULL
+            )
             INSERT INTO rtos (rto_code, rto_name, state_code)
-            SELECT DISTINCT ON (r.rto_code) r.rto_code, r.rto_name, r.state_code
-            FROM registrations r
-            WHERE r.rto_code IS NOT NULL
-            ORDER BY r.rto_code, r.id DESC
+            SELECT c.rto_code, l.rto_name, l.state_code FROM c
+            CROSS JOIN LATERAL (
+                SELECT r.rto_name, r.state_code FROM registrations r WHERE r.rto_code = c.rto_code
+                ORDER BY r.year DESC, r.month DESC, r.id DESC LIMIT 1
+            ) l
+            WHERE c.rto_code IS NOT NULL
             ON CONFLICT (rto_code) DO UPDATE SET rto_name = EXCLUDED.rto_name, state_code = EXCLUDED.state_code
+            WHERE (rtos.rto_name, rtos.state_code) IS DISTINCT FROM (EXCLUDED.rto_name, EXCLUDED.state_code)
         """))
         if result.rowcount:
             logger.info("rtos backfill: inserted/refreshed %d row(s) from registrations", result.rowcount)
