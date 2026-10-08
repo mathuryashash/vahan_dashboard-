@@ -244,7 +244,13 @@ async def search_makers_endpoint(
     rate limit beyond the API's blanket default -- unlike /maker and
     /leaderboard, a miss here costs one cheap GET, not a live scrape."""
     if not settings.LIVE_SCRAPE_FALLBACK:
-        return await stored.search_makers(db, q, category=user_category)
+        # Stored path: clamp to makers present in the caller's geography too
+        # (state / RTO accounts), cheap via the cached per-scope set. The
+        # live-fallback path below keeps the site's national list (metadata
+        # only -- documented in docs/REVIEW_2026-10-08_DDL.md, N7).
+        geo_state = _user.scope_state_code if _user.scope_type in (UserScope.STATE, UserScope.RTO) else None
+        geo_rto = _user.scope_rto_code if _user.scope_type == UserScope.RTO else None
+        return await stored.search_makers(db, q, category=user_category, state_code=geo_state, rto_code=geo_rto)
     try:
         results = await search_makers(q)
         if user_category:

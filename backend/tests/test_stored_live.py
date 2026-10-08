@@ -223,6 +223,48 @@ async def test_maker_search_category_scope_filters_makers(client, db_session):
     assert names == [HONDA, TATA]  # HERO is two-wheeler only
 
 
+async def test_maker_search_geo_scope_lists_only_makers_in_scope(client, db_session):
+    """N7: a state/RTO account's search lists only makers with rows in its
+    own state/RTO. TATA sells in MH1 and DL1; HERO only in MH1; HONDA in MH1+MH2."""
+    await _seed(db_session)
+    db_session.add(_mct("DL1", "DL", "DELHI ONLY MOTORS LTD", "MOTOR CAR", "Four-Wheeler", 5))
+    db_session.add(_mct("MH2", "MH", "PUNE ONLY LTD", "MOTOR CAR", "Four-Wheeler", 5))
+    await db_session.commit()
+    stored_live_service.reset_maker_list()
+    assert await _get(client, "makers/search", q="ltd") == [
+        "DELHI ONLY MOTORS LTD", HERO, HONDA, "PUNE ONLY LTD", TATA]  # national: everything
+    _login_as(**MH_STATE)
+    assert await _get(client, "makers/search", q="ltd") == [HERO, HONDA, "PUNE ONLY LTD", TATA]
+    _login_as(**MH1_RTO)
+    assert await _get(client, "makers/search", q="ltd") == [HERO, HONDA, TATA]  # MH2-only maker hidden
+
+
+async def test_maker_search_scope_set_is_cached_per_scope_key(client, db_session, monkeypatch):
+    """N5: the per-category allowed set was recomputed (~1s on prod) on every
+    search. Now one query per scope key per TTL; distinct keys never share."""
+    await _seed(db_session)
+    calls = []
+    real_execute = db_session.execute
+
+    async def counting_execute(stmt, *a, **k):
+        if "maker_category_totals" in str(stmt) and "DISTINCT" in str(stmt).upper() and "RECURSIVE" not in str(stmt).upper():
+            calls.append(str(stmt))
+        return await real_execute(stmt, *a, **k)
+    monkeypatch.setattr(db_session, "execute", counting_execute)
+    _login_as(**FOUR_WHEELER)
+    for q in ("ltd", "hon", "ta", "ltd"):
+        await _get(client, "makers/search", q=q)
+    assert len(calls) == 1, f"allowed-maker set must be cached, ran {len(calls)}x"
+    assert await _get(client, "makers/search", q="ltd") == [HONDA, TATA]
+    # A different scope (2W) is a different key: its own query and its own answer.
+    _login_as(scope_type=UserScope.NATIONAL, scope_vehicle_category=VehicleCategoryScope.TWO_WHEELER)
+    assert await _get(client, "makers/search", q="ltd") == [HERO, HONDA]
+    assert len(calls) == 2
+    stored_live_service.reset_maker_list()  # post-scrape hook clears it
+    await _get(client, "makers/search", q="ltd")
+    assert len(calls) == 3
+
+
 async def test_rtos_lists_stored_rtos_clamped_to_rto_user(client, db_session):
     await _seed(db_session)
     assert await _get(client, "rtos", state_code="MH") == ["MH1", "MH2"]

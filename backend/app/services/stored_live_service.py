@@ -36,7 +36,6 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.query_filters import category_makers
 from app.models.models import MakerCategoryTotal, MakerFuelTotal, Registration
 from app.services import data_freshness
 
@@ -185,19 +184,62 @@ async def distinct_makers(db: AsyncSession) -> list[str]:
 def reset_maker_list() -> None:
     global _maker_list
     _maker_list = None
+    _allowed_makers_cache.clear()
 
 
-async def search_makers(db: AsyncSession, q: str, limit: int = 20, category: str | None = None) -> list[str]:
+# Per-scope allowed maker sets for search: {(category, state_code, rto_code):
+# (monotonic_ts, frozenset)}. category_makers() is a DISTINCT over
+# maker_category_totals (~0.6-1.2s for a category) and used to run on EVERY
+# keystroke-search of a category-scoped account (N5). Same TTL and reset hook
+# as the maker list. The key is the full resolved scope tuple, so a national
+# result can never be handed to a narrower account.
+_allowed_makers_cache: dict[tuple, tuple[float, frozenset[str]]] = {}
+_allowed_makers_lock = asyncio.Lock()
+
+
+async def allowed_makers(db: AsyncSession, *, category: str | None = None,
+                         state_code: str | None = None, rto_code: str | None = None) -> frozenset[str] | None:
+    """Makers with any maker_category_totals row in the caller's scope
+    (category and/or state and/or RTO), or None when the scope is national
+    and uncategorised (no clamp). Cached per scope tuple."""
+    if not (category or state_code or rto_code):
+        return None
+    key = (category, state_code, rto_code)
+    hit = _allowed_makers_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _MAKER_LIST_TTL:
+        return hit[1]
+    async with _allowed_makers_lock:
+        hit = _allowed_makers_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _MAKER_LIST_TTL:
+            return hit[1]
+        q = select(MakerCategoryTotal.maker).distinct()
+        if category:
+            q = q.where(MakerCategoryTotal.vehicle_category == category)
+        # state_code / rto_code are indexed on mct (ix_..._state_code and the
+        # rto-leading natural key): measured 318ms for UP, 8ms for UP32 cold.
+        if state_code:
+            q = q.where(MakerCategoryTotal.state_code == state_code)
+        if rto_code:
+            q = q.where(MakerCategoryTotal.rto_code == rto_code)
+        names = frozenset(m for m in (await db.execute(q)).scalars().all() if m)
+        _allowed_makers_cache[key] = (time.monotonic(), names)
+        return names
+
+
+async def search_makers(db: AsyncSession, q: str, limit: int = 20, category: str | None = None,
+                        state_code: str | None = None, rto_code: str | None = None) -> list[str]:
     """Case-insensitive substring match over our own maker vocabulary
-    (prefix matches first, then alphabetical), clamped to the category's
-    makers for category-scoped callers -- the same rule the live search used."""
+    (prefix matches first, then alphabetical), clamped to the makers present
+    in the caller's scope: category (as the live search did) and, for state-
+    and RTO-scoped accounts, their state / RTO (N7 -- an UP32 account no
+    longer sees makers that only ever registered elsewhere)."""
     needle = q.strip().upper()
     if not needle:
         return []
     names = await distinct_makers(db)
     hits = [n for n in names if needle in n]
-    if category:
-        allowed = set((await db.execute(category_makers(category))).scalars().all())
+    allowed = await allowed_makers(db, category=category, state_code=state_code, rto_code=rto_code)
+    if allowed is not None:
         hits = [n for n in hits if n in allowed]
     hits.sort(key=lambda n: (not n.startswith(needle), n))
     return hits[:limit]
