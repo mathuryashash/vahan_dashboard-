@@ -168,7 +168,9 @@ async def _acquire_run_lock(engine: AsyncEngine, who: str) -> None:
         # those held by another backend as "a scrape is running" too.
         others = (await conn.execute(text(
             "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted "
-            "AND classid::bigint = :classid AND pid <> pg_backend_pid()"
+            "AND classid::bigint = :classid AND pid <> pg_backend_pid() "
+            # advisory locks are per-database; pg_locks shows every database's
+            "AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
         ), {"classid": _LOCK_CLASSID})).scalar()
         await conn.commit()
         if others:
