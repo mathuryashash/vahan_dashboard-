@@ -23,6 +23,16 @@ class ScrapeFailedError(RuntimeError):
     """A completed scraper run that could not refresh the source data."""
 
 
+def _clear_response_caches() -> None:
+    """Every endpoint TTL cache (and the data-freshness cache) holds numbers
+    computed from the pre-scrape data; drop them so the first request after a
+    successful scrape sees the new data instead of up to 10 minutes of stale
+    responses. Called again after the quality check, which feeds the
+    freshness timestamp."""
+    from app.core.cache import TTLCache
+    TTLCache.clear_all()
+
+
 def _mark_retry_pending(message: str) -> None:
     settings.REFRESH_STATUS = "retrying"
     settings.REFRESH_ERROR = message
@@ -369,6 +379,7 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
 
     settings.REFRESH_STATUS = "success"
     logger.info("Live VAHAN4 scrape complete (year=%s).", scraped_year)
+    _clear_response_caches()
 
     # All 3 dimensions just finished for `scraped_year` -- this is the one
     # point where it's cheap to check whether they agree with each other.
@@ -381,3 +392,4 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
             await check_scrape_quality(db, scraped_year)
     except Exception as exc:
         logger.error("Scrape quality check failed (scrape itself succeeded): %s", exc)
+    _clear_response_caches()

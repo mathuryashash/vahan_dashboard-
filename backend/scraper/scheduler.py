@@ -29,23 +29,66 @@ def _backoff_hours(base_hours: float, consecutive_failures: int, cap_hours: floa
     return min(base_hours * (2 ** consecutive_failures), cap_hours)
 
 
-async def run_scheduler_loop() -> None:
-    """Runs every REFRESH_INTERVAL_HOURS without scraping on server startup.
+# Floor on the boot catch-up delay: lets init_db / the first page loads finish
+# before an overdue scrape starts competing for the pool.
+BOOT_CATCHUP_MIN_DELAY_SECONDS = 60
 
-    A restart should make the dashboard available, not immediately trigger a
-    multi-hour third-party scrape. Operators can still use the refresh action
-    when they explicitly need fresh data.
+
+async def _last_success_age_seconds() -> float | None:
+    """Age of the last successful scrape according to the DATA (read-only)."""
+    from app.services import data_freshness
+    async with AsyncSessionLocal() as db:
+        return (await data_freshness.get_freshness(db, use_cache=False)).age_seconds()
+
+
+async def initial_delay_seconds(interval_hours: float = REFRESH_INTERVAL_HOURS) -> float:
+    """Seconds until the first scheduled scrape after boot.
+
+    The timer used to start at process start, so every restart reset it and a
+    server restarted more often than every 5h never scraped at all. Now the
+    first run is due `interval - age` after boot, where age is how long ago
+    the last successful scrape finished (from the DB, so it survives
+    restarts). Gated by SCRAPE_CATCHUP_ON_BOOT: off = the old full interval.
+    No data / unreadable DB = full interval too -- a first-ever full backfill
+    is an operator decision, not something a boot should start.
+    """
+    interval = interval_hours * 3600
+    if not settings.SCRAPE_CATCHUP_ON_BOOT:
+        return interval
+    try:
+        age = await _last_success_age_seconds()
+    except Exception:
+        logger.exception("Could not read last scrape age; using the full interval")
+        return interval
+    if age is None:
+        return interval
+    return max(float(BOOT_CATCHUP_MIN_DELAY_SECONDS), interval - age)
+
+
+async def run_scheduler_loop() -> None:
+    """Runs every REFRESH_INTERVAL_HOURS, counted from the last successful
+    scrape in the DATA rather than from process start (see
+    initial_delay_seconds and SCRAPE_CATCHUP_ON_BOOT).
 
     Consecutive failures back off exponentially (capped at MAX_BACKOFF_HOURS)
     instead of retrying at the normal 5h cadence forever -- a multi-day site
     outage would otherwise mean dozens of doomed attempts hammering it.
     """
     consecutive_failures = 0
+    first = True
     while True:
-        interval_hours = _backoff_hours(REFRESH_INTERVAL_HOURS, consecutive_failures, MAX_BACKOFF_HOURS)
-        next_run = datetime.now(timezone.utc) + timedelta(hours=interval_hours)
-        logger.info("Next scheduled scrape at %s UTC (interval %.1fh)", next_run.isoformat(), interval_hours)
-        await asyncio.sleep(interval_hours * 3600)
+        if first:
+            delay = await initial_delay_seconds(REFRESH_INTERVAL_HOURS)
+            first = False
+        else:
+            delay = _backoff_hours(REFRESH_INTERVAL_HOURS, consecutive_failures, MAX_BACKOFF_HOURS) * 3600
+        next_run = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        logger.info("Next scheduled scrape at %s UTC (in %.2fh)", next_run.isoformat(), delay / 3600)
+        await asyncio.sleep(delay)
+
+        if settings.REFRESH_STATUS == "running":
+            logger.info("Scheduled scrape skipped: a scrape is already running")
+            continue
 
         started = time.monotonic()
         try:

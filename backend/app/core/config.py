@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     # scraper.scheduler.run_previous_year_revalidation_loop. Turn on via
     # .env once you've decided that tradeoff is worth it.
     ENABLE_PREVIOUS_YEAR_REVALIDATION: bool = False
+    # The 5h scheduler used to count from process start, so every restart
+    # reset it and frequent restarts meant it never fired (data froze on
+    # 2026-09-19). With this on, the first run is scheduled from the AGE of
+    # the last successful scrape stored in the DB: max(0, interval - age),
+    # i.e. an overdue scrape starts shortly after boot. Set
+    # SCRAPE_CATCHUP_ON_BOOT=false for dev/test servers that must never
+    # scrape on boot (then the first run is a full interval after boot).
+    SCRAPE_CATCHUP_ON_BOOT: bool = True
+    # The UI's live maker lookup / leaderboard used to scrape the government
+    # analytics site on every request. They are now answered from stored
+    # tables; the live path is only reachable when this is true.
+    LIVE_SCRAPE_FALLBACK: bool = False
 
     # Auth (hierarchy/role system). The dev default here is fine for local
     # work but MUST be overridden via .env in any real deployment -- anyone

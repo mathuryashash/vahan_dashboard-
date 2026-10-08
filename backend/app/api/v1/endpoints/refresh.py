@@ -7,7 +7,7 @@ from app.core.auth import require_role, get_current_user
 from app.core.database import get_db
 from app.models.models import OEMMonthlySales, ScrapeQualityLog, State, User, UserRole
 from app.schemas.schemas import RefreshResponse
-from app.services import source_health
+from app.services import data_freshness, source_health
 from app.services.scraper_service import run_scraper
 from app.core.config import settings
 
@@ -71,10 +71,21 @@ async def get_source_health(_admin: User = Depends(require_role(UserRole.ADMIN))
     return source_health.current_status()
 
 
+async def effective_last_updated(db: AsyncSession) -> str | None:
+    """settings.LAST_UPDATED is in-process and None after every restart; fall
+    back to the newest scrape timestamp actually stored (read-only)."""
+    if settings.LAST_UPDATED:
+        return settings.LAST_UPDATED
+    try:
+        return (await data_freshness.get_freshness(db)).last_updated_str
+    except Exception:
+        return None
+
+
 @router.get("/status")
-async def get_refresh_status(_user: User = Depends(get_current_user)):
+async def get_refresh_status(db: AsyncSession = Depends(get_db), _user: User = Depends(get_current_user)):
     return {
-        "last_updated": settings.LAST_UPDATED,
+        "last_updated": await effective_last_updated(db),
         "status": settings.REFRESH_STATUS,
         "error": settings.REFRESH_ERROR,
     }
@@ -180,9 +191,10 @@ async def get_data_quality(db: AsyncSession = Depends(get_db), _user: User = Dep
     pct_clean = round(clean / checked * 100, 1) if checked else None
 
     scrape_fresh = False
-    if settings.LAST_UPDATED:
+    last_updated = await effective_last_updated(db)
+    if last_updated:
         try:
-            last_updated_dt = datetime.strptime(settings.LAST_UPDATED, "%Y-%m-%d %H:%M UTC").replace(tzinfo=timezone.utc)
+            last_updated_dt = datetime.strptime(last_updated, "%Y-%m-%d %H:%M UTC").replace(tzinfo=timezone.utc)
             scrape_fresh = (datetime.now(timezone.utc) - last_updated_dt) < timedelta(hours=24)
         except ValueError:
             scrape_fresh = False
@@ -203,7 +215,7 @@ async def get_data_quality(db: AsyncSession = Depends(get_db), _user: User = Dep
     return {
         "level": level,
         "scrape_fresh": scrape_fresh,
-        "last_updated": settings.LAST_UPDATED,
+        "last_updated": last_updated,
         "quality_check": {
             "year": current_year,
             "cells_checked": checked,
