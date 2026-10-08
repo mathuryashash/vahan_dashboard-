@@ -282,6 +282,12 @@ async def _main(year: int, dimension: str, concurrent_states: int, force: bool,
                 continue
 
             batch = item
+            if not batch["records"]:
+                # persist_rto_batch is delete-then-insert keyed on the years in
+                # the records, so an empty batch deletes nothing today -- keep
+                # it that way explicitly: a blank answer is not evidence
+                # (see vahan_scraper._scrape_state) and must never clear rows.
+                continue
             code = state_codes.get(batch["state_name"])
             if code is None:
                 logger.warning("No state_code found for '%s', skipping batch", batch["state_name"])

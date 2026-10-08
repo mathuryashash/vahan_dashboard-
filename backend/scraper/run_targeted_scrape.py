@@ -49,7 +49,7 @@ pool_sizing.concurrent_workers()  # before any app.* import: up to dims x partit
 
 from sqlalchemy import text  # noqa: E402
 
-from app.core.database import engine  # noqa: E402
+from app.core.database import engine, init_db  # noqa: E402
 from app.core.scrape_lock import exit_if_run_lock_busy, scrape_run_lock, scrape_write_lock  # noqa: E402
 from scraper import run_crosstab_scrape, run_full_scrape  # noqa: E402
 from scraper.vahan_scraper import DIMENSIONS  # noqa: E402
@@ -205,6 +205,19 @@ async def run(dimension: str, plan: Plan, concurrent_states: int = 1, partitions
     return partial_years
 
 
+async def _init_db_once() -> None:
+    """run_full_scrape._main / run_crosstab_scrape._main each call init_db()
+    per (dimension, year) -- ~2 min each (its rtos backfill scans every
+    registrations row). Do it once here and make their calls no-ops: a
+    targeted plan spans up to 23 years x 3 dimensions."""
+    await init_db()
+
+    async def _noop() -> None:
+        return None
+    run_full_scrape.init_db = _noop
+    run_crosstab_scrape.init_db = _noop
+
+
 def _plan_file_for(spec: str, dimension: str) -> str:
     """`--plan FILE` (one plan for every dimension) or
     `--plan dim=FILE,dim=FILE` (one plan per dimension)."""
@@ -234,6 +247,7 @@ async def amain(args) -> int:
             write_plan(plan, args.write_plan if len(dims) == 1 else args.write_plan.replace(".csv", f".{d}.csv"))
     if args.dry_run:
         return 0
+    await _init_db_once()
     async with scrape_run_lock(engine, "run_targeted_scrape"):
         results = await asyncio.gather(*(run(d, plans[d], args.concurrent_states, args.partitions)
                                          for d in dims if plans[d]), return_exceptions=True)
