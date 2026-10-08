@@ -10,8 +10,9 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.migrations import vacuum_tables
 from app.core.query_filters import classify_vehicle
+from app.core.scrape_lock import ScrapeRunLockBusyError, child_env_holding_run_lock, scrape_run_lock
 from app.models.models import (
-    FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State, StateMonthCategoryFuelTotal,
+    RTO, FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, State, StateMonthCategoryFuelTotal,
     StateMonthCategoryTotal,
 )
 from scraper.vahan_scraper import DIMENSIONS
@@ -52,6 +53,33 @@ def _mark_retry_pending(message: str) -> None:
     settings.REFRESH_ERROR = message
 
 
+async def ensure_rto(db: AsyncSession, rto_code: str | None, rto_name: str | None, state_code: str) -> None:
+    """Insert the `rtos` master row for an RTO the scraper just saw, if it is
+    not there yet -- in the caller's transaction, BEFORE any row referencing it.
+
+    registrations / maker_category_totals / fuel_category_totals /
+    maker_fuel_totals all carry a real FK rto_code -> rtos.rto_code, and
+    `rtos` was only ever filled at boot (ensure_rtos_backfilled reads codes
+    back out of registrations -- which cannot hold a code `rtos` lacks). So
+    the first time VAHAN listed a brand-new office (AS35 TAMULPUR, 2026-10-09)
+    every pass died on ForeignKeyViolationError and the whole run exited 1.
+
+    ON CONFLICT DO NOTHING, not DO UPDATE: an existing row's name is the boot
+    backfill's job (it picks the most recent scraped spelling), and DO NOTHING
+    takes no row lock, so the three concurrent dimension processes never
+    serialize on each other here. Two processes inserting the same new code
+    at once are safe: the loser waits for the winner's commit, then no-ops.
+    """
+    if not rto_code:
+        return
+    values = {"rto_code": rto_code, "rto_name": (rto_name or rto_code)[:200], "state_code": state_code}
+    if db.bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    else:  # SQLite dev mode
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    await db.execute(dialect_insert(RTO).values(**values).on_conflict_do_nothing(index_elements=["rto_code"]))
+
+
 async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dimension: str = "maker") -> None:
     """Replace any existing rows for this (rto_code, year, dimension) with the
     freshly scraped ones. `dimension` is one of 'maker' | 'vehicle_class' | 'fuel'
@@ -73,6 +101,7 @@ async def persist_rto_batch(db: AsyncSession, batch: dict, state_code: str, dime
     """
     rto_code = batch["rto_code"]
     is_supplementary = dimension != "maker"
+    await ensure_rto(db, rto_code, batch.get("rto_name"), state_code)
     years = {r["year"] for r in batch["records"]}
     for year in years:
         delete_query = delete(Registration).where(
@@ -133,6 +162,7 @@ async def persist_maker_category_batch(db: AsyncSession, batch: dict, state_code
     Registration dimension (see docs/superpowers/specs/
     2026-08-25-maker-category-crosstab-design.md)."""
     rto_code = batch["rto_code"]
+    await ensure_rto(db, rto_code, batch.get("rto_name"), state_code)
     await db.execute(
         delete(MakerCategoryTotal).where(
             MakerCategoryTotal.rto_code == rto_code,
@@ -162,6 +192,7 @@ async def persist_fuel_category_batch(db: AsyncSession, batch: dict, state_code:
     tables (fuel_group grouping is applied at query time, not persisted,
     matching how fuel_group already works for Registration)."""
     rto_code = batch["rto_code"]
+    await ensure_rto(db, rto_code, batch.get("rto_name"), state_code)
     await db.execute(
         delete(FuelCategoryTotal).where(
             FuelCategoryTotal.rto_code == rto_code,
@@ -191,6 +222,7 @@ async def persist_maker_fuel_batch(db: AsyncSession, batch: dict, state_code: st
     info at all (X-axis is Fuel, not Vehicle Class), so there's no category/
     tier to derive."""
     rto_code = batch["rto_code"]
+    await ensure_rto(db, rto_code, batch.get("rto_name"), state_code)
     await db.execute(
         delete(MakerFuelTotal).where(
             MakerFuelTotal.rto_code == rto_code,
@@ -285,6 +317,10 @@ def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool 
         text=True,
         encoding="utf-8",
         errors="replace",
+        # run_scraper holds the shared scrape run lock for these children;
+        # without this each child would try to take it itself and two of the
+        # three concurrent dimension passes would refuse to start.
+        env=child_env_holding_run_lock(),
     )
     while True:
         line = proc.stdout.readline()
@@ -355,10 +391,20 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     logger.info("Starting live VAHAN4 scrape at %s (concurrent_states=%s, force=%s, year=%s)", settings.LAST_REFRESH_STARTED_AT, concurrent_states, force, year or "current")
 
     try:
-        results = await asyncio.gather(
-            *(asyncio.to_thread(_run_dimension_sync, dimension, concurrent_states, force, year) for dimension in DIMENSIONS),
-            return_exceptions=True,
-        )
+        async with scrape_run_lock(engine, "run_scraper"):
+            results = await asyncio.gather(
+                *(asyncio.to_thread(_run_dimension_sync, dimension, concurrent_states, force, year)
+                  for dimension in DIMENSIONS),
+                return_exceptions=True,
+            )
+    except ScrapeRunLockBusyError as exc:
+        # Another scrape (a backfill, a targeted re-scrape, another server)
+        # is already talking to VAHAN. Not a failure of this refresh, and
+        # nothing to retry right away.
+        settings.REFRESH_STATUS = "idle"
+        settings.REFRESH_ERROR = str(exc)
+        logger.warning("Refresh skipped: %s", exc)
+        return
     except asyncio.CancelledError:
         # A shutdown is not a failed refresh. Leave the next server instance
         # free to schedule its normal run.
