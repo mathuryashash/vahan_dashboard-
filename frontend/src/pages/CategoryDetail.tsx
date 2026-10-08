@@ -41,7 +41,12 @@ export function CategoryDetailPage() {
   // Same shared-filter fix as Categories.tsx -- these three queries ignored
   // selectedState, so drilling into a category after picking a state showed
   // national numbers under a state-filtered header.
-  const { data: cats, isLoading: catsLoading } = useCategoriesQuery({ year: selectedYear, state: selectedState });
+  // Not fired for a locked account on the wrong segment: it is redirected below,
+  // and the unmount would abort this request only for the new page to resend it.
+  const { data: cats, isLoading: catsLoading } = useCategoriesQuery(
+    { year: selectedYear, state: selectedState },
+    { enabled: !(lockedCategory && decoded !== lockedCategory) },
+  );
 
   const currentCat = (cats || []).find((c) => c.vehicle_category === decoded);
   const isKnownCategory = KNOWN_CATEGORIES.includes(decoded) || (cats || []).some((c) => c.vehicle_category === decoded);
