@@ -1,7 +1,8 @@
 export interface DashboardKPIs {
   total_registrations_today: number;
   total_this_month: number;
-  yoy_growth_percent: number;
+  // null = no prior-year volume to compare against (not "flat").
+  yoy_growth_percent: number | null;
   top_state: string;
   top_state_count: number;
   last_updated: string | null;

@@ -1,5 +1,5 @@
 // frontend/src/components/Sidebar.tsx
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 // Award went with the hidden Industry Sales entry below -- re-add it here
 // when restoring that page.
@@ -100,6 +100,17 @@ export function Sidebar() {
   }, [mobileNavOpen]);
   // The drawer always shows labels; the collapse toggle is desktop-only.
   const sidebarCollapsed = desktopCollapsed && !mobileNavOpen;
+  // Below md a CLOSED drawer is only translated off-screen, so its links
+  // stayed in the tab order and the accessibility tree. `inert` removes
+  // them; on md+ the sidebar is in-flow and must stay interactive.
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = () => setIsMobile(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  const drawerInert = isMobile && !mobileNavOpen;
 
   return (
     <>
@@ -114,6 +125,7 @@ export function Sidebar() {
       ref={asideRef}
       id="app-sidebar"
       aria-label="Main navigation"
+      inert={drawerInert || undefined}
       className={clsx(
         'flex flex-col transition-all duration-300 shrink-0 bg-[var(--bg-app)] border-r border-[var(--border)]',
         // Mobile: fixed drawer, hidden unless open. md+: in-flow column.

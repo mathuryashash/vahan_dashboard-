@@ -265,7 +265,7 @@ function CategoryChart({ title, queryKey, fn, year, state, chart, index }: { tit
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: `${250 + index * 80}ms` }}>
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{title}</h3>
-        <ExportCsvButton filename={`${title.toLowerCase().replace(/\s+/g, '-')}-cy${year}`} rows={data as Record<string, unknown>[] | undefined} />
+        <ExportCsvButton filename={`${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-cy${year}`} rows={data as Record<string, unknown>[] | undefined} />
       </div>
       {isLoading ? (
         <LoadingBlock className="h-[220px]" />
