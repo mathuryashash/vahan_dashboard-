@@ -11,6 +11,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatCompact, NO_VALUE } from '../utils/format';
+import { monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -71,19 +72,36 @@ export function YoYPage() {
   // (the API distinguishes "not occurred/scraped" from "zero registrations").
   // Volume charts still show every month so year A's full trend is visible,
   // but growth-rate views should only cover months both years actually have.
-  const _now = new Date();
   // Months comparisonYearB hasn't reached yet come back as 0, which plots as
   // a real bar labelled "0.0M" beside a full prior-year bar and drops the
   // trend line vertically to zero from the current month on (found in review:
   // an OEM reader sees that as the market collapsing, not as "October hasn't
   // happened yet"). null instead, with connectNulls={false}, so year B's line
   // simply ends at the last month that exists. Year A keeps every month, so
-  // its full-year shape is still visible.
-  const _futureFromIdx = comparisonYearB === _now.getFullYear() ? _now.getMonth() : 12;
-  const chartData: { name: string; [key: string]: number | string | null }[] = (monthly?.data || []).map((d: { month: number; [key: string]: number | null }) => ({
+  // its full-year shape is still visible. "Hasn't happened" is read from the
+  // data (months after year B's newest non-zero month), not today's date --
+  // the data can be weeks behind the calendar.
+  type MonthRow = { month: number; growth_percent: number | null; is_partial?: boolean; [key: string]: number | boolean | null | undefined };
+  const rows: MonthRow[] = monthly?.data || [];
+  const lastBMonth = rows.reduce((mx, d) => (Number(d[`year_${comparisonYearB}`]) > 0 ? Math.max(mx, d.month) : mx), 0);
+
+  // The stored-but-incomplete month. From the API when it says (partial_month
+  // + partial_month_year, derived from when the data was scraped); the wall
+  // clock is only the fallback for an older backend that sends neither.
+  const apiPartial: number | null | undefined = monthly && 'partial_month' in monthly
+    ? monthly.partial_month
+    : summary && 'partial_month' in summary ? summary.partial_month : undefined;
+  const apiPartialYear: number | null | undefined = monthly?.partial_month_year ?? summary?.partial_month_year;
+  const partialYear = apiPartial !== undefined && apiPartialYear != null ? apiPartialYear : comparisonYearB;
+  const partial = monthly && (partialYear === comparisonYearA || partialYear === comparisonYearB)
+    ? resolvePartialMonth(partialYear, apiPartial, { apiPartialYear, scrapedAt: monthly?.data_scraped_at })
+    : null;
+
+  const chartData: { name: string; partial: boolean; [key: string]: number | string | boolean | null }[] = rows.map((d) => ({
     name: MONTH_NAMES[d.month - 1],
-    [`${comparisonYearA}`]: d[`year_${comparisonYearA}`],
-    [`${comparisonYearB}`]: d.month - 1 > _futureFromIdx ? null : d[`year_${comparisonYearB}`],
+    partial: !!partial && d.month === partial.month,
+    [`${comparisonYearA}`]: (d[`year_${comparisonYearA}`] as number | null) ?? null,
+    [`${comparisonYearB}`]: d.month > lastBMonth ? null : ((d[`year_${comparisonYearB}`] as number | null) ?? null),
     growth: d.growth_percent,
   }));
   // The in-progress month is real but not COMPARABLE: a month that's only
@@ -93,22 +111,23 @@ export function YoYPage() {
   // against a complete Sep 2025's 1,931,043). Excluded from the growth bars
   // and reported separately below with its actual progress, rather than
   // sitting in the chart as a red bar implying the market is collapsing.
-  const now = new Date();
-  const partialMonthIdx = comparisonYearB === now.getFullYear() ? now.getMonth() : null;
-  const partialMonthName = partialMonthIdx != null ? MONTH_NAMES[partialMonthIdx] : null;
-  const daysInPartialMonth = partialMonthIdx != null
-    ? new Date(now.getFullYear(), partialMonthIdx + 1, 0).getDate()
-    : 0;
-  const partialMonthProgress = partialMonthIdx != null
-    ? Math.round((now.getDate() / daysInPartialMonth) * 100)
-    : 0;
+  const partialMonthName = partial?.name ?? null;
+  const otherYear = partialYear === comparisonYearB ? comparisonYearA : comparisonYearB;
 
   const growthChartData = chartData
     .filter((d) => d.growth !== null)
-    .filter((d) => d.name !== partialMonthName);
+    .filter((d) => !d.partial);
+
+  // The window the headline % actually compares: the backend cuts the range
+  // at the last COMPLETE month either year has. When that cut falls before
+  // the range start (e.g. Oct-Dec while data is complete only through Aug),
+  // there is nothing comparable yet -- say so instead of "0 -> 0".
+  const compareThrough: number | null = typeof summary?.compare_through_month === 'number' ? summary.compare_through_month : null;
+  const noCompleteMonths = compareThrough != null && compareThrough < startMonth;
+  const comparedWindow = compareThrough != null && !noCompleteMonths ? monthWindow(startMonth, compareThrough) : null;
 
   // null (no summary yet / no prior-year volume) renders as a dash, not "+0.0%".
-  const growth: number | null = summary && summary[`total_${comparisonYearA}`] ? (summary.growth_percent ?? null) : null;
+  const growth: number | null = !noCompleteMonths && summary && summary[`total_${comparisonYearA}`] ? (summary.growth_percent ?? null) : null;
   const colorA = chart.seriesColors[4];
   const colorB = chart.seriesColors[0];
 
@@ -179,7 +198,7 @@ export function YoYPage() {
               {SELECTABLE_YEARS.filter((y) => y !== comparisonYearB).map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
             <span className="text-[var(--text-muted)]" aria-hidden="true">→</span>
-            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{summaryLoading ? '…' : (summary?.[`total_${comparisonYearA}`] || 0).toLocaleString('en-IN')}</span>
+            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{summaryLoading ? '…' : noCompleteMonths ? NO_VALUE : (summary?.[`total_${comparisonYearA}`] || 0).toLocaleString('en-IN')}</span>
           </div>
           <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5" style={{ background: 'var(--bg-sunken)', borderColor: 'var(--border)', color: 'var(--accent)' }}>
             <label htmlFor="yoy-year-b" className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">Year B</label>
@@ -194,7 +213,7 @@ export function YoYPage() {
               {SELECTABLE_YEARS.filter((y) => y !== comparisonYearA).map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
             <span className="text-[var(--text-muted)]" aria-hidden="true">→</span>
-            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{summaryLoading ? '…' : (summary?.[`total_${comparisonYearB}`] || 0).toLocaleString('en-IN')}</span>
+            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{summaryLoading ? '…' : noCompleteMonths ? NO_VALUE : (summary?.[`total_${comparisonYearB}`] || 0).toLocaleString('en-IN')}</span>
           </div>
           <div
             className="px-3 py-1.5 rounded-lg text-xs font-bold font-mono border"
@@ -203,13 +222,31 @@ export function YoYPage() {
               color: growth == null ? 'var(--text-muted)' : growth >= 0 ? 'var(--success)' : 'var(--danger)',
               borderColor: 'var(--border)',
             }}
-            title={growth == null ? `No ${comparisonYearA} volume to compare against` : undefined}
+            title={noCompleteMonths
+              ? 'No complete months in this range yet'
+              : growth == null ? `No ${comparisonYearA} volume to compare against`
+              : comparedWindow ? `Compares ${comparedWindow} ${comparisonYearB} with ${comparedWindow} ${comparisonYearA}` : undefined}
+            data-testid="yoy-growth-pill"
           >
             {growth == null ? NO_VALUE : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`}
+            {comparedWindow && growth != null && (
+              <span className="ml-1.5 text-[10px] font-semibold text-[var(--text-muted)]" data-testid="yoy-compared-window">
+                {comparedWindow} vs {comparedWindow}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
+      {!sameYear && noCompleteMonths && (
+        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] animate-entrance" data-testid="yoy-no-complete-months">
+          <EmptyState
+            variant="no-data"
+            title="No complete months in this range yet"
+            description={`${monthWindow(startMonth, endMonth)} has no fully scraped month in both ${comparisonYearA} and ${comparisonYearB} — the data is complete through ${compareThrough ? MONTH_NAMES[compareThrough - 1] : 'none of this range'}. Pick an earlier range.`}
+          />
+        </div>
+      )}
       {sameYear ? (
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] animate-entrance">
           <EmptyState variant="no-selection" title="Pick two different years" description={`Year A and Year B are both ${comparisonYearA}; a year compared with itself is always 0%.`} />
@@ -241,14 +278,27 @@ export function YoYPage() {
               <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={formatCompact} width={40} />
               <Tooltip content={<YoYTooltip chart={chart} />} />
               <Bar dataKey={`${comparisonYearA}`} fill={colorA} radius={[3, 3, 0, 0]} maxBarSize={20}>
+                {chartData.map((d) => (
+                  <Cell key={d.name} fill={colorA} fillOpacity={d.partial && partialYear === comparisonYearA ? 0.35 : 1} />
+                ))}
                 <LabelList dataKey={`${comparisonYearA}`} position="top" formatter={formatCompact} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
               </Bar>
               <Bar dataKey={`${comparisonYearB}`} fill={colorB} radius={[3, 3, 0, 0]} maxBarSize={20}>
+                {/* The in-progress month is drawn faded so it doesn't read as a
+                    real decline against a full prior-year month. */}
+                {chartData.map((d) => (
+                  <Cell key={d.name} fill={colorB} fillOpacity={d.partial && partialYear === comparisonYearB ? 0.35 : 1} />
+                ))}
                 <LabelList dataKey={`${comparisonYearB}`} position="top" formatter={formatCompact} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
           </div>
+        )}
+        {partial && chartData.some((d) => d.partial) && (
+          <p className="text-[10px] text-[var(--text-muted)] mt-2 font-mono" data-testid="yoy-partial-bar-note">
+            Faded bar: {partial.name} {partialYear} is a partial month ({partialMonthProgress(partial)}) — not comparable with a full month.
+          </p>
         )}
       </div>
 
@@ -273,11 +323,11 @@ export function YoYPage() {
             <span style={{ color: chart.success }}>▲ Positive growth</span>
             <span style={{ color: chart.danger }}>▼ Negative growth</span>
           </div>
-          {partialMonthName && (
-            <p className="text-[10px] text-[var(--text-muted)] mt-2 text-center leading-relaxed">
-              {partialMonthName} {comparisonYearB} excluded — month still in progress
-              ({now.getDate()} of {daysInPartialMonth} days, {partialMonthProgress}%).
-              Comparing it against a full {partialMonthName} {comparisonYearA} would show a decline that isn't real.
+          {partial && partialMonthName && (
+            <p className="text-[10px] text-[var(--text-muted)] mt-2 text-center leading-relaxed" data-testid="yoy-partial-note">
+              {partialMonthName} {partialYear} excluded — {partial.fromData ? 'month only part-scraped' : 'month still in progress'}
+              {' '}({partialMonthProgress(partial)}).
+              Comparing it against a full {partialMonthName} {otherYear} would show a change that isn't real.
             </p>
           )}
         </div>

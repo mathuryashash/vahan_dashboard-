@@ -57,6 +57,12 @@ export function useUrlSyncedFilters() {
       const value = values[key];
       if (value !== null && value !== undefined) next.set(key, String(value));
     }
+    // Page-owned params (e.g. Comparison's state_b) are kept, appended after
+    // the shared ones. Read from the live location, not the render-time
+    // searchParams snapshot, so a page's write in the same commit survives.
+    for (const [key, value] of new URLSearchParams(window.location.search)) {
+      if (!(PARAM_KEYS as readonly string[]).includes(key)) next.set(key, value);
+    }
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setSearchParams identity is stable per react-router, omitting it avoids an extra effect run it would otherwise trigger
   }, [year, month, state, category, fuelGroup, maker]);

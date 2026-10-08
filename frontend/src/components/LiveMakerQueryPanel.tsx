@@ -153,9 +153,17 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
   const canSubmit = !!stateCode && makerInput.trim().length > 0;
   const records = data?.records ?? [];
   const total = records.reduce((sum, r) => sum + r.count, 0);
-  const byMonth = MONTH_NAMES
-    .map((name, idx) => ({ name, count: records.filter((r) => r.month === idx + 1).reduce((sum, r) => sum + r.count, 0) }))
-    .filter((m) => m.count > 0);
+  // grain 'year' (or any month-0 row) = the stored table only holds a
+  // calendar-year total for this combination, so there is no monthly split
+  // to show -- render it as one "Full year" row instead of an empty month
+  // table (month 0 matched none of 1..12 before).
+  const yearGrain = data?.grain === 'year' || records.some((r) => r.month === 0);
+  const byMonth = yearGrain
+    ? (total > 0 ? [{ name: 'Full year', count: total }] : [])
+    : MONTH_NAMES
+      .map((name, idx) => ({ name, count: records.filter((r) => r.month === idx + 1).reduce((sum, r) => sum + r.count, 0) }))
+      .filter((m) => m.count > 0);
+  const unanswerable = data?.unanswerable_reason || null;
 
   let stateHint: string | null = null;
   if (auth.scope_type !== 'national' && !stateCode) {
@@ -180,8 +188,13 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
           {rtoScope ? `Live Maker Lookup — ${rtoScope.rtoName}` : 'Live Maker Lookup'}
         </h3>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
-          Look up one manufacturer, optionally by fuel type, directly from the source site — not pre-loaded, fetched on demand.
-          {rtoScope ? ' Scoped to this RTO only, month by month — a breakdown no pre-loaded table in this app holds.' : ''}
+          {/* Only claim a live fetch when the backend said so: lookups are now
+              answered from stored tables (source 'stored') unless the server
+              has the live fallback enabled. */}
+          {data?.source === 'live'
+            ? 'Look up one manufacturer, optionally by fuel type, directly from the source site — fetched on demand.'
+            : 'Look up one manufacturer, optionally by fuel type, from the registration data this dashboard has stored.'}
+          {rtoScope ? ' Scoped to this RTO only, month by month.' : ''}
         </p>
       </div>
 
@@ -249,7 +262,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
               {makerSuggestions === undefined ? (
                 <li className="px-3 py-2 text-[var(--text-muted)]">Searching…</li>
               ) : makerSuggestions.length === 0 ? (
-                <li className="px-3 py-2 text-[var(--text-muted)]">No manufacturer matches "{debouncedMaker}" -- the source site needs the exact full legal name.</li>
+                <li className="px-3 py-2 text-[var(--text-muted)]">No manufacturer matches "{debouncedMaker}" -- pick the exact full legal name from the list.</li>
               ) : (
                 makerSuggestions.map((name) => (
                   <li key={name}>
@@ -308,12 +321,20 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
           aria-live="polite"
           className="mt-4 h-32 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft flex items-center justify-center text-xs text-[var(--text-muted)] text-center px-6"
         >
-          Fetching… (first lookup for a new combination takes a few real seconds — a live CAPTCHA solve against the source site)
+          Fetching…
         </div>
       )}
 
       {!isFetching && submitted && data && (
-        records.length === 0 ? (
+        unanswerable ? (
+          <div className="mt-4" role="status" aria-live="polite" data-testid="live-unanswerable">
+            <EmptyState
+              variant="no-data"
+              title="Can't answer this combination from stored data"
+              description={`${unanswerable} (${submitted.maker}${submitted.fuel ? ` × ${submitted.fuel}` : ''}${submitted.category ? ` × ${submitted.category}` : ''}, ${year}) — this is not a zero.`}
+            />
+          </div>
+        ) : records.length === 0 ? (
           <div className="mt-4" role="status" aria-live="polite">
             <EmptyState
               variant="no-data"
@@ -328,6 +349,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
               <span className="font-semibold text-[var(--accent)]">{total.toLocaleString('en-IN')}</span> total registrations
               {submitted.fuel ? <> — <span className="font-semibold">{submitted.fuel}</span></> : null}
               {submitted.category ? <> — <span className="font-semibold">{submitted.category}</span></> : null}, {year}
+              {yearGrain ? <span className="text-[var(--text-muted)]"> · calendar-year total only — no monthly split is stored for this combination</span> : null}
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -384,7 +406,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
   return (
     <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
       <div className="mb-1">
-        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Live Top Makers — real numbers</h3>
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{data?.source === 'stored' ? 'Top Makers by Fuel — real numbers' : 'Live Top Makers — real numbers'}</h3>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
           The actual (not modeled) fuel-scoped ranking for this state's real biggest manufacturers — the real-data counterpart to the estimated chart above when a fuel filter alone has no month-level real data.
         </p>
@@ -447,12 +469,20 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
           aria-live="polite"
           className="mt-4 h-32 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft flex items-center justify-center text-xs text-[var(--text-muted)] text-center px-6"
         >
-          Fetching up to {submitted?.limit ?? limit} makers live — cached makers are instant, new ones take a few real seconds each (run concurrently, not one at a time).
+          Fetching the top {submitted?.limit ?? limit} makers…
         </div>
       )}
 
       {!isFetching && submitted && data && (
-        chartData.length === 0 ? (
+        data.unanswerable_reason ? (
+          <div className="mt-4" role="status" aria-live="polite" data-testid="leaderboard-unanswerable">
+            <EmptyState
+              variant="no-data"
+              title="Can't answer this combination from stored data"
+              description={`${data.unanswerable_reason} (top ${submitted.limit} makers${submitted.fuel ? ` × ${submitted.fuel}` : ''}${submitted.category ? ` × ${submitted.category}` : ''}, ${year}) — this is not a zero.`}
+            />
+          </div>
+        ) : chartData.length === 0 ? (
           <div className="mt-4" role="status" aria-live="polite">
             <EmptyState
               variant="no-data"

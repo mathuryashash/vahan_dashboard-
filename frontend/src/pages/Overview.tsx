@@ -25,6 +25,7 @@ import type { MonthDetail } from '../types';
 import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatCompact, cyLabel, cyLongLabel, orDash, NO_VALUE } from '../utils/format';
+import { monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -209,6 +210,12 @@ export function OverviewPage() {
     yoy_growth_percent: number | null;
     top_state: string | null;
     top_state_count: number;
+    last_updated?: string | null;
+    // Newer backends: the YoY % compares Jan..yoy_compare_through_month of
+    // both years (0/null = no complete month yet); partial_month = the newest
+    // stored month that was still in progress when scraped.
+    yoy_compare_through_month?: number | null;
+    partial_month?: number | null;
   }>({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: ({ signal }) => getKPIs({
@@ -375,13 +382,17 @@ export function OverviewPage() {
   // documents the incident behind it (September 2026 showed -38.6% purely
   // because it was 15 days old); this is that guard, on the landing page's
   // flagship chart, which had none.
-  const _now = new Date();
-  const trendPartialMonth =
-    selectedYear === _now.getFullYear() && selectedMonth == null ? _now.getMonth() + 1 : null;
-  const trendPartialName = trendPartialMonth ? MONTH_NAMES[trendPartialMonth - 1] : null;
-  const trendPartialProgress = trendPartialMonth
-    ? Math.round((_now.getDate() / new Date(_now.getFullYear(), trendPartialMonth, 0).getDate()) * 100)
+  // Which month is partial comes from the API (derived from when the data
+  // was scraped) when it says; today's date is only the fallback for an
+  // older backend -- the data froze 19 Sep, so the wall clock named Oct.
+  const apiPartialMonth: number | null | undefined = kpis && 'partial_month' in kpis ? kpis.partial_month : undefined;
+  // Wait for kpis before deciding, or the wall-clock fallback flashes the
+  // wrong month for a moment on every load.
+  const trendPartial = selectedMonth == null && kpis
+    ? resolvePartialMonth(selectedYear, apiPartialMonth, { scrapedAt: kpis?.last_updated })
     : null;
+  const trendPartialMonth = trendPartial?.month ?? null;
+  const trendPartialName = trendPartial?.name ?? null;
 
   const chartData = (trend || [])
     // Only when viewing the whole year. If the user has explicitly picked
@@ -673,7 +684,14 @@ export function OverviewPage() {
                 <KPICard
                   label={`YoY Growth${kpiPeriodSuffix}`}
                   value={yoy == null ? NO_VALUE : `${yoy >= 0 ? '+' : ''}${yoy.toFixed(1)}%`}
-                  sub={yoy == null ? undefined : `vs ${cyLabel(selectedYear - 1)}, same months`}
+                  // Name the window the % actually compares (the backend
+                  // cuts at the last complete month), e.g. "Jan–Aug vs Jan–Aug".
+                  sub={yoy == null ? undefined : (() => {
+                    const through = !kpiComboImpossible ? kpis?.yoy_compare_through_month : null;
+                    if (!through) return `vs ${cyLabel(selectedYear - 1)}, same months`;
+                    const w = selectedMonth ? monthWindow(selectedMonth, selectedMonth) : monthWindow(1, through);
+                    return `${w} ${selectedYear} vs ${w} ${selectedYear - 1}`;
+                  })()}
                   change={yoy == null ? null : undefined}
                   icon={<TrendingUp className="w-4 h-4" />}
                   loading={loading}
@@ -727,7 +745,7 @@ export function OverviewPage() {
                   // Said out loud rather than quietly dropped: a reader who
                   // counts the months should know why the latest one is
                   // absent, not wonder whether the data is stale.
-                  <> · {trendPartialName} excluded, month {trendPartialProgress}% elapsed</>
+                  <span data-testid="trend-partial-note"> · {trendPartialName} excluded, {trendPartial?.fromData ? 'partial month — ' : 'month in progress — '}{trendPartial ? partialMonthProgress(trendPartial) : ''}</span>
                 )}
               </p>
             </div>

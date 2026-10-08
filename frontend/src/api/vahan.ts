@@ -134,6 +134,12 @@ export const getLiveMakerQuery = (params: { state_code: string; year: number; ma
     // data was scraped). Both optional: older backends send neither.
     source?: 'live' | 'stored' | string;
     as_of?: string | null;
+    // 'month' = records carry month 1..12; 'year' = one calendar-year row per
+    // category with month 0 (the stored table has no monthly split).
+    grain?: 'month' | 'year' | string;
+    // Set when the stored tables cannot answer this combination (e.g. maker x
+    // fuel x vehicle category). records is then empty but that is NOT a zero.
+    unanswerable_reason?: string | null;
   });
 
 // Our own rto_codes the source site actually lists for this state -- only
@@ -155,6 +161,8 @@ export const getLiveMakerLeaderboard = (params: { state_code: string; year: numb
     makers: { maker: string; total: number }[];
     source?: 'live' | 'stored' | string;
     as_of?: string | null;
+    grain?: 'month' | 'year' | string;
+    unanswerable_reason?: string | null;
   });
 
 // Real maker names matching `q`, straight from the source site -- lets the

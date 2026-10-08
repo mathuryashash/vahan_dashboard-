@@ -213,6 +213,21 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, o
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] animate-pulse-soft" />
             <span>SYNC RETRY PENDING</span>
           </div>
+        ) : status === 'partial' ? (
+          // The last run finished but some states came back incomplete (empty
+          // RTOs): the data is usable but not a clean sync -- amber, not green.
+          <div
+            className="flex items-center gap-1.5 text-[11px] font-mono"
+            style={{ color: 'var(--warning, #d97706)' }}
+            role="status"
+            data-testid="sync-partial"
+            title={refreshStatus?.partial_states?.length
+              ? `Incomplete: ${refreshStatus.partial_states.join(', ')}`
+              : 'The last refresh did not complete for every state'}
+          >
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--warning, #d97706)' }} />
+            <span className="whitespace-nowrap">SYNC PARTIAL{lastUpdated ? ` ${lastUpdated}` : ''}</span>
+          </div>
         ) : lastUpdated ? (
           <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] font-mono">
             <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)] animate-pulse-soft" />

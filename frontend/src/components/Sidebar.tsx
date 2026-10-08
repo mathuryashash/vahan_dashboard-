@@ -1,5 +1,5 @@
 // frontend/src/components/Sidebar.tsx
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 // Award went with the hidden Industry Sales entry below -- re-add it here
 // when restoring that page.
@@ -65,6 +65,39 @@ export function Sidebar() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [mobileNavOpen, setMobileNavOpen]);
+  // a11y: when the drawer opens, move focus into it (the Close button) and
+  // keep Tab inside it; when it closes, hand focus back to whatever opened
+  // it (the header's menu button). Mobile only -- on md+ the sidebar is
+  // in-flow and mobileNavOpen stays false.
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    returnFocusRef.current = document.activeElement as HTMLElement | null;
+    // After paint, so the button exists and the slide-in has started.
+    const raf = requestAnimationFrame(() => closeRef.current?.focus());
+    const onTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !asideRef.current) return;
+      const items = asideRef.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled])');
+      const visible = Array.from(items).filter((el) => el.offsetParent !== null);
+      if (!visible.length) return;
+      const first = visible[0];
+      const last = visible[visible.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onTab);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener('keydown', onTab);
+      const back = returnFocusRef.current;
+      returnFocusRef.current = null;
+      // Navigation closes the drawer too; only restore when the opener is
+      // still on the page.
+      if (back && document.contains(back)) back.focus();
+    };
+  }, [mobileNavOpen]);
   // The drawer always shows labels; the collapse toggle is desktop-only.
   const sidebarCollapsed = desktopCollapsed && !mobileNavOpen;
 
@@ -78,6 +111,7 @@ export function Sidebar() {
       />
     )}
     <aside
+      ref={asideRef}
       id="app-sidebar"
       aria-label="Main navigation"
       className={clsx(
@@ -99,6 +133,7 @@ export function Sidebar() {
         )}
         {mobileNavOpen && (
           <button
+            ref={closeRef}
             type="button"
             onClick={() => setMobileNavOpen(false)}
             aria-label="Close navigation"

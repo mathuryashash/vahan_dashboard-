@@ -2,6 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { getStatesComparison, compareStates, getStates } from '../api/vahan';
 import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
 import { LoadingBlock } from '../components/LoadingBlock';
@@ -40,7 +41,23 @@ export function ComparisonPage() {
   // on Overview shows Bihar here as one side of the comparison too. State B
   // has no cross-tab equivalent, always a locally-picked second state.
   const [stateA, setStateALocal] = useState(selectedState || 'Maharashtra');
-  const [stateB, setStateB] = useState('Gujarat');
+  // State B lives in the URL as `state_b` so a deep link / refresh keeps the
+  // pair (State A rides on the shared `state` param). Read once at mount.
+  const [stateB, setStateB] = useState(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get('state_b');
+    const a = selectedState || 'Maharashtra';
+    if (fromUrl && fromUrl !== a) return fromUrl;
+    return a === 'Gujarat' ? 'Maharashtra' : 'Gujarat';
+  });
+  const navigate = useNavigate();
+  useEffect(() => {
+    // Read the LIVE query string (not a render-time snapshot) so the shared
+    // filter params written by useUrlSyncedFilters in the same commit survive.
+    const next = new URLSearchParams(window.location.search);
+    if (next.get('state_b') === stateB) return;
+    next.set('state_b', stateB);
+    navigate({ search: `?${next.toString()}` }, { replace: true });
+  }, [stateB, navigate]);
   const [focusState, setFocusState] = useState<string | null>(null);
 
   useEffect(() => {

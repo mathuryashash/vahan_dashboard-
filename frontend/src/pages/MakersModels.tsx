@@ -325,8 +325,8 @@ export function MakersModelsPage() {
           </h3>
           <ExportCsvButton
             filename={comboImpossible
-              ? `top-makers-fy${year}-${selectedCategory}-${fuelGroup}-estimated${tripleMonthApplied ? `-${MONTH_NAMES[month! - 1]}` : ''}`
-              : `top-makers-fy${year}${selectedCategory ? `-${selectedCategory}` : ''}${fuelGroup ? `-${fuelGroup}` : ''}${isEstimated ? `-est-${MONTH_NAMES[month! - 1]}` : ''}`}
+              ? `top-makers-cy${year}-${selectedCategory}-${fuelGroup}-estimated${tripleMonthApplied ? `-${MONTH_NAMES[month! - 1]}` : ''}`
+              : `top-makers-cy${year}${selectedCategory ? `-${selectedCategory}` : ''}${fuelGroup ? `-${fuelGroup}` : ''}${isEstimated ? `-est-${MONTH_NAMES[month! - 1]}` : ''}`}
             rows={comboImpossible
               ? tripleChartData.map((d) => ({ maker: d.name, estimated_count: d.count, note: 'modeled from 3 real pairwise cross-tabs, not observed data' }))
               : isEstimated

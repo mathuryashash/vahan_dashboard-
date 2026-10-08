@@ -53,8 +53,10 @@ export type ViewMode = 'overview' | 'comparison' | 'yoy' | 'category';
 
 export interface RefreshStatus {
   last_updated: string | null;
-  status: 'idle' | 'running' | 'success' | 'retrying' | 'error';
+  status: 'idle' | 'running' | 'success' | 'retrying' | 'error' | 'partial';
   error: string | null;
+  // States whose last refresh came back incomplete (status 'partial').
+  partial_states?: string[];
 }
 
 export interface MonthDetail {
