@@ -1,13 +1,14 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.core.query_filters import apply_fuel_group_filter, apply_total_filters
-from app.core.scope import enforce_state, get_effective_category, scoped_rto
+from app.core.query_filters import fuel_group as query_fuel_group
+from app.core.scope import enforce_state, get_effective_category, scoped_rto, scoped_state
 from app.core.cache import TTLCache, single_flight
-from app.models.models import Registration, User, UserScope
+from app.models.models import FuelCategoryTotal, MakerCategoryTotal, Registration, User, UserScope
 from app.schemas.schemas import StateComparisonData, StateComparisonRanking
 from app.core.validation import MAX_YEAR, MIN_YEAR
 
@@ -161,3 +162,109 @@ async def get_all_states_comparison(
     ]
     _all_states_cache.set(cache_key, comparison)
     return comparison
+
+
+# Category x powertrain per state. The raw registrations table cannot answer
+# it (the class pass carries the category, the fuel pass carries the fuel,
+# never both on one row), which is why the page used to refuse the pair.
+# fuel_category_totals DOES hold vehicle_class x fuel_type per RTO per
+# calendar year, in the dashboard's own category taxonomy, and reconciles
+# with the single-axis tables: all-category/all-fuel totals equal
+# maker_category_totals to the unit for 2003-2022 and 2025 (2011 -0.08%,
+# 2014 +0.48%, 2023 +0.12%), while 2024 (-4.5% for 4W; Maharashtra -42.8%,
+# Kerala +34.7%) and the in-progress 2026 (-8%) are visibly incomplete.
+# Year grain only: there is no month split in that table.
+#
+# state_month_category_fuel_totals (analytics portal, monthly) was checked
+# and NOT used: its category axis is the portal's own (LIGHT MOTOR VEHICLE,
+# LIGHT GOODS VEHICLE, ...), which maps onto our Four-Wheeler / Commercial
+# buckets 10-26% off every year (e.g. 4W 2025 5,251,961 vs 4,638,020), and
+# it is 25-29% short for 2W EV 2024.
+CATEGORY_FUEL_SOURCE = "fuel_category_totals"
+# A state-year whose fuel x category total is this far from the category
+# totals (maker_category_totals) is flagged as incomplete, not hidden.
+_COVERAGE_TOLERANCE_PCT = 2.0
+_category_fuel_cache = TTLCache(_ALL_STATES_CACHE_TTL_SECONDS)
+
+
+@router.get("/category-fuel")
+@single_flight
+async def compare_category_fuel(
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
+    vehicle_category: str | None = Depends(get_effective_category),
+    fuel_group: str = Query(..., max_length=10),
+    user_rto: str | None = Depends(scoped_rto),
+    user_state: str | None = Depends(scoped_state),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-state calendar-year totals for one vehicle category x one
+    powertrain (ICE / Hybrid / EV), from fuel_category_totals, plus a
+    coverage check for that year (see the module note above). Scope: the
+    category is clamped by get_effective_category, the state by
+    scoped_state, the RTO by scoped_rto -- all three axes."""
+    if fuel_group not in ("ICE", "Hybrid", "EV"):
+        raise HTTPException(422, detail="fuel_group must be ICE, Hybrid or EV")
+    cache_key = (year, vehicle_category, fuel_group, user_state, user_rto)
+    cached = _category_fuel_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    def _scoped(q, model):
+        if user_state:
+            q = q.where(model.state_name == user_state)
+        if user_rto:
+            q = q.where(model.rto_code == user_rto)
+        return q
+
+    fct_rows = (await db.execute(_scoped(
+        select(FuelCategoryTotal.state_name, FuelCategoryTotal.vehicle_category, FuelCategoryTotal.fuel_type,
+               func.sum(FuelCategoryTotal.count))
+        .where(FuelCategoryTotal.year == year)
+        .group_by(FuelCategoryTotal.state_name, FuelCategoryTotal.vehicle_category, FuelCategoryTotal.fuel_type),
+        FuelCategoryTotal,
+    ))).all()
+    mct_rows = (await db.execute(_scoped(
+        select(MakerCategoryTotal.state_name, func.sum(MakerCategoryTotal.count))
+        .where(MakerCategoryTotal.year == year).group_by(MakerCategoryTotal.state_name),
+        MakerCategoryTotal,
+    ))).all()
+
+    per_state: dict[str, int] = {}
+    fct_all: dict[str, int] = {}
+    for state_name, cat, raw_fuel, cnt in fct_rows:
+        cnt = int(cnt or 0)
+        fct_all[state_name] = fct_all.get(state_name, 0) + cnt
+        if (vehicle_category is None or cat == vehicle_category) and query_fuel_group(raw_fuel) == fuel_group:
+            per_state[state_name] = per_state.get(state_name, 0) + cnt
+    mct_all = {s: int(c or 0) for s, c in mct_rows}
+
+    def _pct_off(state_name: str) -> float | None:
+        ref = mct_all.get(state_name)
+        if not ref:
+            return None
+        return round((fct_all.get(state_name, 0) - ref) * 100.0 / ref, 2)
+
+    total = sum(per_state.values())
+    states = [
+        {"state_name": s, "count": c, "share_percent": round(c * 100.0 / total, 2) if total else 0.0,
+         "coverage_pct_off": _pct_off(s),
+         "incomplete": (abs(_pct_off(s) or 0.0) > _COVERAGE_TOLERANCE_PCT)}
+        for s, c in sorted(per_state.items(), key=lambda kv: (-kv[1], kv[0]))
+        if c > 0
+    ]
+    fct_sum, mct_sum = sum(fct_all.values()), sum(mct_all.values())
+    year_pct_off = round((fct_sum - mct_sum) * 100.0 / mct_sum, 2) if mct_sum else None
+    if not fct_all:
+        available, reason = False, f"Category x powertrain is not held for CY {year} (no fuel x category rows)."
+    else:
+        available, reason = True, None
+    response = {
+        "year": year, "vehicle_category": vehicle_category, "fuel_group": fuel_group,
+        "source": CATEGORY_FUEL_SOURCE, "grain": "year",
+        "available": available, "unanswerable_reason": reason,
+        "coverage_pct_off": year_pct_off,
+        "coverage_incomplete": year_pct_off is not None and abs(year_pct_off) > _COVERAGE_TOLERANCE_PCT,
+        "total": total, "states": states,
+    }
+    _category_fuel_cache.set(cache_key, response)
+    return response

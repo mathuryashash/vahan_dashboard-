@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getStatesComparison, compareStates, getStates } from '../api/vahan';
+import { getStatesComparison, compareStates, getStates, getCategoryFuelComparison } from '../api/vahan';
 import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatCompact, cyLabel, cyLongLabel } from '../utils/format';
@@ -84,20 +84,29 @@ export function ComparisonPage() {
   // Categories/YoY-era pages use, so switching tabs doesn't re-run it.
   const { data: categories } = useCategoriesQuery({ year: selectedYear });
 
-  // Category x Powertrain can never be answered from the raw Registration
-  // table: the vehicle_class-dimension pass is the only one carrying a real
-  // vehicle_category and the fuel-dimension pass the only one carrying a real
-  // fuel_type, and the scraper never writes both on one row. Same flag as
-  // Overview's impossibleFuelCategoryFilter. Both queries below return a
-  // structurally-guaranteed empty result for such a combo, so don't fire them
-  // -- the sections they feed are hidden instead of rendering zeros.
-  const comboImpossible = !!(selectedCategory && fuelGroup);
+  // Category x Powertrain can't be answered from the raw Registration table
+  // (the class pass carries the category, the fuel pass the fuel, never both
+  // on one row) -- that is why this page used to refuse the pair outright.
+  // fuel_category_totals DOES cross them per RTO per calendar year and
+  // reconciles with the category totals for most years, so the pair is
+  // answered from there instead: calendar-year totals per state, no monthly
+  // split, and an explicit per-year notice when that year's crosstab is
+  // missing or visibly incomplete.
+  const crossMode = !!(selectedCategory && fuelGroup);
 
-  const { data: allStates, isLoading: allStatesLoading } = useQuery({
+  const { data: cross, isLoading: crossLoading, isError: crossError, refetch: refetchCross } = useQuery({
+    queryKey: ['categoryFuelComparison', selectedYear, selectedCategory, fuelGroup],
+    queryFn: () => getCategoryFuelComparison({ year: selectedYear, vehicle_category: selectedCategory!, fuel_group: fuelGroup! }),
+    enabled: crossMode,
+  });
+
+  const { data: rankedStates, isLoading: rankedLoading } = useQuery({
     queryKey: ['states', selectedYear, selectedCategory, fuelGroup],
     queryFn: () => getStatesComparison(selectedYear, 36, selectedCategory, fuelGroup),
-    enabled: !comboImpossible,
+    enabled: !crossMode,
   });
+  const allStates = crossMode ? cross?.states : rankedStates;
+  const allStatesLoading = crossMode ? crossLoading : rankedLoading;
 
   // The A/B pickers list which states EXIST, not which ones the current
   // filters happen to return rows for -- sourcing them from the filtered
@@ -119,7 +128,7 @@ export function ComparisonPage() {
   const { data: comparison, isLoading: comparisonLoading, isError: comparisonError, refetch: refetchComparison } = useQuery({
     queryKey: ['compare', stateA, stateB, selectedYear, selectedCategory, fuelGroup],
     queryFn: () => compareStates(stateA, stateB, selectedYear, selectedCategory, fuelGroup),
-    enabled: !!stateA && !comboImpossible && !sameState,
+    enabled: !!stateA && !crossMode && !sameState,
   });
 
   const stateOptions = (allStates || []).map((s: { state_name: string }) => s.state_name);
@@ -148,14 +157,28 @@ export function ComparisonPage() {
     return [...byMonth.entries()].sort(([a], [b]) => a - b).map(([, row]) => row);
   })();
 
-  const totalA = (comparison?.state_a_data || []).reduce((s: number, d: { count: number }) => s + d.count, 0);
-  const totalB = (comparison?.state_b_data || []).reduce((s: number, d: { count: number }) => s + d.count, 0);
+  const crossCount = (name: string) => cross?.states.find((r) => r.state_name === name)?.count ?? 0;
+  const crossOff = (name: string) => {
+    const row = cross?.states.find((r) => r.state_name === name);
+    return row?.incomplete ? row.coverage_pct_off : null;
+  };
+  const totalA = crossMode ? crossCount(stateA) : (comparison?.state_a_data || []).reduce((s: number, d: { count: number }) => s + d.count, 0);
+  const totalB = crossMode ? crossCount(stateB) : (comparison?.state_b_data || []).reduce((s: number, d: { count: number }) => s + d.count, 0);
+  const totalsLoading = crossMode ? crossLoading : comparisonLoading;
+  const crossUnavailable = crossMode && !!cross && !cross.available;
 
   const colorA = chart.seriesColor(stateA);
   const colorB = chart.seriesColor(stateB);
 
   return (
     <div className="p-3 sm:p-6 space-y-5">
+      {crossError && (
+        <ErrorBanner
+          title="Couldn't load the category × powertrain comparison"
+          description="The request to the server failed. Check your connection and try again."
+          action={{ label: 'Retry', onClick: () => refetchCross() }}
+        />
+      )}
       {comparisonError && (
         <ErrorBanner
           title="Couldn't load comparison data"
@@ -171,9 +194,9 @@ export function ComparisonPage() {
             {selectedCategory ? ` · ${selectedCategory}` : ''}
             {fuelGroup ? ` · ${fuelGroup}` : ''}
           </p>
-          {comboImpossible && (
-            <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight mt-1">
-              VAHAN can't cross category × powertrain — drop one filter to compare states
+          {crossMode && (
+            <p className="text-[9px] text-[var(--text-muted)] font-mono leading-tight mt-1" data-testid="cross-source-note">
+              Source: VAHAN fuel × vehicle-class report (calendar-year totals, no monthly split)
             </p>
           )}
         </div>
@@ -218,7 +241,7 @@ export function ComparisonPage() {
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 gap-4 animate-entrance ${comboImpossible ? 'md:grid-cols-2' : 'md:grid-cols-3'}`} style={{ animationDelay: '40ms' }}>
+      <div className="grid grid-cols-1 gap-4 animate-entrance md:grid-cols-3" style={{ animationDelay: '40ms' }}>
         {[{ label: 'State A', value: stateA, other: stateB, setter: setStateA },
           { label: 'State B', value: stateB, other: stateA, setter: setStateB },
         ].map((s) => (
@@ -233,10 +256,8 @@ export function ComparisonPage() {
             </LabeledSelect>
           </div>
         ))}
-        {/* States with data under the current filters -- meaningless (and
-            always 0) when the filters can't co-exist, so it goes away with
-            the ranking it summarises. */}
-        {!comboImpossible && (
+        {/* States with data under the current filters. */}
+        {(
           <div className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
             <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">States Active</p>
             <div className="flex items-center gap-2">
@@ -247,50 +268,31 @@ export function ComparisonPage() {
         )}
       </div>
 
-      {comboImpossible && (
-        // Without this the page rendered its header and two dropdowns over
-        // empty space, which reads as a broken page rather than a documented
-        // limit of the source data. Says which two filters collide and what
-        // to do about it, instead of leaving the user to guess.
-        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-6 animate-entrance">
+      {crossUnavailable && (
+        // Per-year, not a blanket refusal: the crosstab exists for most years.
+        <div role="status" className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-6 animate-entrance" data-testid="cross-unavailable">
           <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-2">
-            Can't compare states on {selectedCategory} × {fuelGroup}
+            No {selectedCategory} × {fuelGroup} figures for {cyLabel(selectedYear)}
           </h3>
           <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-            VAHAN publishes vehicle category and powertrain as separate state-level
-            reports — there is no single table crossing both, so no honest per-state
-            number exists for this pair. Clear either filter to compare states:
+            {cross?.unanswerable_reason} Pick another year, or clear one filter.
           </p>
-          <div className="flex gap-2 mt-3">
-            {/* A scoped account's category can't be cleared (the scope lock
-                re-pins it), so this button would do nothing. */}
-            {!isCategoryLocked && (
-              <button
-                type="button"
-                onClick={() => setSelectedCategory(null)}
-                className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] transition-colors"
-              >
-                Compare on {fuelGroup} only
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setFuelGroup(null)}
-              className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] transition-colors"
-            >
-              Compare on {selectedCategory} only
-            </button>
-          </div>
+        </div>
+      )}
+      {crossMode && cross?.available && cross.coverage_incomplete && (
+        <div role="status" className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] px-4 py-3 text-xs text-[var(--text-secondary)]" data-testid="cross-incomplete">
+          {cyLabel(selectedYear)} is incomplete in this report: its all-category total is {Math.abs(cross.coverage_pct_off ?? 0).toFixed(1)}%
+          {(cross.coverage_pct_off ?? 0) < 0 ? ' below' : ' above'} the category totals. States marked * are off by more than 2%.
         </div>
       )}
 
-      {!comboImpossible && sameState && (
+      {!crossUnavailable && sameState && (
         <div role="status" className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] px-4 py-3 text-xs text-[var(--text-secondary)]">
           State A and State B are both <span className="font-semibold">{stateA}</span> — pick a different state for B to compare.
         </div>
       )}
 
-      {!comboImpossible && !sameState && (
+      {!crossUnavailable && !sameState && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-entrance" style={{ animationDelay: '80ms' }}>
         {[{
           label: stateA, total: totalA, color: colorA,
@@ -308,20 +310,25 @@ export function ComparisonPage() {
             </div>
             {/* A skeleton while loading -- the old `|| 0` printed a confident
                 "0" for both states until the request came back. */}
-            {comparisonLoading ? (
+            {totalsLoading ? (
               <div className="h-8 w-32 rounded bg-[var(--bg-sunken)] animate-pulse-soft mb-1" />
             ) : (
               <div className="number-display text-2xl font-bold text-[var(--text-primary)] mb-1 break-words">{(card.total ?? 0).toLocaleString('en-IN')}</div>
             )}
             <p className="text-[11px] text-[var(--text-muted)] font-mono">
-              Total registrations {cyLabel(selectedYear)}
+              {crossMode ? `${selectedCategory} × ${fuelGroup} registrations ${cyLabel(selectedYear)}` : `Total registrations ${cyLabel(selectedYear)}`}
             </p>
+            {crossMode && crossOff(card.label) != null && (
+              <p className="text-[10px] text-[var(--warning,var(--text-muted))] font-mono mt-1" data-testid="cross-state-incomplete">
+                * this state's {cyLabel(selectedYear)} report is {Math.abs(crossOff(card.label)!).toFixed(1)}% {crossOff(card.label)! < 0 ? 'below' : 'above'} its category totals — treat as incomplete
+              </p>
+            )}
           </div>
         ))}
       </div>
       )}
 
-      {!comboImpossible && !sameState && (
+      {!crossMode && !sameState && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '120ms' }}>
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">{stateA} vs {stateB} — Monthly, {cyLabel(selectedYear)}</h3>
         {comparisonLoading ? <LoadingBlock className="h-[280px]" /> : (
@@ -349,12 +356,12 @@ export function ComparisonPage() {
       </div>
       )}
 
-      {!comboImpossible && (
+      {!crossUnavailable && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">All States — Ranked, {cyLabel(selectedYear)}</h3>
         {allStatesLoading ? <LoadingBlock className="h-40" /> : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {(allStates || []).map((s: { state_name: string; count: number; share_percent: number }, i: number) => (
+          {(allStates || []).map((s: { state_name: string; count: number; share_percent: number; incomplete?: boolean }, i: number) => (
             <button
               key={s.state_name} type="button"
               aria-label={`Set State A to ${s.state_name}`}
@@ -365,7 +372,7 @@ export function ComparisonPage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[10px] text-[var(--text-muted)] font-bold w-4">#{i + 1}</span>
-                  <span className="text-xs text-[var(--text-secondary)]">{s.state_name}</span>
+                  <span className="text-xs text-[var(--text-secondary)]">{s.state_name}{s.incomplete ? ' *' : ''}</span>
                 </div>
                 <div className="text-right">
                   <span className="font-mono text-[11px] font-bold text-[var(--text-primary)]">{s.count?.toLocaleString('en-IN')}</span>

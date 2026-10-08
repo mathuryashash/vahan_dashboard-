@@ -15,6 +15,7 @@ from app.core.scope import (
 from app.core.cache import TTLCache, single_flight
 from app.core.maker_names import note_for
 from app.services.data_freshness import get_freshness
+from app.services import category_fuel_month
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
 from app.core.validation import MAX_MONTH, MAX_YEAR, MIN_MONTH, MIN_YEAR
@@ -777,4 +778,46 @@ async def get_crosstab_detail(
 
     response = {"total": total, "top_state": top_state, "yoy_growth_percent": yoy}
     _crosstab_detail_cache.set(cache_key, response)
+    return response
+
+
+_category_fuel_month_cache = TTLCache(_CACHE_TTL_SECONDS)
+
+
+@router.get("/category-fuel-month")
+@single_flight
+async def get_category_fuel_month(
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int = Query(..., ge=MIN_MONTH, le=MAX_MONTH),
+    vehicle_category: str | None = Depends(get_effective_category),
+    fuel_group_filter: str = Query(..., alias="fuel_group", max_length=10),
+    state: str | None = Depends(get_effective_state),
+    user_rto: str | None = Depends(scoped_rto),
+    db: AsyncSession = Depends(get_db),
+):
+    """Real registrations for one Category x Powertrain in one MONTH, from
+    the analytics portal's monthly table, only when that table's year total
+    matches fuel_category_totals for the same scope (see
+    services/category_fuel_month.py for the measured coverage). Otherwise
+    `available: false` + `unanswerable_reason`, never an estimate.
+    The portal table has no RTO axis, so RTO-scoped accounts are refused."""
+    if not vehicle_category:
+        raise HTTPException(status_code=422, detail="vehicle_category is required")
+    if fuel_group_filter not in ("ICE", "Hybrid", "EV"):
+        raise HTTPException(status_code=422, detail="fuel_group must be ICE, Hybrid or EV")
+    base = {"year": year, "month": month, "vehicle_category": vehicle_category,
+            "fuel_group": fuel_group_filter, "state": state, "source": category_fuel_month.SOURCE}
+    if user_rto:
+        return {**base, "available": False, "count": None, "coverage_pct_off": None,
+                "unanswerable_reason": "Month-level category x fuel data has no RTO breakdown."}
+    cache_key = (year, month, vehicle_category, fuel_group_filter, state)
+    cached = _category_fuel_month_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    ans = await category_fuel_month.category_fuel_month(
+        db, year=year, month=month, vehicle_category=vehicle_category, group=fuel_group_filter, state=state,
+    )
+    response = {**base, "available": ans.available, "count": ans.month_count,
+                "coverage_pct_off": ans.pct_off, "unanswerable_reason": ans.reason}
+    _category_fuel_month_cache.set(cache_key, response)
     return response
