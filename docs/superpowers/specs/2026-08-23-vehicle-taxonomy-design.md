@@ -61,7 +61,7 @@ existing `fuel_category()` — `ICE` = Petrol+Diesel+CNG+Other,
 | MAXI CAB | Four-Wheeler | |
 | LUXURY CAB | Four-Wheeler | |
 | Light Motor Vehicle | Four-Wheeler | |
-| ADAPTED VEHICLE | Four-Wheeler | |
+| ADAPTED VEHICLE | Other | Revised 2026-09 — was Four-Wheeler. Irreducibly mixed: 172,396 of 216,315 units (79.7%) belong to two-wheeler makers, and VAHAN publishes no sub-classification. Hero MotoCorp is 100.0% Two-Wheeler over 82.7M units while Maruti Suzuki is 97.7% Four-Wheeler — both register adapted vehicles under this one class, so any real category is a guess. |
 | PRIVATE SERVICE VEHICLE | Four-Wheeler | |
 | PRIVATE SERVICE VEHICLE (INDIVIDUAL USE) | Four-Wheeler | |
 | GOODS CARRIER | Commercial Vehicle | Unspecified |

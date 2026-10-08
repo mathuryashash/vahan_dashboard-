@@ -67,7 +67,7 @@ from app.core.query_filters import classify_vehicle, fuel_group
     ("MAXI CAB", "Four-Wheeler", None),
     ("LUXURY CAB", "Four-Wheeler", None),
     ("Light Motor Vehicle", "Four-Wheeler", None),
-    ("ADAPTED VEHICLE", "Four-Wheeler", None),
+    ("ADAPTED VEHICLE", "Other", None),  # revised 2026-09, see spec
     ("PRIVATE SERVICE VEHICLE", "Four-Wheeler", None),
     ("PRIVATE SERVICE VEHICLE (INDIVIDUAL USE)", "Four-Wheeler", None),
     ("GOODS CARRIER", "Commercial Vehicle", "Unspecified"),
@@ -205,7 +205,7 @@ _VEHICLE_CATEGORY_MAP: dict[str, tuple[str, str | None]] = {
     "MAXI CAB": ("Four-Wheeler", None),
     "LUXURY CAB": ("Four-Wheeler", None),
     "LIGHT MOTOR VEHICLE": ("Four-Wheeler", None),
-    "ADAPTED VEHICLE": ("Four-Wheeler", None),
+    "ADAPTED VEHICLE": ("Other", None),  # revised 2026-09, see spec
     "PRIVATE SERVICE VEHICLE": ("Four-Wheeler", None),
     "PRIVATE SERVICE VEHICLE (INDIVIDUAL USE)": ("Four-Wheeler", None),
     # Commercial Vehicle

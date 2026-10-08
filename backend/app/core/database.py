@@ -97,7 +97,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
     from app.core.migrations import (
         drop_orphaned_indexes, ensure_analyzed, ensure_bigint_id, ensure_columns, ensure_foreign_key,
-        ensure_indexes, ensure_no_duplicate_rows, ensure_rtos_backfilled, ensure_vehicle_category_backfilled,
+        ensure_indexes, ensure_no_duplicate_rows, ensure_reclassified, ensure_rtos_backfilled, ensure_vehicle_category_backfilled,
     )
     await ensure_columns(engine, {
         "states": {"zone_code": "VARCHAR(10)"},
@@ -171,6 +171,17 @@ async def init_db():
     )
     await ensure_indexes(engine, Base.metadata)
     await ensure_vehicle_category_backfilled(engine)
+    # ADAPTED VEHICLE moved Four-Wheeler -> Other in 2026-09 (see the block
+    # comment on it in query_filters._VEHICLE_CATEGORY_MAP). The backfill
+    # above only fills NULLs, so already-classified rows need this explicit
+    # pass or they keep the old, wrong category forever. Covers all three
+    # tables that store a derived vehicle_category.
+    await ensure_reclassified(
+        engine,
+        ["registrations", "maker_category_totals", "fuel_category_totals"],
+        vehicle_class="ADAPTED VEHICLE",
+        expected_category="Other",
+    )
     # Must run before any rto_code FK below -- backfills rto_codes seen in
     # scraped registrations but missing from the rtos master table (see that
     # function's docstring for the naming-format history behind this).

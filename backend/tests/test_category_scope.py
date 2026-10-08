@@ -403,7 +403,13 @@ def test_classify_live_category_maps_the_live_sites_own_taxonomy():
     analytics_monthwise_category_sample.html)."""
     assert classify_live_category("TWO WHEELER(NT)") == "Two-Wheeler"
     assert classify_live_category("THREE WHEELER(T)") == "Three-Wheeler"
-    assert classify_live_category("FOUR WHEELER (Invalid Carriage)") == "Four-Wheeler"
+    # (Invalid Carriage) is adapted-for-disability, and must agree with the
+    # stored path, where vehicle_class 'ADAPTED VEHICLE' maps to Other since
+    # 2026-09. It read Four-Wheeler here until then, so the live-query
+    # leaderboard and the KPIs disagreed by 14,154 units in FY2026 alone.
+    # The invariant is pinned in test_adapted_vehicle_classification.py.
+    assert classify_live_category("FOUR WHEELER (Invalid Carriage)") == "Other"
+    assert classify_live_category("TWO WHEELER (Invalid Carriage)") == "Other"
     assert classify_live_category("LIGHT MOTOR VEHICLE") == "Four-Wheeler"
     assert classify_live_category("HEAVY PASSENGER VEHICLE") == "Commercial Vehicle"
     assert classify_live_category("MEDIUM GOODS VEHICLE") == "Commercial Vehicle"

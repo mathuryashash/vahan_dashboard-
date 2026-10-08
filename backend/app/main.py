@@ -133,6 +133,19 @@ async def request_context_and_security_headers(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    # Don't leak the full dashboard URL (which carries the filter state, and
+    # on some routes the RTO/state a customer is scoped to) in the Referer
+    # header of any outbound request a rendered page makes.
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # HSTS only over a real TLS request: setting it on plain-HTTP local dev
+    # would pin localhost to https for six months in the developer's browser
+    # and break every subsequent `npm run dev`. Browsers ignore the header on
+    # http:// anyway, so this costs nothing in production and avoids an
+    # unpleasant surprise if the check is ever removed. No `preload` and no
+    # includeSubDomains: both are commitments about hostnames this app does
+    # not own, and preload in particular is effectively irreversible.
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     # Swagger UI is the only page this API serves that needs inline scripts
     # and the jsdelivr CDN, so that exemption lives and dies with it. With
     # docs off (production), script-src is a plain 'self' and an injected

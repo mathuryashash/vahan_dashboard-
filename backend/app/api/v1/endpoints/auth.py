@@ -53,14 +53,20 @@ async def login(
     token = create_access_token(user.id, user.role)
     # httpOnly: JS can never read this, closing the XSS-can-steal-the-token
     # gap a token returned in the JSON body (and stashed in localStorage by
-    # the frontend) had. secure is derived from the live request rather than
-    # a settings flag -- correct behind both plain-HTTP local dev and an
-    # HTTPS deployment with zero config to keep in sync between them.
+    # the frontend) had. `secure` falls back to sniffing the request scheme
+    # for local dev, but that sniff reads "http" even behind TLS in this
+    # deployment (no X-Forwarded-Proto, no --proxy-headers) -- so production
+    # must set COOKIE_SECURE=true explicitly. See its comment in config.py.
+    secure_cookie = (
+        settings.COOKIE_SECURE
+        if settings.COOKIE_SECURE is not None
+        else request.url.scheme == "https"
+    )
     response.set_cookie(
         key=ACCESS_TOKEN_COOKIE,
         value=token,
         httponly=True,
-        secure=request.url.scheme == "https",
+        secure=secure_cookie,
         samesite="lax",
         max_age=settings.JWT_EXPIRE_MINUTES * 60,
         path="/",

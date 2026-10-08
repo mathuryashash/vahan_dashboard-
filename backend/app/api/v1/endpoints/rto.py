@@ -7,6 +7,7 @@ from app.core.scope import get_effective_category, require_rto_code, require_sta
 from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, Registration
 from app.schemas.schemas import RtoAnalysis, RtoListItem
+from app.core.validation import MAX_YEAR, MIN_YEAR
 
 router = APIRouter()
 
@@ -43,7 +44,7 @@ def fy_filter(fy_year: int):
 @router.get("/{state_code}/list", response_model=list[RtoListItem])
 async def get_rtos_for_state(
     state_code: str = Depends(require_state_code),
-    year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR, description="Financial year start (April `year` - March `year+1`)"),
     user_category: str | None = Depends(get_effective_category),
     user_rto: str | None = Depends(scoped_rto),
     db: AsyncSession = Depends(get_db),
@@ -105,7 +106,7 @@ async def get_rtos_for_state(
 @router.get("/{rto_code}/analysis", response_model=RtoAnalysis)
 async def get_rto_analysis(
     rto_code: str = Depends(require_rto_code),
-    year: int = Query(..., description="Financial year start (April `year` - March `year+1`)"),
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR, description="Financial year start (April `year` - March `year+1`)"),
     user_category: str | None = Depends(get_effective_category),
     db: AsyncSession = Depends(get_db),
 ):

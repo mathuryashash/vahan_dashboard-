@@ -15,6 +15,7 @@ from app.models.models import RTO, Registration, State
 
 GEO = dict(state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Delhi RTO")
 REAL_OTHER = 700          # a genuine Other vehicle (tractor)
+ADAPTED = 137             # ADAPTED VEHICLE, moved into Other in 2026-09
 MAKER_PASS = 50_000       # canonical maker pass, vehicle_class='All'
 FUEL_PASS = 50_000        # fuel-dimension pass, vehicle_class='All'
 
@@ -34,6 +35,13 @@ async def _seed(db):
         # The only genuinely-Other vehicle here.
         Registration(**GEO, year=2026, month=1, vehicle_class="AGRICULTURAL TRACTOR",
                      vehicle_category="Other", count=REAL_OTHER, is_supplementary=True),
+        # ADAPTED VEHICLE joined the Other bucket in 2026-09 (moved from
+        # Four-Wheeler). It is the newest occupant and the only one that is a
+        # consumer vehicle rather than special-purpose, so it belongs in this
+        # seed: the guard must count it exactly once, like the tractor, and
+        # must not confuse it with the 'All'-class passes above.
+        Registration(**GEO, year=2026, month=1, vehicle_class="ADAPTED VEHICLE",
+                     vehicle_category="Other", count=ADAPTED, is_supplementary=True),
     ])
     await db.commit()
 
@@ -48,9 +56,10 @@ async def test_other_category_counts_only_real_other_vehicles(db_session):
         )
     )).scalar()
 
-    # Not MAKER_PASS + FUEL_PASS + REAL_OTHER (100,700), which is what the
-    # unguarded filter returned.
-    assert total == REAL_OTHER
+    # Not MAKER_PASS + FUEL_PASS + REAL_OTHER + ADAPTED (100,837), which is
+    # what the unguarded filter returned. Both genuine Other vehicles count
+    # exactly once; neither 'All'-class pass does.
+    assert total == REAL_OTHER + ADAPTED
 
 
 async def test_a_real_category_is_unaffected_by_the_other_carve_out(db_session):

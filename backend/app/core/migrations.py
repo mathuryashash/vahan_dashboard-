@@ -198,6 +198,74 @@ async def drop_orphaned_indexes(engine: AsyncEngine, index_names: list[str]) -> 
             await conn.execute(text(f"DROP INDEX IF EXISTS {name}"))
 
 
+async def ensure_reclassified(
+    engine: AsyncEngine, table_names: list[str], vehicle_class: str, expected_category: str,
+) -> None:
+    """Re-run classification for ONE vehicle_class whose mapping has changed.
+
+    ensure_vehicle_category_backfilled only touches rows WHERE
+    vehicle_category IS NULL, which is what makes it a cheap no-op on every
+    subsequent boot. The cost of that is that editing _VEHICLE_CATEGORY_MAP
+    afterwards changes nothing already stored: the map is consulted once per
+    row, at first classification, and never again. A mapping fix therefore
+    needs an explicit, targeted re-UPDATE -- this one.
+
+    Deliberately scoped to a single vehicle_class rather than reclassifying
+    everything. A blanket "recompute all vehicle_category" pass would be one
+    UPDATE over 18.4M rows on every startup, and would silently overwrite any
+    future correction applied directly to the data. Naming the class keeps
+    the blast radius equal to the mapping that actually changed.
+
+    Idempotent by construction: the UPDATE's WHERE clause excludes rows
+    already carrying expected_category, so a completed run matches zero rows.
+
+    A sargable EXISTS probe runs first so the completed case -- which is every
+    boot after the first -- costs milliseconds off an index instead of a full
+    scan. UPPER() is not sargable: measured on the 18.4M-row registrations
+    table, a zero-row no-op took 9.9s with UPPER versus 0.7s with an index
+    scan. The probe is therefore case-SENSITIVE and deliberately cheap, while
+    the UPDATE stays case-insensitive.
+
+    That asymmetry is safe only because the probe's job is to answer "might
+    there be work?", not "is this row stale?". It tests every spelling the
+    caller could plausibly have stored -- as-given, upper, title -- so a
+    false negative would need a spelling none of those cover. A false
+    positive merely costs one scan that updates zero rows. If a future
+    caller uses an exotic capitalisation, add it to _spellings rather than
+    reintroducing UPPER() on the probe.
+
+    vehicle_class and expected_category are interpolated as quoted SQL
+    literals via _sql_literal (which doubles embedded quotes), not as
+    identifiers; table_names are identifiers and are regex-validated.
+    """
+    _spellings = {vehicle_class, vehicle_class.upper(), vehicle_class.title()}
+    spelling_list = ", ".join(_sql_literal(s) for s in sorted(_spellings))
+    upper = _sql_literal(vehicle_class.upper())
+    async with engine.begin() as conn:
+        for table_name in table_names:
+            if not _IDENTIFIER_RE.match(table_name):
+                raise ValueError(f"Invalid table name: {table_name!r}")
+            # IS DISTINCT FROM, not <>: a NULL vehicle_category must also be
+            # corrected, and <> NULL is NULL (never true), which would skip it.
+            stale = f"vehicle_category IS DISTINCT FROM {_sql_literal(expected_category)}"
+            has_stale = (await conn.execute(text(
+                f"SELECT EXISTS (SELECT 1 FROM {table_name} "
+                f"WHERE vehicle_class IN ({spelling_list}) AND {stale})"
+            ))).scalar()
+            if not has_stale:
+                continue
+            result = await conn.execute(text(f"""
+                UPDATE {table_name}
+                SET vehicle_category = {_sql_literal(expected_category)}
+                WHERE UPPER(vehicle_class) = {upper} AND {stale}
+            """))
+            if result.rowcount:
+                logger.info(
+                    "Reclassified %s rows in %s: %s -> %s",
+                    result.rowcount, table_name, vehicle_class, expected_category,
+                )
+
+
 async def ensure_no_duplicate_rows(
     engine: AsyncEngine, table_name: str, key_columns: list[str], unique_index_name: str | None = None,
 ) -> None:

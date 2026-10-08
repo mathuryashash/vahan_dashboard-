@@ -8,11 +8,14 @@ from app.core.query_filters import (
     apply_common_filters, fuel_category, fuel_group,
     latest_month_with_data, makers_with_coverage_gaps,
 )
-from app.core.scope import get_effective_category, get_effective_state, scoped_category, scoped_rto
+from app.core.scope import (
+    get_effective_category, get_effective_state, scoped_category, scoped_rto, scoped_state,
+)
 from app.core.cache import TTLCache
 from app.core.maker_names import note_for
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
+from app.core.validation import MAX_MONTH, MAX_YEAR, MIN_MONTH, MIN_YEAR
 
 router = APIRouter()
 
@@ -62,6 +65,8 @@ _crosstab_detail_cache = TTLCache(_CACHE_TTL_SECONDS)
 @router.get("/crosstab-coverage", response_model=CrosstabCoverage)
 async def get_crosstab_coverage(
     db: AsyncSession = Depends(get_db),
+    user_state: str | None = Depends(scoped_state),
+    user_category: str | None = Depends(scoped_category),
     user_rto: str | None = Depends(scoped_rto),
     _user: User = Depends(get_current_user),
 ):
@@ -77,18 +82,35 @@ async def get_crosstab_coverage(
     to tell "not scraped for this year" apart from "scraped, real zero"
     instead of guessing from an empty filtered response.
     """
-    cached = _crosstab_coverage_cache.get((user_rto,))
+    cache_key = (user_state, user_category, user_rto)
+    cached = _crosstab_coverage_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    async def years_for(model) -> list[int]:
-        # Scoped too: this is the signal the frontend uses to tell 'year
-        # never scraped' from 'scraped, real zero', and an RTO account
-        # offered a year that only exists outside its own RTO gets the
-        # wrong answer to both questions.
+    async def years_for(model, *, category_aware: bool) -> list[int]:
+        # Scoped on every axis the model actually carries: this is the signal
+        # the frontend uses to tell 'year never scraped' from 'scraped, real
+        # zero', and an account offered a year that only exists outside its
+        # own state/RTO/category gets the wrong answer to both questions --
+        # plus the disclosure that data it did not buy exists there.
+        #
+        # scoped_rto alone (all this had) reads as protection while leaving
+        # the state and category axes open, which is the exact shape of the
+        # four leaks already fixed here: the axis with a dependency vouches
+        # for the axes without one.
         query = select(model.year).distinct()
+        if user_state:
+            query = query.where(model.state_name == user_state)
         if user_rto:
             query = query.where(model.rto_code == user_rto)
+        # category_aware=False for MakerFuelTotal, which is maker x fuel only
+        # and has NO vehicle_category column. A predicate there could only be
+        # a membership approximation -- the 947x bug this codebase already
+        # paid for. Coverage is an existence signal, not a volume, so the
+        # unclamped year list is the honest answer; /maker-fuel-breakdown
+        # refuses outright for these accounts instead.
+        if category_aware and user_category:
+            query = query.where(model.vehicle_category == user_category)
         result = await db.execute(query.order_by(model.year.desc()))
         return [row[0] for row in result.all()]
 
@@ -108,18 +130,18 @@ async def get_crosstab_coverage(
     # one wasn't: it compares a maker against ITSELF inside one table, so no
     # other table's completeness can skew it. It caught 2026 independently.
     result = {
-        "maker_category": await years_for(MakerCategoryTotal),
-        "fuel_category": await years_for(FuelCategoryTotal),
-        "maker_fuel": await years_for(MakerFuelTotal),
+        "maker_category": await years_for(MakerCategoryTotal, category_aware=True),
+        "fuel_category": await years_for(FuelCategoryTotal, category_aware=True),
+        "maker_fuel": await years_for(MakerFuelTotal, category_aware=False),
     }
-    _crosstab_coverage_cache.set((user_rto,), result)
+    _crosstab_coverage_cache.set(cache_key, result)
     return result
 
 
 @router.get("/")
 async def get_categories(
-    year: int = _DEFAULT_YEAR,
-    month: int | None = None,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
     state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     vehicle_model: str | None = None,
@@ -211,8 +233,8 @@ async def get_top_makers(
     vehicle_class: str | None = None,
     vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
-    year: int = _DEFAULT_YEAR,
-    month: int | None = None,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
     state: str | None = Depends(get_effective_state),
     vehicle_model: str | None = None,
     # Bounded for the same reason as summary.get_state_ranking: a bare int
@@ -294,8 +316,8 @@ async def get_fuel_breakdown(
     vehicle_category: str | None = Depends(get_effective_category),
     commercial_tier: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
-    year: int = _DEFAULT_YEAR,
-    month: int | None = None,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
     state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     vehicle_model: str | None = None,
@@ -364,7 +386,7 @@ async def get_fuel_breakdown(
 
 @router.get("/maker-category-breakdown")
 async def get_maker_category_breakdown(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,
@@ -432,7 +454,7 @@ _MIN_BRAND_UNITS = 100
 
 @router.get("/brand-options")
 async def get_brand_options(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = Depends(get_effective_category),
     user_rto: str | None = Depends(scoped_rto),
@@ -487,7 +509,7 @@ async def get_brand_options(
 
 @router.get("/fuel-category-breakdown")
 async def get_fuel_category_breakdown(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = Depends(get_effective_category),
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
@@ -537,7 +559,7 @@ async def get_fuel_category_breakdown(
 
 @router.get("/maker-fuel-breakdown")
 async def get_maker_fuel_breakdown(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     maker: str | None = None,
     fuel_group_filter: str | None = Query(None, alias="fuel_group"),
@@ -612,7 +634,7 @@ async def get_maker_fuel_breakdown(
 
 @router.get("/crosstab-detail", response_model=CrosstabDetail)
 async def get_crosstab_detail(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     vehicle_category: str | None = Depends(get_effective_category),
     maker: str | None = None,

@@ -321,7 +321,6 @@ _VEHICLE_CATEGORY_MAP: dict[str, tuple[str, str | None]] = {
     "MAXI CAB": ("Four-Wheeler", None),
     "LUXURY CAB": ("Four-Wheeler", None),
     "LIGHT MOTOR VEHICLE": ("Four-Wheeler", None),
-    "ADAPTED VEHICLE": ("Four-Wheeler", None),
     "PRIVATE SERVICE VEHICLE": ("Four-Wheeler", None),
     "PRIVATE SERVICE VEHICLE (INDIVIDUAL USE)": ("Four-Wheeler", None),
     # Commercial Vehicle
@@ -344,6 +343,40 @@ _VEHICLE_CATEGORY_MAP: dict[str, tuple[str, str | None]] = {
     "DUMPER": ("Commercial Vehicle", "HCV"),
     "MODULAR HYDRAULIC TRAILER": ("Commercial Vehicle", "Unspecified"),
     # Other / Special Purpose
+    #
+    # ADAPTED VEHICLE is a vehicle modified for a driver with a disability.
+    # The VAHAN4 vehicle_class axis this table keys on does NOT sub-classify
+    # it -- one label covers every base vehicle -- and the bucket is genuinely
+    # mixed: measured across all years, 216,315 registrations, of which
+    # 172,396 (79.7%) belong to two-wheeler makers. The makers' own profiles
+    # show why no single category fits: Hero MotoCorp is 100.0% Two-Wheeler
+    # over 82.7M units and TVS 99.3%, while Maruti Suzuki is 97.7%
+    # Four-Wheeler -- so Hero's are adapted scooters and Maruti's are adapted
+    # cars, indistinguishable in this column.
+    #
+    # It mapped to Four-Wheeler until 2026-09, which put ~80% of the bucket
+    # in the wrong category: a customer filtering Two-Wheeler undercounted
+    # TVS by 9,429 units in FY2026 alone while Four-Wheeler was inflated by
+    # the same amount.
+    #
+    # A SPLIT DOES EXIST, on a different source. The analytics portal
+    # (state_month_category_totals) reports "TWO WHEELER (Invalid Carriage)"
+    # / "THREE WHEELER (Invalid Carriage)" / "FOUR WHEELER (Invalid Carriage)"
+    # separately -- 153,883 / 99 / 32,382 units, 82.6% two-wheeler, and it
+    # reconciles against this class to within 0.02-0.64% for 2021-2026
+    # (degrading to -2.3% in 2020 and -9.4% in 2019 as that portal's coverage
+    # thins). So the honest statement is: VAHAN4 does not split it, the
+    # analytics portal does, from ~2020 forward.
+    #
+    # Other is chosen anyway, for now. Apportioning this class across
+    # Two-Wheeler/Four-Wheeler using those ratios would be an inference about
+    # individual registrations, applied per state (the ratio flips by state:
+    # Tamil Nadu FY2026 is 7,754 2W / 290 4W, Gujarat 156 2W / 414 4W), on a
+    # number customers are billed against, with no coverage before 2020. That
+    # is a product decision with a disclosure requirement, not a mapping fix.
+    # If it is ever taken, classify_live_category's INVALID CARRIAGE rule
+    # below must move with it -- the two tables are tied by a test.
+    "ADAPTED VEHICLE": ("Other", None),
     "AGRICULTURAL TRACTOR": ("Other", None),
     "TRAILER (AGRICULTURAL)": ("Other", None),
     "TRACTOR": ("Other", None),
@@ -408,6 +441,17 @@ def classify_vehicle(raw_vehicle_class: str) -> tuple[str, str | None]:
 # anything unmatched ("OTHER THAN MENTIONED ABOVE") is Other, never guessed
 # into a real category.
 _LIVE_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # FIRST, deliberately. "TWO WHEELER (Invalid Carriage)" would otherwise
+    # substring-match "TWO WHEELER" below and land in Two-Wheeler, while the
+    # same physical vehicles arrive on the stored path as vehicle_class
+    # "ADAPTED VEHICLE" -> Other (see that entry in _VEHICLE_CATEGORY_MAP).
+    # One product cannot answer "is this a two-wheeler?" two different ways
+    # depending on which endpoint the customer hit: a Two-Wheeler-scoped
+    # account would see adapted scooters in its live-query leaderboard and
+    # not in its KPIs, trend or crosstab -- a 14,154-unit disagreement in
+    # FY2026 alone. The invariant is pinned by a test; if the ADAPTED VEHICLE
+    # mapping ever changes, change this with it.
+    ("Other", ("INVALID CARRIAGE",)),
     ("Two-Wheeler", ("TWO WHEELER",)),
     ("Three-Wheeler", ("THREE WHEELER",)),
     ("Four-Wheeler", ("FOUR WHEELER", "LIGHT MOTOR VEHICLE")),

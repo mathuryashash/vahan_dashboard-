@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from app.core.database import get_db
 from app.core.auth import get_current_user
 from app.models.models import OEMMonthlySales, User, VehicleCategoryScope
 from app.schemas.schemas import OemMakerShare, OemStatus, OemTrendPoint
+from app.core.validation import MAX_MONTH, MAX_YEAR, MIN_MONTH, MIN_YEAR
 
 router = APIRouter()
 
@@ -104,8 +105,8 @@ async def get_oem_categories(
 @router.get("/monthly", response_model=list[OemMakerShare])
 async def get_oem_monthly(
     category: str,
-    year: int,
-    month: int | None = None,
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):

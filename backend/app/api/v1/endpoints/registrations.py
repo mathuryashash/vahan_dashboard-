@@ -6,6 +6,7 @@ from app.core.query_filters import apply_total_filters, reject_vehicle_model
 from app.core.scope import get_effective_state, scoped_category, scoped_rto
 from app.models.models import Registration
 from app.schemas.schemas import MonthCount, RegistrationOut
+from app.core.validation import MAX_DAY, MAX_MONTH, MAX_YEAR, MIN_DAY, MIN_MONTH, MIN_YEAR
 
 router = APIRouter()
 
@@ -13,9 +14,9 @@ router = APIRouter()
 @router.get("/", response_model=list[RegistrationOut])
 async def get_registrations(
     state: str | None = Depends(get_effective_state),
-    year: int | None = None,
-    month: int | None = None,
-    day: int | None = None,
+    year: int | None = Query(None, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
+    day: int | None = Query(None, ge=MIN_DAY, le=MAX_DAY),
     vehicle_class: str | None = None,
     maker: str | None = None,
     vehicle_model: str | None = None,
@@ -87,7 +88,7 @@ async def get_registrations(
 
 @router.get("/aggregate/by-month", response_model=list[MonthCount])
 async def get_aggregate_by_month(
-    year: int,
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     user_category: str | None = Depends(scoped_category),
     user_rto: str | None = Depends(scoped_rto),

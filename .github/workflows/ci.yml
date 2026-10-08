@@ -82,6 +82,20 @@ jobs:
       - name: Tests
         run: python -m pytest -q
 
+      # Dependency CVE scan. Runs against requirements.txt (the pinned
+      # production set) rather than the installed environment, so a dev-only
+      # tool's advisory doesn't fail a release. Non-blocking by design for
+      # now: pip-audit's data source adds advisories continuously, and a new
+      # one landing overnight would turn every unrelated PR red with no
+      # change from us. Read the annotation, then bump the pin deliberately.
+      # Flip `continue-on-error` to false once someone owns the upgrade
+      # cadence -- an advisory nobody is required to act on is theatre.
+      - name: Dependency audit
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --desc
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -106,6 +120,13 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # Same rationale as the backend's pip-audit step: advisory, not a gate.
+      # `--audit-level=high` so a transitive low/moderate in a build-only dev
+      # dependency doesn't drown the signal from something that ships.
+      - name: Dependency audit
+        continue-on-error: true
+        run: npm audit --audit-level=high
 
       # `tsc -b && vite build` -- this is also the type check, so a type
       # error fails the build rather than reaching production.

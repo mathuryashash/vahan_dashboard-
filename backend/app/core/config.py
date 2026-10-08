@@ -53,6 +53,25 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "dev-only-change-me-in-production"
     JWT_EXPIRE_MINUTES: int = 60 * 24  # 24h
 
+    # Whether the auth cookie carries the `Secure` flag.
+    #
+    # None (the default) means "derive it from the request scheme", which is
+    # correct ONLY when the app sees the real scheme. It does not here: the
+    # shipped nginx.conf sets Host and X-Real-IP but NOT X-Forwarded-Proto,
+    # and the Dockerfile starts uvicorn without --proxy-headers -- so
+    # request.url.scheme is "http" on every request even when a TLS
+    # terminator sits in front, and the flag silently never gets set. A
+    # cookie without Secure is sent over plain HTTP, so anyone able to
+    # induce one http:// request to the domain (a mistyped link, an HTTP
+    # redirect, a hostile network) sees the session token in cleartext.
+    #
+    # Set COOKIE_SECURE=true in .env for any deployment behind HTTPS. Left
+    # as None rather than defaulting to True so local plain-HTTP dev keeps
+    # working with no config, which is the same tradeoff the scheme sniff
+    # was reaching for -- just one that can actually be made right in
+    # production instead of being wrong there by construction.
+    COOKIE_SECURE: bool | None = None
+
     # Connection budget. Postgres ships with max_connections=100, and every
     # process using this engine can open POOL_SIZE + MAX_OVERFLOW. The API
     # is one process; each scraper run is another, and several can run at

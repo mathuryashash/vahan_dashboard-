@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.query_filters import category_makers, classify_live_category
 from app.core.rate_limit import limiter
 from app.core.scope import get_effective_category, require_state_code, scoped_category, scoped_rto
+from app.core.validation import MAX_YEAR, MIN_YEAR
 from app.models.models import User, UserScope
 from app.services.live_scrape_service import (
     UnknownRtoCodeError, UnknownStateCodeError, get_or_scrape_maker_query, get_site_rto_codes,
@@ -20,7 +21,7 @@ router = APIRouter()
 @limiter.limit("10/minute")
 async def get_maker_query(
     request: Request,  # required by @limiter.limit, unused otherwise
-    year: int,
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
     maker: str = Query(..., max_length=200),
     fuel: str | None = Query(None, max_length=50),
     rto: str | None = Query(None, max_length=10),
@@ -115,7 +116,7 @@ async def list_live_rtos(
 @limiter.limit("5/minute")
 async def get_leaderboard(
     request: Request,  # required by @limiter.limit, unused otherwise
-    year: int,
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
     fuel: str | None = None,
     limit: int = Query(10, ge=1, le=20),
     state_code: str = Depends(require_state_code),

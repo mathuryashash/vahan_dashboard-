@@ -71,7 +71,10 @@ def test_fuel_category_is_case_insensitive():
     ("MAXI CAB", "Four-Wheeler", None),
     ("LUXURY CAB", "Four-Wheeler", None),
     ("Light Motor Vehicle", "Four-Wheeler", None),
-    ("ADAPTED VEHICLE", "Four-Wheeler", None),
+    # Deliberately Other, not Four-Wheeler: the class is irreducibly mixed
+    # (Hero is 100% 2W, Maruti 97.7% 4W, both register under it) and VAHAN
+    # publishes no sub-classification. See test_adapted_vehicle_classification.py.
+    ("ADAPTED VEHICLE", "Other", None),
     ("PRIVATE SERVICE VEHICLE", "Four-Wheeler", None),
     ("PRIVATE SERVICE VEHICLE (INDIVIDUAL USE)", "Four-Wheeler", None),
     ("GOODS CARRIER", "Commercial Vehicle", "Unspecified"),

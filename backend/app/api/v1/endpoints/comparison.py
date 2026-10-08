@@ -9,6 +9,7 @@ from app.core.scope import enforce_state, get_effective_category, scoped_rto
 from app.core.cache import TTLCache
 from app.models.models import Registration, User, UserScope
 from app.schemas.schemas import StateComparisonData, StateComparisonRanking
+from app.core.validation import MAX_YEAR, MIN_YEAR
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ _compare_cache = TTLCache(_COMPARE_CACHE_TTL_SECONDS)
 async def compare_states(
     state_a: str,
     state_b: str | None = None,
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     vehicle_category: str | None = Depends(get_effective_category),
     fuel_group: str | None = None,
     user_rto: str | None = Depends(scoped_rto),
@@ -97,7 +98,7 @@ async def compare_states(
 
 @router.get("/all-states", response_model=list[StateComparisonRanking])
 async def get_all_states_comparison(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     # Bounded, matching summary.get_state_ranking and categories.get_top_makers.
     # A bare `int` let limit=-1 through to Postgres ("LIMIT must not be
     # negative") as an opaque 500, and let an unbounded positive value both

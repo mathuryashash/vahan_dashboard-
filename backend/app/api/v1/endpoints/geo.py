@@ -6,6 +6,7 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models.models import Zone, State, District, RTO, RTODistrict, Registration, User
 from app.schemas.schemas import ZoneSchema, StateSchema, DistrictSchema, RTO as RTOSchema
+from app.core.validation import MAX_YEAR, MIN_YEAR
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ async def get_states_in_zone(zone_code: str, db: AsyncSession = Depends(get_db),
 @router.get("/states/{state_code}/districts", response_model=list[DistrictSchema])
 async def get_districts_in_state(
     state_code: str,
-    year: int | None = Query(None, description="Financial year; when given, only districts that have registration data in it"),
+    year: int | None = Query(None, ge=MIN_YEAR, le=MAX_YEAR, description="Financial year; when given, only districts that have registration data in it"),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):

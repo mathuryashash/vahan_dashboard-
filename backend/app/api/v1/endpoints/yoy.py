@@ -7,6 +7,7 @@ from app.core.query_filters import apply_total_filters, latest_month_with_data
 from app.core.auth import get_current_user
 from app.core.scope import get_effective_category, get_effective_state, scoped_rto
 from app.models.models import Registration, User
+from app.core.validation import MAX_YEAR, MIN_YEAR
 
 router = APIRouter()
 
@@ -15,8 +16,8 @@ _DEFAULT_YEAR = datetime.now().year
 
 @router.get("/monthly")
 async def get_yoy_monthly(
-    year_a: int = Query(default=_DEFAULT_YEAR - 1),
-    year_b: int = Query(default=_DEFAULT_YEAR),
+    year_a: int = Query(default=_DEFAULT_YEAR - 1, ge=MIN_YEAR, le=MAX_YEAR),
+    year_b: int = Query(default=_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),
@@ -80,8 +81,8 @@ async def get_yoy_monthly(
 
 @router.get("/summary")
 async def get_yoy_summary(
-    year_a: int = Query(default=_DEFAULT_YEAR - 1),
-    year_b: int = Query(default=_DEFAULT_YEAR),
+    year_a: int = Query(default=_DEFAULT_YEAR - 1, ge=MIN_YEAR, le=MAX_YEAR),
+    year_b: int = Query(default=_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     start_month: int = Query(default=1, ge=1, le=12),
     end_month: int = Query(default=12, ge=1, le=12),
     state: str | None = Depends(get_effective_state),

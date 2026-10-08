@@ -101,6 +101,23 @@ def scoped_rto(user: User = Depends(get_current_user)) -> str | None:
     return user.scope_rto_code if user.scope_type == UserScope.RTO else None
 
 
+def scoped_state(user: User = Depends(get_current_user)) -> str | None:
+    """A state- or RTO-scoped user's own scope_state_name (else None), for
+    endpoints that have NO state param at all -- scoped_rto's job on the
+    geographic axis one level up, and for the same reason.
+
+    get_effective_state cannot serve this case: it works by narrowing a
+    `state` query param, so depending on it would MINT a state param on a
+    route that has none and publish it in the OpenAPI schema. Where there is
+    no param to narrow, the filter has to be injected, exactly as
+    scoped_rto/scoped_category do.
+
+    Returns None for NATIONAL users, whose queries stay byte-for-byte what
+    they were.
+    """
+    return user.scope_state_name if user.scope_type != UserScope.NATIONAL else None
+
+
 def enforce_state(user: User, state: str | None) -> str | None:
     """For endpoints with a required (not defaultable) state param, e.g.
     comparison.compare_states's state_a/state_b -- raises rather than

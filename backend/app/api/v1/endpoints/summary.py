@@ -11,6 +11,7 @@ from app.core.cache import TTLCache
 from app.models.models import Registration, User
 from app.schemas.schemas import DashboardKPIs, MonthCount, MonthDetail, StateRankingItem
 from app.core.config import settings
+from app.core.validation import MAX_MONTH, MAX_YEAR, MIN_MONTH, MIN_YEAR
 
 router = APIRouter()
 
@@ -75,8 +76,8 @@ _kpis_cache = TTLCache(_KPIS_CACHE_TTL_SECONDS)
 
 @router.get("/kpis", response_model=DashboardKPIs)
 async def get_dashboard_kpis(
-    year: int | None = None,
-    month: int | None = None,
+    year: int | None = Query(None, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
     state: str | None = Depends(get_effective_state),
     user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
@@ -186,7 +187,7 @@ _trend_cache = TTLCache(_TREND_CACHE_TTL_SECONDS)
 
 @router.get("/trend", response_model=list[MonthCount])
 async def get_trend(
-    year: int = _DEFAULT_YEAR,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
     state: str | None = Depends(get_effective_state),
     user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
@@ -230,8 +231,8 @@ _state_ranking_cache = TTLCache(_STATE_RANKING_CACHE_TTL_SECONDS)
 
 @router.get("/state-ranking", response_model=list[StateRankingItem])
 async def get_state_ranking(
-    year: int = _DEFAULT_YEAR,
-    month: int | None = None,
+    year: int = Query(_DEFAULT_YEAR, ge=MIN_YEAR, le=MAX_YEAR),
+    month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
     state: str | None = Depends(get_effective_state),
     user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
@@ -341,8 +342,8 @@ def _growth_percent(current: float, previous: float | None) -> float | None:
 
 @router.get("/month-detail", response_model=MonthDetail)
 async def get_month_detail(
-    year: int,
-    month: int,
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
+    month: int = Query(..., ge=MIN_MONTH, le=MAX_MONTH),
     state: str | None = Depends(get_effective_state),
     user_rto: str | None = Depends(scoped_rto),
     vehicle_class: str | None = None,
