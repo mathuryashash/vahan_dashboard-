@@ -328,3 +328,32 @@ async def test_single_flight_dedupes_concurrent_kpis_requests(client, db_session
     assert all(r.status_code == 200 for r in rs)
     assert len({r.text for r in rs}) == 1
     assert runs == [2026], f"expected one execution, got {len(runs)}"
+
+
+async def test_in_flight_result_is_not_cached_after_a_clear():
+    """P3: a leader that started before _clear_response_caches() (scrape
+    finished) used to write its pre-scrape result into the freshly cleared
+    cache, serving stale numbers for up to the TTL."""
+    cache = TTLCache(600)
+    gate = asyncio.Event()
+
+    @single_flight
+    async def endpoint(x):
+        await gate.wait()
+        cache.set(("k", x), "pre-scrape")
+        return "pre-scrape"
+
+    task = asyncio.create_task(endpoint(1))
+    await asyncio.sleep(0)
+    TTLCache.clear_all()  # scrape finishes while the request is in flight
+    gate.set()
+    assert await task == "pre-scrape", "caller still gets its answer"
+    assert cache.get(("k", 1)) is None, "stale pre-clear result must not repopulate the cache"
+
+    # A request that starts after the clear caches normally.
+    gate.set()
+    assert await endpoint(2) == "pre-scrape"
+    assert cache.get(("k", 2)) == "pre-scrape"
+    # Plain set outside any flight is unaffected.
+    cache.set("plain", 1)
+    assert cache.get("plain") == 1

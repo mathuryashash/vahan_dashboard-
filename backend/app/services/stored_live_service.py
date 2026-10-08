@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, MakerFuelTotal, Registration
 from app.services import data_freshness
 
@@ -176,8 +177,10 @@ async def distinct_makers(db: AsyncSession) -> list[str]:
     async with _maker_list_lock:
         if _maker_list and time.monotonic() - _maker_list[0] < _MAKER_LIST_TTL:
             return _maker_list[1]
+        gen = TTLCache.generation
         names = [r[0] for r in (await db.execute(_DISTINCT_MAKERS_SQL)).all()]
-        _maker_list = (time.monotonic(), names)
+        if gen == TTLCache.generation:  # not cleared mid-query (see TTLCache.generation)
+            _maker_list = (time.monotonic(), names)
         return names
 
 
@@ -221,8 +224,10 @@ async def allowed_makers(db: AsyncSession, *, category: str | None = None,
             q = q.where(MakerCategoryTotal.state_code == state_code)
         if rto_code:
             q = q.where(MakerCategoryTotal.rto_code == rto_code)
+        gen = TTLCache.generation
         names = frozenset(m for m in (await db.execute(q)).scalars().all() if m)
-        _allowed_makers_cache[key] = (time.monotonic(), names)
+        if gen == TTLCache.generation:
+            _allowed_makers_cache[key] = (time.monotonic(), names)
         return names
 
 

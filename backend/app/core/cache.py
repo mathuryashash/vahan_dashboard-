@@ -1,7 +1,14 @@
 import asyncio
+import contextvars
 import functools
 import inspect
 import time
+
+# Generation of the response caches as of when the current request's work
+# STARTED (set by single_flight). TTLCache.set refuses to store a value
+# computed before a clear_all() -- see TTLCache.generation.
+_started_generation: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "ttl_cache_started_generation", default=None)
 
 
 class TTLCache:
@@ -20,6 +27,11 @@ class TTLCache:
     # production), which would otherwise leak a cached response from one
     # test's seeded data into a later test that hits the same cache key.
     _all_instances: list = []
+    # Bumped by every clear_all() (i.e. after each successful scrape). A
+    # request that began computing BEFORE the clear would otherwise write its
+    # pre-scrape result into the freshly-cleared cache and serve it for up to
+    # the TTL; set() skips the write when the generation moved meanwhile.
+    generation: int = 0
 
     def __init__(self, ttl_seconds: float):
         self.ttl_seconds = ttl_seconds
@@ -36,6 +48,9 @@ class TTLCache:
         return value
 
     def set(self, key, value) -> None:
+        started = _started_generation.get()
+        if started is not None and started != TTLCache.generation:
+            return  # computed from pre-clear data: return it, never cache it
         now = time.monotonic()
         # Opportunistic sweep: without this, _store only ever grows -- an
         # expired entry whose key is never queried again (a one-off filter
@@ -51,6 +66,7 @@ class TTLCache:
 
     @classmethod
     def clear_all(cls) -> None:
+        cls.generation += 1
         for instance in cls._all_instances:
             instance._store.clear()
 
@@ -79,9 +95,20 @@ def single_flight(fn):
     The TTL caches only help once the first request has finished; a page that
     fires the same slow aggregate from several components at boot (or several
     users opening the dashboard at once after a cache expiry) used to run it N
-    times in parallel, each holding a pooled connection. With this, the first
-    caller (the leader) runs the query and every identical call that arrives
-    while it is in flight awaits the leader's result instead.
+    times in parallel. With this, the first caller (the leader) runs the query
+    and every identical call that arrives while it is in flight awaits the
+    leader's result instead.
+
+    It deduplicates QUERY WORK, not pool slots: by the time the endpoint body
+    runs, FastAPI has already resolved `get_db` for every caller, which checks
+    out a connection (and runs set_config, so it sits idle-in-transaction), so
+    each waiting follower still holds one pooled connection until the leader
+    finishes. Moving the dedupe above the dependency layer would be needed to
+    save connections.
+
+    The leader also records TTLCache.generation at start: if the caches are
+    cleared mid-flight (a scrape finished), its now-stale result is returned
+    to the waiting callers but NOT written into the cleared cache.
 
     The key is EVERY resolved argument except DB sessions / requests --
     including the resolved scope dependencies -- so it can never be wider
@@ -114,6 +141,7 @@ def single_flight(fn):
         # Mark exceptions as retrieved when nobody else was waiting.
         fut.add_done_callback(lambda f: f.cancelled() or f.exception())
         inflight[key] = fut
+        token = _started_generation.set(TTLCache.generation)
         try:
             result = await fn(*args, **kwargs)
         except asyncio.CancelledError:
@@ -126,6 +154,7 @@ def single_flight(fn):
             fut.set_result(result)
             return result
         finally:
+            _started_generation.reset(token)
             if inflight.get(key) is fut:
                 del inflight[key]
 

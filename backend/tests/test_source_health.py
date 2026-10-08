@@ -131,6 +131,22 @@ def test_a_healthy_first_check_is_silent_and_two_failures_alert(caplog):
     assert [r.levelno for r in caplog.records] == [logging.WARNING, logging.ERROR]
 
 
+def test_failure_log_states_the_real_next_check_delay(caplog):
+    """P3: once confirmed down, later failures logged "failure 3/2,
+    re-checking in 90s" while the loop actually slept DOWN_RECHECK_SECONDS."""
+    t0 = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    with caplog.at_level(logging.WARNING, logger="source_health"):
+        source_health._record("old_site", False, "HTTP 503", t0)
+        source_health._record("old_site", False, "HTTP 503", t0 + timedelta(seconds=90))
+        source_health._record("old_site", False, "HTTP 503", t0 + timedelta(seconds=390))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert f"re-checking in {source_health.RECHECK_SECONDS}s" in msgs[0]
+    assert f"Re-checking in {source_health.DOWN_RECHECK_SECONDS}s" in msgs[1]
+    assert "still down" in msgs[2] and f"re-checking in {source_health.DOWN_RECHECK_SECONDS}s" in msgs[2]
+    assert "3/2" not in msgs[2]
+    assert source_health.next_check_delay() == source_health.DOWN_RECHECK_SECONDS
+
+
 def test_recovery_clears_down_since():
     t0 = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
     source_health._record("old_site", False, "HTTP 503", t0)

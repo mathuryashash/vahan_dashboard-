@@ -7,14 +7,17 @@
 2. Maker-pass "PAGE_SIZE fingerprint": RTO-years where maker_category_totals
    knows exactly 25 more distinct makers than the registrations maker pass
    (one dropped 25-row page). Evidence: 34 RTOs in 2025 (CG/HR/JH/MZ).
+   LEFT JOIN from maker_category_totals, so an RTO-year that mct knows but
+   the maker pass has ZERO rows for is reported too (an inner JOIN silently
+   dropped exactly the worst case). Also reports missing_makers >= 25.
 
 Nothing here writes: the session is SET TRANSACTION READ ONLY and every
 statement is a SELECT. Prints one line per year.
 
 Usage (from backend/):
     python scripts/check_integrity.py [--from-year 2003] [--to-year 2026]
-Connection: DATABASE_URL from app settings (.env), driver swapped to psycopg
-via asyncpg as the app does.
+Connection: DATABASE_URL from app settings (.env), with the same asyncpg
+driver the app uses.
 """
 from __future__ import annotations
 
@@ -71,13 +74,17 @@ WITH reg AS (
 ), diff AS (
     -- distinct-maker count difference per RTO-year (mct minus maker pass);
     -- units = the volume the maker pass is short by.
-    SELECT x.rto_code, x.state_code, x.makers - r.makers AS missing_makers,
-           x.units - r.units AS missing_units
-    FROM x JOIN r USING (rto_code)
+    SELECT x.rto_code, x.state_code, x.makers - coalesce(r.makers, 0) AS missing_makers,
+           x.units - coalesce(r.units, 0) AS missing_units, r.rto_code IS NULL AS no_maker_pass
+    FROM x LEFT JOIN r USING (rto_code)
 )
 SELECT count(*) FILTER (WHERE missing_makers = 25) AS rto_years_missing_25,
        coalesce(sum(missing_units) FILTER (WHERE missing_makers = 25), 0) AS units,
-       coalesce(string_agg(DISTINCT state_code, ',') FILTER (WHERE missing_makers = 25), '') AS states
+       coalesce(string_agg(DISTINCT state_code, ',') FILTER (WHERE missing_makers = 25), '') AS states,
+       count(*) FILTER (WHERE missing_makers >= 25) AS rto_years_missing_ge25,
+       count(*) FILTER (WHERE no_maker_pass) AS rto_years_no_maker_pass,
+       coalesce(sum(missing_units) FILTER (WHERE no_maker_pass), 0) AS no_maker_pass_units,
+       coalesce(string_agg(DISTINCT state_code, ',') FILTER (WHERE no_maker_pass), '') AS no_maker_pass_states
 FROM diff
 """)
 
@@ -85,26 +92,34 @@ FROM diff
 async def main(from_year: int, to_year: int) -> None:
     engine = create_async_engine(settings.DATABASE_URL)
     t0 = time.perf_counter()
-    totals = {"short": 0, "missing": 0, "fp_rtos": 0, "fp_units": 0}
+    totals = {"short": 0, "missing": 0, "fp_rtos": 0, "fp_units": 0, "ge25": 0, "nomp": 0, "nomp_units": 0}
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SET TRANSACTION READ ONLY"))
             await conn.execute(text("SET LOCAL statement_timeout = '300s'"))
             print("year | classpass_short_rto_months / rto_months | classpass_missing_units "
-                  "| rto_years_missing_exactly_25_makers | their_units | states")
+                  "| rto_years_missing_exactly_25_makers | their_units | states "
+                  "| rto_years_missing_>=25 | rto_years_with_NO_maker_pass | their_units | states")
             for y in range(from_year, to_year + 1):
                 short, months, missing = (await conn.execute(CLASS_PASS_SQL, {"y": y})).one()
-                fp_rtos, fp_units, states = (await conn.execute(FINGERPRINT_SQL, {"y": y})).one()
+                (fp_rtos, fp_units, states, ge25, nomp, nomp_units,
+                 nomp_states) = (await conn.execute(FINGERPRINT_SQL, {"y": y})).one()
+                totals["ge25"] += ge25
+                totals["nomp"] += nomp
+                totals["nomp_units"] += int(nomp_units)
                 totals["short"] += short
                 totals["missing"] += int(missing)
                 totals["fp_rtos"] += fp_rtos
                 totals["fp_units"] += int(fp_units)
-                print(f"{y} | {short} / {months} | {int(missing)} | {fp_rtos} | {int(fp_units)} | {states}")
+                print(f"{y} | {short} / {months} | {int(missing)} | {fp_rtos} | {int(fp_units)} | {states} "
+                      f"| {ge25} | {nomp} | {int(nomp_units)} | {nomp_states}")
             await conn.rollback()
     finally:
         await engine.dispose()
     print(f"TOTAL classpass_short_rto_months={totals['short']} classpass_missing_units={totals['missing']} "
           f"rto_years_missing_25={totals['fp_rtos']} their_units={totals['fp_units']} "
+          f"rto_years_missing_ge25={totals['ge25']} rto_years_no_maker_pass={totals['nomp']} "
+          f"their_units={totals['nomp_units']} "
           f"({time.perf_counter() - t0:.1f}s, read-only)")
 
 

@@ -65,15 +65,6 @@ def _record(name: str, ok: bool, detail: str, now: datetime) -> None:
     # Only real transitions. A healthy first check after boot is not a
     # "recovery" -- logging it as one on every restart teaches people to
     # skim past these lines, which is the opposite of an alert.
-    if confirmed_down and not was_down:
-        # ERROR, so anything watching the logs (docker, a log shipper) sees it.
-        logger.error("SOURCE DOWN: %s -- %s (%d consecutive failures). Scrapes that depend on it will fail.",
-                     name, detail, failures)
-    elif not ok:
-        logger.warning("source probe failed: %s -- %s (failure %d/%d, re-checking in %ds)",
-                       name, detail, failures, FAILURES_BEFORE_DOWN, RECHECK_SECONDS)
-    elif was_down:
-        logger.warning("SOURCE RECOVERED: %s -- %s", name, detail)
     _status[name] = {
         # ok stays True through a single unconfirmed failure -- that is the point.
         "ok": not confirmed_down,
@@ -83,6 +74,22 @@ def _record(name: str, ok: bool, detail: str, now: datetime) -> None:
         "consecutive_failures": failures,
         "first_failure_at": first_failure_at,
     }
+    # Logged AFTER _status is updated so the delay quoted is the one the loop
+    # will actually sleep (next_check_delay over every source): it used to
+    # say "failure 3/2, re-checking in 90s" while the next probe was 300s away.
+    delay = next_check_delay()
+    if confirmed_down and not was_down:
+        # ERROR, so anything watching the logs (docker, a log shipper) sees it.
+        logger.error("SOURCE DOWN: %s -- %s (%d consecutive failures). Scrapes that depend on it will fail. "
+                     "Re-checking in %ds.", name, detail, failures, delay)
+    elif confirmed_down:
+        logger.warning("source still down: %s -- %s (%d consecutive failures, re-checking in %ds)",
+                       name, detail, failures, delay)
+    elif not ok:
+        logger.warning("source probe failed: %s -- %s (failure %d/%d, re-checking in %ds)",
+                       name, detail, failures, FAILURES_BEFORE_DOWN, delay)
+    elif was_down:
+        logger.warning("SOURCE RECOVERED: %s -- %s", name, detail)
 
 
 def next_check_delay() -> int:
