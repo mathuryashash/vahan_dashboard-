@@ -33,14 +33,17 @@ class RegistrationSummary(BaseModel):
 class DashboardKPIs(BaseModel):
     total_registrations_today: int
     total_this_month: int
-    yoy_growth_percent: float
+    # None = not comparable (no prior-year data, no complete month yet, or the
+    # requested month is the partial month) -- never a fake 0.0.
+    yoy_growth_percent: float | None
     top_state: str
     top_state_count: int
     last_updated: str | None
     # yoy_growth_percent compares Jan..yoy_compare_through_month of both years:
     # the last COMPLETE scraped month (from the data), or the requested month.
     # None/0 = no complete month yet. partial_month = the newest stored month
-    # of `year` if it was still in progress when scraped (excluded from YoY).
+    # of `year` if it was still in progress when scraped (excluded from YoY);
+    # populated whether or not a month was requested.
     yoy_compare_through_month: int | None = None
     partial_month: int | None = None
 

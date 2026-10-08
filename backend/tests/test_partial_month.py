@@ -54,13 +54,80 @@ async def test_kpis_complete_month_is_compared_when_scraped_after_month_end(clie
     assert body["yoy_growth_percent"] == 10.0  # 9900 vs 9000
 
 
-async def test_kpis_explicit_month_is_unchanged(client, db_session):
+async def test_kpis_explicit_partial_month_has_no_yoy(client, db_session):
+    """N3: kpis?year=2026&month=9 compared 19 days of September against a full
+    one (-60% here, -21.95% on prod) and reported partial_month=null."""
     await _seed_partial_september(db_session)
     body = (await client.get("/api/v1/summary/kpis", params={"year": 2026, "month": 9})).json()
-    # An explicitly requested month is compared as asked (UI labels it).
     assert body["total_this_month"] == 400
-    assert body["yoy_growth_percent"] == -60.0
-    assert body["partial_month"] is None
+    assert body["yoy_growth_percent"] is None, "partial month must not produce a YoY (-60.0 = regression)"
+    assert body["partial_month"] == 9
+    assert body["yoy_compare_through_month"] is None
+
+
+async def test_kpis_explicit_complete_month_is_compared(client, db_session):
+    await _seed_partial_september(db_session)
+    body = (await client.get("/api/v1/summary/kpis", params={"year": 2026, "month": 8})).json()
+    assert body["total_this_month"] == 1100
+    assert body["yoy_growth_percent"] == 10.0
+    assert body["partial_month"] == 9 and body["yoy_compare_through_month"] == 8
+
+
+async def test_kpis_yoy_is_null_without_prior_year_data(client, db_session):
+    await _seed(db_session, [(2026, m, 1100, FROZE) for m in range(1, 10)])
+    body = (await client.get("/api/v1/summary/kpis", params={"year": 2026})).json()
+    assert body["total_this_month"] == 9900
+    assert body["yoy_growth_percent"] is None, "no prior data is unknown, not 0.0 (flat)"
+
+
+async def _seed_class_pass(db):
+    """Class-pass rows (the ones /categories/ reads), partial September."""
+    await db.merge(State(state_code="DL", state_name="Delhi"))
+    await db.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
+    def row(year, month, count, cls, cat, rec):
+        return Registration(
+            state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Test RTO", month=month, year=year,
+            count=count, vehicle_class=cls, vehicle_category=cat, maker=None, is_supplementary=True,
+            recorded_at=rec,
+        )
+    for m in range(1, 13):
+        db.add(row(2025, m, 1000, "M-Cycle/Scooter", "Two-Wheeler", FULL))
+        db.add(row(2025, m, 500, "Motor Car", "Four-Wheeler", FULL))
+    for m in range(1, 9):
+        db.add(row(2026, m, 1200, "M-Cycle/Scooter", "Two-Wheeler", FROZE))
+        db.add(row(2026, m, 500, "Motor Car", "Four-Wheeler", FROZE))
+    db.add(row(2026, 9, 400, "M-Cycle/Scooter", "Two-Wheeler", FROZE))
+    db.add(row(2026, 9, 150, "Motor Car", "Four-Wheeler", FROZE))
+    # Canonical maker-pass rows: what get_freshness / latest_month read.
+    for m in range(1, 10):
+        db.add(Registration(
+            state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Test RTO", month=m, year=2026,
+            count=1, vehicle_class="All", maker="HONDA", is_supplementary=False, recorded_at=FROZE,
+        ))
+    await db.commit()
+
+
+async def test_categories_yoy_cuts_at_last_complete_month(client, db_session):
+    """N2: /categories/ still compared Jan-Sep (partial Sep) against a full
+    Jan-Sep -- 2W 2026 read +16.74% on prod vs the like-for-like +20.69%."""
+    await _seed_class_pass(db_session)
+    body = (await client.get("/api/v1/categories/", params={"year": 2026})).json()
+    by = {r["vehicle_category"]: r for r in body}
+    tw, fw = by["Two-Wheeler"], by["Four-Wheeler"]
+    # Headline still covers every stored month (Jan-Sep).
+    assert tw["total_count"] == 8 * 1200 + 400 == 10000
+    # YoY Jan-Aug: 9600 vs 8000 = +20.0%. Old cut at Sep: 10000 vs 9000 = +11.11%.
+    assert tw["yoy_growth"] == 20.0, "11.11 means the partial September was compared"
+    assert tw["prev_count"] == 8000
+    assert fw["yoy_growth"] == 0.0  # 4000 vs 4000: genuinely flat
+    assert tw["yoy_compare_through_month"] == 8 and tw["partial_month"] == 9
+
+
+async def test_categories_explicit_partial_month_has_no_yoy(client, db_session):
+    await _seed_class_pass(db_session)
+    body = (await client.get("/api/v1/categories/", params={"year": 2026, "month": 9})).json()
+    tw = next(r for r in body if r["vehicle_category"] == "Two-Wheeler")
+    assert tw["total_count"] == 400 and tw["yoy_growth"] is None
 
 
 async def test_kpis_past_year_compares_full_year(client, db_session):

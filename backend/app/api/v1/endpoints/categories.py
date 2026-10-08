@@ -14,6 +14,7 @@ from app.core.scope import (
 )
 from app.core.cache import TTLCache, single_flight
 from app.core.maker_names import note_for
+from app.services.data_freshness import get_freshness
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
 from app.core.validation import MAX_MONTH, MAX_YEAR, MIN_MONTH, MIN_YEAR
@@ -208,30 +209,37 @@ async def get_categories(
     # SUM for 2025 (19,520,849) and 2026 (22,677,982). One year per query on
     # purpose: with year IN (a, b) the planner falls back to a seq scan.
     not_all = or_(Registration.vehicle_class < "All", Registration.vehicle_class > "All")
-    q_curr = (
-        select(group_col, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year, not_all)
-    )
-    q_prev = (
-        select(group_col, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year - 1, not_all)
-    )
 
-    # When no specific month is requested, compare year-to-date rather than
-    # full calendar year vs full calendar year (see summary.py get_dashboard_kpis
-    # for the same fix and full rationale): cap both years at the latest month
-    # that actually has data for `year`, so a partially-populated current year
-    # isn't compared against a fully-populated prior year.
-    compare_month = month
-    if compare_month is None:
-        compare_month = await latest_month_with_data(db, year)
+    # YoY must compare like with like -- the same cut /summary/kpis and
+    # /yoy use. Cutting at the newest stored month compared a PARTIAL month
+    # (data froze 2026-09-19) against a full one: 2W 2026 read +16.74% where
+    # the like-for-like Jan-Aug figure is +20.69%. total_count/share keep
+    # covering every stored month (the headline, as kpis does); only the
+    # comparison is cut at the last COMPLETE scraped month. An explicit
+    # month that is itself the partial month gets yoy_growth=None.
+    freshness = await get_freshness(db)
+    partial = freshness.partial_month(year)
+    if month:
+        compare_through = None if month == partial else month
+    else:
+        compare_through = freshness.complete_through(year, await latest_month_with_data(db, year))
 
+    if month:
+        cur_total = func.sum(Registration.count)
+        cur_cmp = cur_total
+        prev_cmp = func.sum(Registration.count)
+    else:
+        cur_total = func.sum(Registration.count)
+        cur_cmp = func.sum(Registration.count).filter(Registration.month <= (compare_through or 0))
+        prev_cmp = cur_cmp
+    q_curr = select(group_col, cur_total.label("total"), cur_cmp.label("cmp")).where(Registration.year == year, not_all)
+    q_prev = select(group_col, prev_cmp.label("total")).where(Registration.year == year - 1, not_all)
     if month:
         q_curr = q_curr.where(Registration.month == month)
         q_prev = q_prev.where(Registration.month == month)
-    elif compare_month:
-        q_curr = q_curr.where(Registration.month <= compare_month)
-        q_prev = q_prev.where(Registration.month <= compare_month)
+    else:
+        # Literal bound: prev_year only needs the comparison window.
+        q_prev = q_prev.where(Registration.month <= (compare_through or 0))
     q_curr = apply_common_filters(q_curr, state=state, rto_code=user_rto, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
     q_prev = apply_common_filters(q_prev, state=state, rto_code=user_rto, maker=maker, vehicle_model=vehicle_model, vehicle_category=user_category)
 
@@ -243,7 +251,14 @@ async def get_categories(
     total = sum(r[1] for r in rows)
 
     prev_result = await db.execute(q_prev)
-    prev_rows = {r[0]: r[1] for r in prev_result.all()}
+    prev_rows = {r[0]: (r[1] or 0) for r in prev_result.all()}
+
+    def _yoy(cur_cmp_val, prev_val):
+        # None, not 0.0, when there is nothing comparable: "unknown" must not
+        # read as "flat".
+        if not compare_through or not prev_val:
+            return None
+        return round(((cur_cmp_val or 0) - prev_val) / prev_val * 100, 2)
 
     key_name = "vehicle_class" if raw else "vehicle_category"
     response = [
@@ -251,12 +266,11 @@ async def get_categories(
             key_name: r[0],
             "total_count": r[1],
             "share_percent": round((r[1] / total * 100) if total > 0 else 0, 2),
+            # prev_count covers the same months as the comparison window.
             "prev_count": prev_rows.get(r[0], 0),
-            "yoy_growth": round(
-                ((r[1] - prev_rows.get(r[0], 0)) / prev_rows.get(r[0], 1) * 100), 2
-            )
-            if prev_rows.get(r[0], 0) > 0
-            else 0.0,
+            "yoy_growth": _yoy(r[2], prev_rows.get(r[0], 0)),
+            "yoy_compare_through_month": compare_through,
+            "partial_month": partial,
         }
         for r in rows
     ]

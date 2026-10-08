@@ -121,7 +121,13 @@ async def get_dashboard_kpis(
     # a fake decline. Cut at the last COMPLETE scraped month instead, derived
     # from the data (when the newest month was scraped), not today's date.
     freshness = await get_freshness(db)
-    compare_through = month if month else freshness.complete_through(current_year, max_month)
+    partial = freshness.partial_month(current_year)
+    if month:
+        # An explicitly requested month that is itself the partial month is
+        # not comparable either (kpis?year=2026&month=9 read -21.95%).
+        compare_through = None if month == partial else month
+    else:
+        compare_through = freshness.complete_through(current_year, max_month)
     cutoff = month if month else max_month
 
     cur, prev = Registration.year == current_year, Registration.year == prev_year
@@ -157,8 +163,9 @@ async def get_dashboard_kpis(
     cur_compare = cur_compare or 0
     prev_compare = prev_compare or 0
 
-    # Calculate YoY Growth (0.0 when there is no complete month to compare)
-    yoy_growth = 0.0
+    # YoY Growth: None (not 0.0) when there is no complete month to compare
+    # or no prior-year data -- "unknown" must not render as "flat".
+    yoy_growth = None
     if prev_compare > 0 and compare_through:
         yoy_growth = round(((cur_compare - prev_compare) / prev_compare) * 100, 2)
 
@@ -207,7 +214,7 @@ async def get_dashboard_kpis(
         top_state_count=top_state_count,
         last_updated=last_updated,
         yoy_compare_through_month=compare_through,
-        partial_month=None if month else freshness.partial_month(current_year),
+        partial_month=partial,
     )
     _kpis_cache.set(cache_key, kpis)
     return kpis
