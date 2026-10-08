@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.scope import get_effective_category, get_effective_state, scoped_rto
 from app.models.models import Registration, User
 from app.core.validation import MAX_YEAR, MIN_YEAR
+from app.services.data_freshness import get_freshness
 
 router = APIRouter()
 
@@ -56,6 +57,13 @@ async def get_yoy_monthly(
     rows_a = {r[0]: r[1] for r in result_a.all()}
     rows_b = {r[0]: r[1] for r in result_b.all()}
 
+    # The stored-but-incomplete newest month (from the data, not today's
+    # date). Its growth is withheld: a month scraped part-way through always
+    # reads as a fake decline against a full prior-year month.
+    freshness = await get_freshness(db)
+    partial_b = freshness.partial_month(year_b)
+    partial_a = freshness.partial_month(year_a)
+
     months = sorted(set(rows_a.keys()) | set(rows_b.keys()))
     data = []
     for m in months:
@@ -66,17 +74,26 @@ async def get_yoy_monthly(
         # occurred, rather than omitting them like the frontend expects.
         b_row = rows_b.get(m)
         b = b_row or 0
-        growth = round(((b - a) / a * 100), 2) if (a > 0 and b_row is not None) else None
+        is_partial = m in (partial_a, partial_b)
+        growth = round(((b - a) / a * 100), 2) if (a > 0 and b_row is not None and not is_partial) else None
         data.append(
             {
                 "month": m,
                 f"year_{year_a}": a,
                 f"year_{year_b}": b,
                 "growth_percent": growth,
+                "is_partial": is_partial,
             }
         )
 
-    return {"year_a": year_a, "year_b": year_b, "state": state, "data": data}
+    return {
+        "year_a": year_a, "year_b": year_b, "state": state, "data": data,
+        "partial_month": partial_b or partial_a,
+        "partial_month_year": (year_b if partial_b else year_a) if (partial_b or partial_a) else None,
+        # When the partial month was scraped (lets the UI say "data through
+        # 19 Sep" instead of guessing progress from today's date).
+        "data_scraped_at": freshness.last_scrape_at.isoformat() if freshness.last_scrape_at else None,
+    }
 
 
 @router.get("/summary")
@@ -101,8 +118,14 @@ async def get_yoy_summary(
     # Apr-Jul) compares that exact window across both years instead --
     # "same timeline, different years", generalizing the YTD-only comparison
     # this endpoint used to be limited to.
-    max_month_a = await latest_month_with_data(db, year_a)
-    max_month_b = await latest_month_with_data(db, year_b)
+    # Cut each year at its last COMPLETE scraped month, derived from the
+    # data: the newest month of the newest scraped year is excluded when it
+    # was still in progress at scrape time (data froze 2026-09-19, so Sep 2026
+    # is partial even in October). Older years are complete through their
+    # newest month. Today's date plays no part.
+    freshness = await get_freshness(db)
+    max_month_a = freshness.complete_through(year_a, await latest_month_with_data(db, year_a))
+    max_month_b = freshness.complete_through(year_b, await latest_month_with_data(db, year_b))
     candidates = [m for m in (max_month_a, max_month_b) if m is not None]
     # Cap at whichever year has less data so far within the requested range:
     # comparing a full Apr-Jul against a partial Apr-Jun (year still in
@@ -122,7 +145,8 @@ async def get_yoy_summary(
 
     total_a = result_a.scalar() or 0
     total_b = result_b.scalar() or 0
-    growth = round(((total_b - total_a) / total_a * 100), 2) if total_a > 0 else 0.0
+    growth = round(((total_b - total_a) / total_a * 100), 2) if (total_a > 0 and effective_end >= start_month) else 0.0
+    partial = freshness.partial_month(year_b) or freshness.partial_month(year_a)
 
     return {
         f"total_{year_a}": total_a,
@@ -130,4 +154,12 @@ async def get_yoy_summary(
         "compare_through_month": effective_end,
         "start_month": start_month,
         "growth_percent": growth,
+        # The stored-but-incomplete month (excluded above), so the YoY page's
+        # partial-month notice can come from the data instead of today's date.
+        "partial_month": partial,
+        "partial_month_year": (year_b if freshness.partial_month(year_b) else year_a) if partial else None,
+        "last_complete_month": (
+            f"{freshness.last_complete_month()[0]}-{freshness.last_complete_month()[1]:02d}"
+            if freshness.last_complete_month() else None
+        ),
     }

@@ -37,6 +37,12 @@ class DashboardKPIs(BaseModel):
     top_state: str
     top_state_count: int
     last_updated: str | None
+    # yoy_growth_percent compares Jan..yoy_compare_through_month of both years:
+    # the last COMPLETE scraped month (from the data), or the requested month.
+    # None/0 = no complete month yet. partial_month = the newest stored month
+    # of `year` if it was still in progress when scraped (excluded from YoY).
+    yoy_compare_through_month: int | None = None
+    partial_month: int | None = None
 
 
 class StateComparisonItem(BaseModel):
@@ -139,10 +145,19 @@ class RtoAnalysis(BaseModel):
     rto_name: str | None
     state_name: str | None
     year: int
+    # Same FY window as avg_monthly (both from the registrations FY query).
     total: int
     avg_monthly: float
     months_with_data: int
     makers: list[RtoMakerShare]
+    # Sum of the maker rows = the share_percent basis. Equals `total` for
+    # unscoped accounts; for category accounts it covers maker_period's
+    # wider two-calendar-year window.
+    maker_window_total: int | None = None
+    # Newest month scraped anywhere ("YYYY-MM"), and how many of this FY's
+    # 12 months are at or before it -- months after it are unscraped, not 0.
+    last_scraped_month: str | None = None
+    fy_months_scraped: int | None = None
     # Which window the maker figures actually cover. A category-scoped account
     # is served from MakerCategoryTotal, which is scraped per CALENDAR year and
     # has no month column, so its numbers can't be cut to an Apr-Mar financial

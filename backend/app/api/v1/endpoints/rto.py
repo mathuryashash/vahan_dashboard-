@@ -8,6 +8,7 @@ from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, Registration
 from app.schemas.schemas import RtoAnalysis, RtoListItem
 from app.core.validation import MAX_YEAR, MIN_YEAR
+from app.services.data_freshness import get_freshness
 
 router = APIRouter()
 
@@ -186,7 +187,10 @@ async def get_rto_analysis(
 
     maker_result = await db.execute(maker_query)
     makers = maker_result.all()
-    total = sum(m.count for m in makers)
+    # Share basis: the maker rows themselves (for scoped accounts, the
+    # crosstab's two-calendar-year window -- see above). Shares stay correct
+    # on that basis; only the absolute figure needed fixing.
+    maker_window_total = sum(m.count for m in makers)
 
     overview_result = await db.execute(overview_query)
     overview_row = overview_result.one()
@@ -202,6 +206,27 @@ async def get_rto_analysis(
     # arithmetically identical -- same RTO, same FY, same exclude_supplementary,
     # and the maker groups cover every row -- so no number moves there.
     avg_monthly = round((overview_row.total or 0) / months_with_data, 1) if months_with_data else 0
+    # The card total uses the SAME FY window as avg_monthly. It used to be
+    # the maker-window sum, which for a category account spans two calendar
+    # years: UP32 / Four-Wheeler FY2025 read total 115,220 next to an
+    # avg_monthly of 66,518/12 = 5,543 -- two numbers on one card covering
+    # different periods. For an unscoped account the two sums are identical.
+    total = int(overview_row.total or 0)
+
+    # Newest month scraped anywhere (from the data). The FY's months after it
+    # have not been scraped yet -- they are not zero-registration months.
+    freshness = await get_freshness(db)
+    last_scraped = (freshness.latest_year, freshness.latest_month) if freshness.latest_year else None
+    if last_scraped:
+        fy_start, fy_end = (year, 4), (year + 1, 3)
+        if last_scraped < fy_start:
+            fy_months_scraped = 0
+        elif last_scraped >= fy_end:
+            fy_months_scraped = 12
+        else:
+            fy_months_scraped = (last_scraped[0] - year) * 12 + last_scraped[1] - 4 + 1
+    else:
+        fy_months_scraped = None
 
     name_result = await db.execute(base.limit(1))
     sample = name_result.scalars().first()
@@ -214,6 +239,9 @@ async def get_rto_analysis(
         "total": total,
         "avg_monthly": avg_monthly,
         "months_with_data": months_with_data,
+        "maker_window_total": maker_window_total,
+        "last_scraped_month": f"{last_scraped[0]}-{last_scraped[1]:02d}" if last_scraped else None,
+        "fy_months_scraped": fy_months_scraped,
         # Say which window these maker numbers actually cover instead of
         # letting both paths render under the same "FY" label -- see the
         # MakerCategoryTotal branch above and RtoAnalysis.maker_period.
@@ -222,7 +250,7 @@ async def get_rto_analysis(
             {
                 "maker": m.maker,
                 "count": m.count,
-                "share_percent": round(m.count / total * 100, 2) if total else 0,
+                "share_percent": round(m.count / maker_window_total * 100, 2) if maker_window_total else 0,
             }
             for m in makers
         ],

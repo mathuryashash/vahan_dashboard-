@@ -41,25 +41,30 @@ async def makers_with_coverage_gaps(
     if not makers or rto_code:
         return set()
 
-    def coverage(*group_by):
-        q = select(*group_by, func.count(func.distinct(model.rto_code))).where(
-            model.maker.in_(makers), model.year > year - _COVERAGE_YEARS,
-        )
-        if state:
-            q = q.where(model.state_name == state)
-        return q.group_by(*group_by)
+    # One query: distinct (maker, year, rto) first, then count per
+    # (maker, year). count(DISTINCT rto_code) GROUP BY maker, year forced a
+    # sort of every matching row that spilled to disk at work_mem=4MB
+    # ("external merge Disk: 14440kB", 3.97s on prod); the inner DISTINCT is
+    # a HashAggregate and the outer count runs over the already-distinct set
+    # (284ms). Identical result on prod (md5 of the full maker/year/count
+    # list matched). This year's coverage is read from the same rows instead
+    # of a second query.
+    inner = select(model.maker, model.year, model.rto_code).where(
+        model.maker.in_(makers), model.year > year - _COVERAGE_YEARS,
+    )
+    if state:
+        inner = inner.where(model.state_name == state)
+    inner = inner.distinct().subquery()
+    q = select(inner.c.maker, inner.c.year, func.count()).group_by(inner.c.maker, inner.c.year)
 
     # Best recent year per maker, and what this year actually has.
     best: dict[str, int] = {}
-    for maker, _yr, rtos in (await db.execute(coverage(model.maker, model.year))).all():
+    this_year: dict[str, int] = {}
+    for maker, yr, rtos in (await db.execute(q)).all():
         if rtos > best.get(maker, 0):
             best[maker] = rtos
-    this_year = {
-        maker: rtos
-        for maker, rtos in (await db.execute(
-            coverage(model.maker).where(model.year == year)
-        )).all()
-    }
+        if yr == year:
+            this_year[maker] = rtos
     return {
         maker for maker, peak in best.items()
         if peak and this_year.get(maker, 0) < peak * _COVERAGE_GAP_THRESHOLD

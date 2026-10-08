@@ -2,15 +2,16 @@ import time
 from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, text
 from app.core.auth import get_current_user
 from app.core.database import get_db
-from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, exclude_supplementary, latest_month_with_data
+from app.core.query_filters import apply_fuel_group_filter, apply_total_filters, latest_month_with_data
 from app.core.scope import get_effective_category, get_effective_state, scoped_rto
-from app.core.cache import TTLCache
+from app.core.cache import TTLCache, single_flight
 from app.models.models import Registration, User
 from app.schemas.schemas import DashboardKPIs, MonthCount, MonthDetail, StateRankingItem
 from app.core.config import settings
+from app.services.data_freshness import get_freshness
 from app.core.validation import MAX_MONTH, MAX_YEAR, MIN_MONTH, MIN_YEAR
 
 router = APIRouter()
@@ -28,9 +29,21 @@ _DEFAULT_YEAR = datetime.now().year
 # an index Postgres won't use for this query shape anyway.
 _available_years_cache: dict = {"years": None, "at": 0.0}
 _AVAILABLE_YEARS_CACHE_TTL_SECONDS = 300
+_AVAILABLE_YEARS_SQL = text("""
+    WITH RECURSIVE y AS (
+        (SELECT year FROM registrations WHERE is_supplementary IS NOT TRUE ORDER BY year DESC LIMIT 1)
+        UNION ALL
+        SELECT (SELECT r.year FROM registrations r
+                WHERE r.is_supplementary IS NOT TRUE AND r.year < y.year
+                ORDER BY r.year DESC LIMIT 1)
+        FROM y WHERE y.year IS NOT NULL
+    )
+    SELECT year FROM y WHERE year IS NOT NULL ORDER BY year DESC
+""")
 
 
 @router.get("/available-years", response_model=list[int])
+@single_flight
 async def get_available_years(
     db: AsyncSession = Depends(get_db),
     # Every sibling route in this file requires a user; this one was missing
@@ -50,9 +63,11 @@ async def get_available_years(
     if _available_years_cache["years"] is not None and now - _available_years_cache["at"] < _AVAILABLE_YEARS_CACHE_TTL_SECONDS:
         return _available_years_cache["years"]
 
-    result = await db.execute(
-        exclude_supplementary(select(Registration.year).distinct()).order_by(Registration.year.desc())
-    )
+    # Recursive "loose index scan": one index probe per distinct year on the
+    # partial index idx_reg_year_supp_state_count (WHERE is_supplementary IS
+    # NOT TRUE) instead of DISTINCT over ~10M rows. 20ms vs 245ms on prod,
+    # identical year list (verified with SELECT on the prod DB).
+    result = await db.execute(_AVAILABLE_YEARS_SQL)
     years = [row[0] for row in result.all()]
     _available_years_cache["years"] = years
     _available_years_cache["at"] = now
@@ -75,6 +90,7 @@ _kpis_cache = TTLCache(_KPIS_CACHE_TTL_SECONDS)
 
 
 @router.get("/kpis", response_model=DashboardKPIs)
+@single_flight
 async def get_dashboard_kpis(
     year: int | None = Query(None, ge=MIN_YEAR, le=MAX_YEAR),
     month: int | None = Query(None, ge=MIN_MONTH, le=MAX_MONTH),
@@ -96,24 +112,36 @@ async def get_dashboard_kpis(
     current_year = year or _DEFAULT_YEAR
     prev_year = current_year - 1
 
-    # When no specific month is requested, compare year-to-date rather than
-    # full calendar year vs full calendar year: if current_year only has data
-    # through June (e.g. it's the in-progress year), comparing 6 months of
-    # current_year against 12 months of prev_year produces a nonsensical,
-    # deeply negative "growth" number. Cap both periods at the latest month
-    # that actually has data for current_year -- computed as a scalar
-    # subquery (evaluated server-side) rather than a separate awaited round
-    # trip, since this endpoint's latency is dominated by round-trip count,
-    # not query cost (each of these is a fast indexed lookup on its own).
-    max_month_subq = (
-        select(func.max(Registration.month)).where(Registration.year == current_year).scalar_subquery()
-    )
-    month_filter = (Registration.month == month) if month else (Registration.month <= max_month_subq)
+    # Newest month with any data for current_year (one indexed lookup, ~3ms).
+    # The headline total covers Jan..max_month, as before.
+    max_month = await latest_month_with_data(db, current_year)
+    # YoY must compare like with like. Cutting at max_month compared a
+    # PARTIAL month against a full one: the data froze mid-September, so
+    # "Jan-Sep 2026 vs Jan-Sep 2025" was really Jan-19 Sep vs Jan-30 Sep --
+    # a fake decline. Cut at the last COMPLETE scraped month instead, derived
+    # from the data (when the newest month was scraped), not today's date.
+    freshness = await get_freshness(db)
+    compare_through = month if month else freshness.complete_through(current_year, max_month)
+    cutoff = month if month else max_month
 
-    # Current + previous period totals in one grouped query instead of two --
-    # both use the same cutoff month, so there's nothing year-specific about
-    # the filter that needs two separate round trips.
-    q_totals = select(Registration.year, func.sum(Registration.count).label("total")).where(
+    cur, prev = Registration.year == current_year, Registration.year == prev_year
+    if month:
+        month_filter = Registration.month == month
+        this_expr = func.sum(Registration.count).filter(cur)
+        cur_cmp_expr = this_expr
+        prev_cmp_expr = func.sum(Registration.count).filter(prev)
+    else:
+        # A literal bound (not the old max(month) scalar subquery) so the
+        # planner can use idx_reg_year_month_supp_count directly. Rows above
+        # max_month cannot exist for current_year, and prev_year only needs
+        # months <= compare_through <= max_month, so the sums are unchanged.
+        month_filter = Registration.month <= (cutoff or 0)
+        this_expr = func.sum(Registration.count).filter(cur)
+        cur_cmp_expr = func.sum(Registration.count).filter(cur, Registration.month <= (compare_through or 0))
+        prev_cmp_expr = func.sum(Registration.count).filter(prev, Registration.month <= (compare_through or 0))
+
+    # Headline total + both comparison totals in one round trip.
+    q_totals = select(this_expr, cur_cmp_expr, prev_cmp_expr).where(
         Registration.year.in_([current_year, prev_year]), month_filter
     )
     q_totals = apply_fuel_group_filter(
@@ -122,25 +150,27 @@ async def get_dashboard_kpis(
             commercial_tier=commercial_tier, fuel_group=fuel_group, maker=maker, vehicle_model=vehicle_model,
         ),
         fuel_group,
-    ).group_by(Registration.year)
-
-    result_totals = await db.execute(q_totals)
-    totals_by_year = dict(result_totals.all())
-    total_this_period = totals_by_year.get(current_year) or 0
-    total_prev_period = totals_by_year.get(prev_year) or 0
-
-    # Calculate YoY Growth
-    yoy_growth = 0.0
-    if total_prev_period > 0:
-        yoy_growth = round(
-            ((total_this_period - total_prev_period) / total_prev_period) * 100, 2
-        )
-
-    # Top State Query
-    q_top_state = (
-        select(Registration.state_name, func.sum(Registration.count).label("total"))
-        .where(Registration.year == current_year, month_filter)
     )
+
+    total_this_period, cur_compare, prev_compare = (await db.execute(q_totals)).one()
+    total_this_period = total_this_period or 0
+    cur_compare = cur_compare or 0
+    prev_compare = prev_compare or 0
+
+    # Calculate YoY Growth (0.0 when there is no complete month to compare)
+    yoy_growth = 0.0
+    if prev_compare > 0 and compare_through:
+        yoy_growth = round(((cur_compare - prev_compare) / prev_compare) * 100, 2)
+
+    # Top State Query. No month predicate unless a month was asked for: the
+    # old `month <= max(month) of current_year` was a tautology on
+    # current_year rows that cost a 1.5s BitmapAnd (identical top state and
+    # count verified on prod: Uttar Pradesh 3,006,936 for 2026).
+    q_top_state = select(Registration.state_name, func.sum(Registration.count).label("total")).where(
+        Registration.year == current_year
+    )
+    if month:
+        q_top_state = q_top_state.where(Registration.month == month)
     q_top_state = apply_fuel_group_filter(
         apply_total_filters(
             q_top_state, state=state, rto_code=user_rto, vehicle_class=vehicle_class, vehicle_category=vehicle_category,
@@ -164,10 +194,10 @@ async def get_dashboard_kpis(
     # ~39,447. The card then appeared to fall away steadily through the year,
     # entirely as an artifact of the month number. One month selected means
     # one month of days.
-    period_months = 1 if month else (await latest_month_with_data(db, current_year) or 1)
+    period_months = 1 if month else (max_month or 1)
     total_today = int(total_this_period / (period_months * 30)) if total_this_period > 0 else 0
 
-    last_updated = settings.LAST_UPDATED
+    last_updated = settings.LAST_UPDATED or freshness.last_updated_str
 
     kpis = DashboardKPIs(
         total_registrations_today=total_today,
@@ -176,6 +206,8 @@ async def get_dashboard_kpis(
         top_state=top_state,
         top_state_count=top_state_count,
         last_updated=last_updated,
+        yoy_compare_through_month=compare_through,
+        partial_month=None if month else freshness.partial_month(current_year),
     )
     _kpis_cache.set(cache_key, kpis)
     return kpis

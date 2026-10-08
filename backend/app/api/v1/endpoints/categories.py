@@ -1,7 +1,8 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, or_
+from sqlalchemy.orm import aliased
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.query_filters import (
@@ -11,7 +12,7 @@ from app.core.query_filters import (
 from app.core.scope import (
     get_effective_category, get_effective_state, scoped_category, scoped_rto, scoped_state,
 )
-from app.core.cache import TTLCache
+from app.core.cache import TTLCache, single_flight
 from app.core.maker_names import note_for
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal, Registration, User
 from app.schemas.schemas import CrosstabCoverage, CrosstabDetail
@@ -62,7 +63,35 @@ _maker_fuel_breakdown_cache = TTLCache(_CACHE_TTL_SECONDS)
 _crosstab_detail_cache = TTLCache(_CACHE_TTL_SECONDS)
 
 
+async def loose_distinct_years(db: AsyncSession, model, conds: list) -> list[int]:
+    """DISTINCT year (newest first) under `conds`, as a recursive "loose
+    index scan": one `ORDER BY year DESC LIMIT 1` probe per distinct year
+    instead of reading every matching row. Same rows, same scope predicates
+    as the old SELECT DISTINCT -- only the access path changes. Measured on
+    prod for maker_category_totals: UP32 9ms vs 21ms; Uttar Pradesh +
+    Four-Wheeler 244ms vs 853ms; unscoped is the biggest win (the DISTINCT
+    read the whole table). ~20 years -> ~20 probes."""
+    year = model.year
+    seed = select(year.label("year")).where(*conds).order_by(year.desc()).limit(1).cte("y", recursive=True)
+    inner = aliased(model)
+    inner_conds = [_rebind(c, model, inner) for c in conds]
+    nxt = (
+        select(inner.year).where(*inner_conds, inner.year < seed.c.year)
+        .order_by(inner.year.desc()).limit(1).scalar_subquery()
+    )
+    rec = seed.union_all(select(nxt.label("year")).where(seed.c.year.isnot(None)))
+    result = await db.execute(select(rec.c.year).where(rec.c.year.isnot(None)).order_by(rec.c.year.desc()))
+    return [row[0] for row in result.all()]
+
+
+def _rebind(cond, model, alias):
+    """Re-target a `model.col == value` predicate onto an alias."""
+    col = getattr(alias, cond.left.key)
+    return col == cond.right.value
+
+
 @router.get("/crosstab-coverage", response_model=CrosstabCoverage)
+@single_flight
 async def get_crosstab_coverage(
     db: AsyncSession = Depends(get_db),
     user_state: str | None = Depends(scoped_state),
@@ -98,11 +127,11 @@ async def get_crosstab_coverage(
         # the state and category axes open, which is the exact shape of the
         # four leaks already fixed here: the axis with a dependency vouches
         # for the axes without one.
-        query = select(model.year).distinct()
+        conds = []
         if user_state:
-            query = query.where(model.state_name == user_state)
+            conds.append(model.state_name == user_state)
         if user_rto:
-            query = query.where(model.rto_code == user_rto)
+            conds.append(model.rto_code == user_rto)
         # category_aware=False for MakerFuelTotal, which is maker x fuel only
         # and has NO vehicle_category column. A predicate there could only be
         # a membership approximation -- the 947x bug this codebase already
@@ -110,9 +139,8 @@ async def get_crosstab_coverage(
         # unclamped year list is the honest answer; /maker-fuel-breakdown
         # refuses outright for these accounts instead.
         if category_aware and user_category:
-            query = query.where(model.vehicle_category == user_category)
-        result = await db.execute(query.order_by(model.year.desc()))
-        return [row[0] for row in result.all()]
+            conds.append(model.vehicle_category == user_category)
+        return await loose_distinct_years(db, model, conds)
 
     # A year-level completeness check used to live here, comparing each
     # crosstab's yearly total against the same year's maker-pass total in
@@ -172,13 +200,20 @@ async def get_categories(
     # original 89-value vehicle_class instead, for anyone who wants the
     # granular view.
     group_col = Registration.vehicle_class if raw else Registration.vehicle_category
+    # Range-split form of vehicle_class != 'All'. `<>` is unindexable and
+    # seq-scanned 18.4M rows (9.4s for 2025 on prod); the two ranges become a
+    # BitmapOr on idx_reg_year_class_month_count (203ms). Equivalent for every
+    # non-NULL value, and NULL fails both forms -- verified on prod, identical
+    # SUM for 2025 (19,520,849) and 2026 (22,677,982). One year per query on
+    # purpose: with year IN (a, b) the planner falls back to a seq scan.
+    not_all = or_(Registration.vehicle_class < "All", Registration.vehicle_class > "All")
     q_curr = (
         select(group_col, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year, Registration.vehicle_class != "All")
+        .where(Registration.year == year, not_all)
     )
     q_prev = (
         select(group_col, func.sum(Registration.count).label("total"))
-        .where(Registration.year == year - 1, Registration.vehicle_class != "All")
+        .where(Registration.year == year - 1, not_all)
     )
 
     # When no specific month is requested, compare year-to-date rather than
