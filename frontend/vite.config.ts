@@ -24,9 +24,18 @@ export default defineConfig({
         // since it's the single largest dependency and used unevenly across
         // pages (exceljs is already its own async chunk via the dynamic
         // `import('exceljs')` in csv.ts, so it doesn't need listing here).
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom', '@tanstack/react-query', 'zustand'],
-          charts: ['recharts'],
+        //
+        // Path-based rather than the old package-name object: the app imports
+        // `react-dom/client` (not `react-dom`) and React pulls in `scheduler`,
+        // neither of which the name list matched, so ~190 kB of react-dom
+        // landed in the `index` app chunk (B15: "index is 250 kB"). Matching
+        // on node_modules paths puts every runtime dep where it belongs.
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return undefined
+          if (/[\\/]node_modules[\\/](recharts|d3-[^\\/]+|victory-vendor|internmap|decimal\.js-light|recharts-scale|react-smooth|eventemitter3|fast-equals|tiny-invariant|lodash)[\\/]/.test(id)) return 'charts'
+          if (/[\\/]node_modules[\\/]exceljs[\\/]/.test(id)) return undefined
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom|@remix-run|@tanstack|zustand|use-sync-external-store)[\\/]/.test(id)) return 'vendor'
+          return undefined
         },
       },
     },

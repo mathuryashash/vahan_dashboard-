@@ -5,6 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { getLiveMakerLeaderboard, getLiveMakerQuery, getStates, searchLiveMakers } from '../api/vahan';
 import { useAppStore } from '../hooks/useAppStore';
 import { useAuth } from '../contexts/AuthContext';
+import { formatCompact } from '../utils/format';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { TruncatedYAxisTick } from './ChartAxisTick';
 import { LabeledSelect } from './LabeledSelect';
@@ -40,6 +41,37 @@ function errorMessageFor(error: unknown): string {
     case 503: return 'Live lookups are temporarily unavailable on the server right now.';
     default: return 'Something went wrong fetching this combination.';
   }
+}
+
+/** Where a live-query answer came from. Newer backends answer some lookups
+ * from data already in our tables (`source: 'stored'`, `as_of` = when that
+ * data was scraped) instead of a fresh scrape; showing "live" wording over
+ * a stored answer overstated its freshness. Older backends send neither
+ * field, which keeps the original live wording. */
+export function formatAsOf(asOf: string | null | undefined): string {
+  if (!asOf) return 'an earlier scrape';
+  const d = new Date(asOf);
+  if (Number.isNaN(d.getTime())) return asOf;
+  // Date-only strings ("2026-09-30") have no time worth showing.
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(asOf);
+  return d.toLocaleString('en-IN', dateOnly
+    ? { day: 'numeric', month: 'short', year: 'numeric' }
+    : { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function SourceNote({ source, asOf }: { source?: string; asOf?: string | null }) {
+  if (source === 'stored') {
+    return (
+      <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2" data-testid="live-source-note">
+        Stored data as of {formatAsOf(asOf)} — answered from the dashboard's own tables, not a fresh scrape.
+      </p>
+    );
+  }
+  return (
+    <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2" data-testid="live-source-note">
+      Live from the source site{asOf ? ` · fetched ${formatAsOf(asOf)}` : ''}.
+    </p>
+  );
 }
 
 export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
@@ -291,6 +323,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
           </div>
         ) : (
           <div className="mt-4" role="status" aria-live="polite">
+            <SourceNote source={data.source} asOf={data.as_of} />
             <p className="text-xs text-[var(--text-secondary)] mb-2">
               <span className="font-semibold text-[var(--accent)]">{total.toLocaleString('en-IN')}</span> total registrations
               {submitted.fuel ? <> — <span className="font-semibold">{submitted.fuel}</span></> : null}
@@ -429,13 +462,15 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
           </div>
         ) : (
           <div className="mt-4" role="status" aria-live="polite">
+            <SourceNote source={data.source} asOf={data.as_of} />
+            <div role="figure" aria-label={`Top makers, ${year}: ${chartData.map((d) => `${d.name} ${d.count.toLocaleString('en-IN')}`).join(', ')}`}>
             <ResponsiveContainer width="100%" height={Math.max(220, chartData.length * 38)}>
               <BarChart data={chartData} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} tickFormatter={formatCompact} />
                 <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
                 <Tooltip
-                  formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations (real)']}
+                  formatter={(val: number) => [val.toLocaleString('en-IN'), data.source === 'stored' ? 'Registrations (stored)' : 'Registrations (real)']}
                   contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle}
                 />
                 <Bar dataKey="count" radius={[0, 4, 4, 0]}>
@@ -444,6 +479,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            </div>
           </div>
         )
       )}

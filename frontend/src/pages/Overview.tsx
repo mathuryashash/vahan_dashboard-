@@ -14,7 +14,7 @@ import { ExportCsvButton } from '../components/ExportCsvButton';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
-import { getKPIs, getTrend, getStateRanking, getCategories, getStates, getBrandOptions, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
+import { getKPIs, getTrend, getStateRanking, getStates, getBrandOptions, getMonthDetail, getAvailableYears, getMakerCategoryBreakdown, getFuelCategoryBreakdown, getMakerFuelBreakdown, getCrosstabCoverage, getCrosstabDetail, getFuelBreakdown } from '../api/vahan';
 import { useScopeLock } from '../hooks/useScopeLock';
 import { useAppStore } from '../hooks/useAppStore';
 import { useSettledLayout } from '../hooks/useSettledLayout';
@@ -22,6 +22,9 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { capForDonut, distinctSeriesColors } from '../theme/tokens';
 import { useAuth } from '../contexts/AuthContext';
 import type { MonthDetail } from '../types';
+import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
+import { LoadingBlock } from '../components/LoadingBlock';
+import { formatCompact, cyLabel, cyLongLabel, orDash, NO_VALUE } from '../utils/format';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -200,7 +203,13 @@ export function OverviewPage() {
     enabled: exactlyOnePairActive,
   });
 
-  const { data: kpis, isLoading: kpisLoading, isError: kpisError, refetch: refetchKpis } = useQuery({
+  const { data: kpis, isLoading: kpisLoading, isError: kpisError, refetch: refetchKpis } = useQuery<{
+    total_registrations_today: number;
+    total_this_month: number;
+    yoy_growth_percent: number | null;
+    top_state: string | null;
+    top_state_count: number;
+  }>({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: ({ signal }) => getKPIs({
       year: selectedYear,
@@ -212,6 +221,32 @@ export function OverviewPage() {
     }, signal),
     enabled: !kpiComboImpossible,
   });
+
+  // /summary/kpis reports yoy_growth_percent = 0.0 both for "exactly flat"
+  // and for "no prior-year data at all" (it divides only when the prior total
+  // is > 0). The card used to show a green "▲ 0.0%" for 2003 or Ladakh x EV,
+  // which reads as "flat" when the truth is "unknown". A null from a newer
+  // backend is unambiguous; an exact 0 is checked against the prior year's
+  // own total (one cheap request, and only in that rare case).
+  const yoyRaw = kpis?.yoy_growth_percent;
+  const priorYearListed = availableYears ? availableYears.includes(selectedYear - 1) : true;
+  const { data: priorKpis, isLoading: priorKpisLoading } = useQuery<{ total_this_month: number }>({
+    queryKey: ['kpis', selectedYear - 1, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
+    queryFn: ({ signal }) => getKPIs({
+      year: selectedYear - 1,
+      month: selectedMonth,
+      state: selectedState,
+      vehicle_category: selectedCategory,
+      fuel_group: fuelGroup,
+      maker: selectedMaker,
+    }, signal),
+    enabled: !kpiComboImpossible && yoyRaw === 0 && priorYearListed,
+  });
+  const noPriorYearData =
+    !kpiComboImpossible && !!kpis && (
+      yoyRaw == null || !priorYearListed || (yoyRaw === 0 && !!priorKpis && !priorKpis.total_this_month)
+    );
+  const yoyKnown = !kpiComboImpossible && !!kpis && !noPriorYearData && !(yoyRaw === 0 && priorKpisLoading);
 
   const { data: trend, isLoading: trendLoading, isError: trendError, refetch: refetchTrend } = useQuery({
     queryKey: ['trend', selectedYear, selectedState, selectedCategory, fuelGroup, selectedMaker],
@@ -248,20 +283,20 @@ export function OverviewPage() {
   // via that panel's own empty state.
   const hasLoadError = kpisError || trendError || rankingError;
 
-  const { data: categories, isLoading: categoriesLoading } = useQuery({
-    queryKey: ['categories', selectedYear, selectedMonth, selectedState, selectedMaker],
-    queryFn: ({ signal }) => getCategories({
-      year: selectedYear,
-      month: selectedMonth,
-      state: selectedState,
-      maker: selectedMaker,
-    }, signal),
-    // Guaranteed empty whenever selectedMaker is set (maker and a real
-    // category never coexist on a Registration row -- see the comment
-    // below), so don't bother firing it in that case. Vehicle Mix instead
-    // sources from makerCategoryMix below, the real per-maker crosstab.
-    enabled: !selectedMaker,
-  });
+  // ONE /categories/ request per (year, month, state) feeds both the Vehicle
+  // Mix donut and the Category picker below (B2: they used to be two query
+  // keys -- ['categories',...,maker] and ['categoryOptions',...] -- so the
+  // slowest endpoint in the app went out twice in parallel on every year
+  // change). The maker param was dropped from the request: maker and a real
+  // category never coexist on a Registration row, so the maker-filtered call
+  // was guaranteed empty and Vehicle Mix already switches to
+  // makerCategoryMix whenever a maker is selected.
+  const {
+    data: categories,
+    isLoading: categoriesLoading,
+    isError: categoriesError,
+    refetch: refetchCategories,
+  } = useCategoriesQuery({ year: selectedYear, month: selectedMonth, state: selectedState });
 
   // Real per-maker category mix, from the same Maker x Vehicle Class
   // cross-tab MakerCategoryPanel uses (year-only, no month breakdown) --
@@ -287,10 +322,8 @@ export function OverviewPage() {
   // existed, even though selectedCategory itself was untouched (found live:
   // dropdown showed "All Categories" while every panel below still said
   // "Two-Wheeler", reading selectedCategory directly as a prop).
-  const { data: categoryOptions } = useQuery({
-    queryKey: ['categoryOptions', selectedYear, selectedMonth, selectedState],
-    queryFn: ({ signal }) => getCategories({ year: selectedYear, month: selectedMonth, state: selectedState }, signal),
-  });
+  // Same cache entry as `categories` above -- no second request.
+  const categoryOptions = categories;
 
   // The complete OEM/Brand list, built server-side (get_brand_options in
   // backend categories.py). It replaces two limits the old client-side list
@@ -365,12 +398,12 @@ export function OverviewPage() {
   // reported as "exact same data for both months"). The banner above the
   // cards already said this; saying it on the card itself is what actually
   // lands, since the card is where the unchanging number is.
-  const kpiPeriodSuffix = kpiComboImpossible && selectedMonth != null ? ' · FY total' : '';
+  const kpiPeriodSuffix = kpiComboImpossible && selectedMonth != null ? ' · year total' : '';
 
   const pieData = capForDonut(
     selectedMaker
       ? (makerCategoryMix || []).map((c: { vehicle_category: string; count: number }) => ({ name: c.vehicle_category, value: c.count }))
-      : (categories || []).map((c: { vehicle_category: string; total_count: number }) => ({ name: c.vehicle_category, value: c.total_count }))
+      : (categories || []).map((c) => ({ name: c.vehicle_category, value: c.total_count }))
   );
   const pieColors = distinctSeriesColors(chart, pieData.map((p) => p.name));
   const vehicleMixLoading = selectedMaker ? makerCategoryMixLoading : categoriesLoading;
@@ -444,7 +477,7 @@ export function OverviewPage() {
   const selectClass = "w-full bg-[var(--bg-sunken)] border border-[var(--border)] hover:border-[var(--border-strong)] text-[var(--text-primary)] text-xs font-semibold px-3 py-2 rounded-xl focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-all duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed";
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-6">
       {hasLoadError && (
         <ErrorBanner
           title="Couldn't load dashboard data"
@@ -452,13 +485,13 @@ export function OverviewPage() {
           action={{ label: 'Retry', onClick: () => { refetchKpis(); refetchTrend(); refetchRanking(); } }}
         />
       )}
-      <div className="flex items-center justify-between">
-        <div className="animate-entrance">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="animate-entrance min-w-0">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">
             Overview
           </h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-            India Vehicle Registration Observatory — FY {selectedYear}
+            India Vehicle Registration Observatory — {cyLongLabel(selectedYear)}
           </p>
         </div>
         <div className="flex items-center gap-4 text-[10px] text-[var(--text-muted)] font-mono">
@@ -477,7 +510,7 @@ export function OverviewPage() {
           stacking context, so the brand picker's dropdown z-index would only
           rank inside it and the charts below would paint over the list --
           the same bug LiveMakerQueryPanel hit and fixed this way. */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-7 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance relative z-20">
+      <div className="grid grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3 bg-[var(--bg-card)] border border-[var(--border)] p-4 rounded-2xl animate-entrance relative z-20">
         {isStateLocked ? (
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold">State</span>
@@ -492,8 +525,8 @@ export function OverviewPage() {
           </LabeledSelect>
         )}
 
-        <LabeledSelect label="Year" value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={selectClass}>
-          {(availableYears || [selectedYear]).map((y) => <option key={y} value={y}>{y}</option>)}
+        <LabeledSelect label="Year (calendar)" title="Calendar year, Jan–Dec. RTO Analysis reads the same year as the financial year starting that April." value={selectedYear} onChange={(e) => setSelectedYear(Number(e.target.value))} className={selectClass}>
+          {(availableYears || [selectedYear]).map((y) => <option key={y} value={y}>{cyLabel(y)}</option>)}
         </LabeledSelect>
 
         <LabeledSelect label="Month" value={selectedMonth || ''} onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)} className={selectClass}>
@@ -618,40 +651,65 @@ export function OverviewPage() {
           </>
         ) : (
           <>
+            {/* Total carries the volume only. The YoY % used to sit on BOTH
+                this card's badge and the YoY card below it -- the same number
+                twice. It now lives on the YoY card alone. */}
             <KPICard
               label={`Total Registrations${kpiPeriodSuffix}`}
-              value={kpiComboImpossible ? (crosstabTotal ?? '—') : (kpis?.total_this_month ?? 0)}
-              change={kpiComboImpossible ? undefined : kpis?.yoy_growth_percent}
+              value={kpiComboImpossible ? (crosstabTotal ?? NO_VALUE) : (kpis?.total_this_month ?? 0)}
+              sub={kpiComboImpossible ? undefined : `${cyLabel(selectedYear)}${selectedMonth ? ` · ${MONTH_NAMES[selectedMonth - 1]}` : ' · year to date'}`}
               icon={<Car className="w-4 h-4" />}
               loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
               index={0}
             />
-            <KPICard
-              label={`YoY Growth${kpiPeriodSuffix}`}
-              value={kpiComboImpossible
-                ? (exactlyOnePairActive && crosstabDetail?.yoy_growth_percent != null ? `${crosstabDetail.yoy_growth_percent.toFixed(1)}%` : '—')
-                : (kpis?.yoy_growth_percent ? `${kpis.yoy_growth_percent.toFixed(1)}%` : '—')}
-              change={kpiComboImpossible ? (exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? undefined : undefined) : kpis?.yoy_growth_percent}
-              icon={<TrendingUp className="w-4 h-4" />}
-              loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
-              index={1}
-            />
+            {(() => {
+              // One source of truth for the YoY card: a % with its arrow, or
+              // a dash + "no prior-year data" -- never "— " over "▲ 0.0%".
+              const yoy = kpiComboImpossible
+                ? (exactlyOnePairActive ? crosstabDetail?.yoy_growth_percent ?? null : null)
+                : (yoyKnown ? (yoyRaw ?? null) : null);
+              const loading = kpiComboImpossible ? crosstabLoading : (kpisLoading || (yoyRaw === 0 && priorKpisLoading));
+              return (
+                <KPICard
+                  label={`YoY Growth${kpiPeriodSuffix}`}
+                  value={yoy == null ? NO_VALUE : `${yoy >= 0 ? '+' : ''}${yoy.toFixed(1)}%`}
+                  sub={yoy == null ? undefined : `vs ${cyLabel(selectedYear - 1)}, same months`}
+                  change={yoy == null ? null : undefined}
+                  icon={<TrendingUp className="w-4 h-4" />}
+                  loading={loading}
+                  index={1}
+                />
+              );
+            })()}
             <KPICard
               label={`Avg Daily Registrations${kpiPeriodSuffix}`}
               value={kpiComboImpossible
-                ? (crosstabTotal === undefined ? '—' : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : crosstabAvgDaily)
+                ? (crosstabTotal === undefined ? NO_VALUE : crosstabTotal > 0 && crosstabAvgDaily === 0 ? '< 1' : (crosstabAvgDaily ?? NO_VALUE))
                 : (kpis?.total_registrations_today ?? 0)}
               icon={<Bike className="w-4 h-4" />}
               loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
               index={2}
             />
-            <KPICard
-              label="Top State"
-              value={kpiComboImpossible ? (exactlyOnePairActive ? (crosstabDetail?.top_state ?? '—') : '—') : (kpis?.top_state ?? '—')}
-              icon={<Award className="w-4 h-4" />}
-              loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
-              index={3}
-            />
+            {auth.scope_type === 'rto' ? (
+              // A single-RTO account's "top state" is by definition its own
+              // state -- a card that can never say anything else. Show the
+              // RTO the numbers are scoped to instead.
+              <KPICard
+                label="Your RTO"
+                value={auth.scope_rto_code ?? NO_VALUE}
+                sub={auth.scope_rto_name ?? undefined}
+                icon={<Award className="w-4 h-4" />}
+                index={3}
+              />
+            ) : (
+              <KPICard
+                label="Top State"
+                value={orDash(kpiComboImpossible ? (exactlyOnePairActive ? crosstabDetail?.top_state : null) : kpis?.top_state)}
+                icon={<Award className="w-4 h-4" />}
+                loading={kpiComboImpossible ? crosstabLoading : kpisLoading}
+                index={3}
+              />
+            )}
           </>
         )}
       </div>
@@ -664,7 +722,7 @@ export function OverviewPage() {
             <div>
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Registration Trend</h3>
               <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-                Monthly View — FY {selectedYear}
+                Monthly View — {cyLabel(selectedYear)}
                 {trendPartialName && (
                   // Said out loud rather than quietly dropped: a reader who
                   // counts the months should know why the latest one is
@@ -678,8 +736,14 @@ export function OverviewPage() {
             </span>
           </div>
           {trendLoading ? (
-            <div className="h-52 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+            <LoadingBlock className="h-52" />
           ) : (
+            <div
+              role="img"
+              aria-label={chartData.length
+                ? `Monthly registrations, ${cyLabel(selectedYear)}: ${chartData.map((d: { name: string; count: number }) => `${d.name} ${d.count.toLocaleString('en-IN')}`).join(', ')}`
+                : `No monthly registrations for ${cyLabel(selectedYear)}`}
+            >
             <ResponsiveContainer width="100%" height={208}>
               <AreaChart data={chartData}>
                 <defs>
@@ -690,11 +754,12 @@ export function OverviewPage() {
                 </defs>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : `${(v/1000).toFixed(0)}K`} width={45} />
+                <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={formatCompact} width={45} />
                 <Tooltip content={<CustomTooltip chart={chart} />} />
                 <Area type="monotone" dataKey="count" stroke={chart.seriesColors[0]} strokeWidth={2.5} fill="url(#gradAccent)" dot={{ r: 3, fill: chart.seriesColors[0], strokeWidth: 0 }} activeDot={{ r: 5, fill: chart.seriesColors[0] }} />
               </AreaChart>
             </ResponsiveContainer>
+            </div>
           )}
         </div>
         )}
@@ -704,19 +769,27 @@ export function OverviewPage() {
           <div className="mb-4">
             <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">Vehicle Mix</h3>
             <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-              by category — {selectedYear}{selectedMaker && <>, {selectedMaker} (year total, no month breakdown)</>}
+              by category — {cyLabel(selectedYear)}{selectedMonth && !selectedMaker ? ` · ${MONTH_NAMES[selectedMonth - 1]}` : ''}{selectedState ? ` · ${selectedState}` : ''}{selectedMaker && <>, {selectedMaker} (year total, no month breakdown)</>}
             </p>
           </div>
           {vehicleMixLoading || !vehicleMixReady ? (
-            <div className="h-52 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+            <LoadingBlock className="h-52" />
+          ) : !selectedMaker && categoriesError ? (
+            <EmptyState
+              title="Couldn't load vehicle mix"
+              description="The category query failed or timed out -- this is not an empty result."
+              variant="error"
+              className="py-8"
+              action={{ label: 'Retry', onClick: () => { refetchCategories(); } }}
+            />
           ) : pieData.length === 0 ? (
             <EmptyState
               title="No Category Data"
               description={
                 vehicleMixNoData
-                  ? `Not scraped for FY ${selectedYear} yet.`
+                  ? `Not scraped for ${cyLabel(selectedYear)} yet.`
                   : selectedMaker
-                  ? `${selectedMaker} has no registrations in any category for FY ${selectedYear}.`
+                  ? `${selectedMaker} has no registrations in any category for ${cyLabel(selectedYear)}.`
                   : "Run a sync for 'vehicle_class' to load category breakdowns."
               }
               variant="no-data"
@@ -724,6 +797,7 @@ export function OverviewPage() {
             />
           ) : (
             <>
+              <div role="img" aria-label={`Vehicle mix: ${pieData.map((p) => `${p.name} ${p.value.toLocaleString('en-IN')}`).join(', ')}`}>
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
                   <Pie
@@ -736,6 +810,7 @@ export function OverviewPage() {
                   <Tooltip formatter={(val: number) => [val.toLocaleString('en-IN'), '']} contentStyle={chart.tooltipContentStyle()} {...chart.tooltipTextStyle} />
                 </PieChart>
               </ResponsiveContainer>
+              </div>
               <div className="mt-2 space-y-1.5 max-h-28 overflow-y-auto pr-1">
                 {pieData.map((p: { name: string; value: number }, i: number) => (
                   <div key={p.name} className="flex items-center justify-between text-[11px]">
@@ -775,7 +850,7 @@ export function OverviewPage() {
             <span>Select a specific month above (not "All Months") for its detail</span>
           </div>
         ) : monthDetailLoading ? (
-          <div className="h-24 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          <LoadingBlock className="h-24" />
         ) : monthDetailError || !monthDetail ? (
           <div className="h-24 flex items-center justify-center text-[var(--danger)] text-xs border border-dashed border-[var(--border)] rounded-xl">
             Couldn't load detail for {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
@@ -795,12 +870,12 @@ export function OverviewPage() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">State Ranking</h3>
-              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">Top 10 by registrations</p>
+              <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">Top 10 by registrations — {cyLabel(selectedYear)}</p>
             </div>
-            <ExportCsvButton filename={`state-ranking-fy${selectedYear}`} rows={ranking} />
+            <ExportCsvButton filename={`state-ranking-cy${selectedYear}`} rows={ranking} />
           </div>
           {rankingLoading ? (
-            <div className="h-44 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+            <LoadingBlock className="h-44" />
           ) : (
             <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
               {(ranking || []).map((s: { state_name: string; total_count: number; share_percent: number }, i: number) => {
@@ -840,7 +915,7 @@ export function OverviewPage() {
       </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={`grid grid-cols-1 gap-4 ${selectedState ? '' : 'md:grid-cols-2'}`}>
         {[
           // "States Active 36 / 36 -- All states reporting" used to sit here
           // as a hardcoded string. It claimed full national coverage no
@@ -848,8 +923,13 @@ export function OverviewPage() {
           // fabricated reassurance this product cannot afford. There is no
           // cheap real source for it (the ranking query is capped at 10
           // rows), so it is gone rather than guessed.
-          { label: 'Avg per State / UT', value: kpis ? Math.round(kpis.total_this_month / 36).toLocaleString('en-IN') : '—', sub: 'total ÷ 36 states & UTs', colorIdx: 0 },
-          { label: 'Peak Trend Point', value: chartData.length > 0 ? chartData.reduce((a: { count: number }, b: { count: number }) => a.count > b.count ? a : b).name : '—', sub: 'highest volume time point', colorIdx: 5 },
+          // Only meaningful for an all-India view: with a state selected it
+          // divided ONE state's total by 36 (Maharashtra Jun 2025 showed
+          // 6,072 = 218,587 / 36), a number that means nothing.
+          ...(selectedState ? [] : [
+            { label: 'Avg per State / UT', value: kpis ? Math.round(kpis.total_this_month / 36).toLocaleString('en-IN') : NO_VALUE, sub: 'total ÷ 36 states & UTs', colorIdx: 0 },
+          ]),
+          { label: 'Peak Trend Point', value: chartData.length > 0 ? chartData.reduce((a: { count: number }, b: { count: number }) => a.count > b.count ? a : b).name : NO_VALUE, sub: 'highest volume time point', colorIdx: 5 },
         ].map((stat, i) => (
           <div key={i} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4 flex items-center gap-4 animate-entrance" style={{ animationDelay: `${350 + i * 60}ms` }}>
             <div className="w-1 h-10 rounded-full" style={{ background: chart.seriesColors[stat.colorIdx] }} />
@@ -904,7 +984,7 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
       <div className="mb-4">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{maker} in {category}</h3>
         <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-          FY {year}{state && <> · {state}</>} — year total
+          {cyLabel(year)}{state && <> · {state}</>} — year total
         </p>
       </div>
       <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
@@ -912,7 +992,7 @@ function MakerCategoryPanel({ year, category, maker, month, state, hasYearData }
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
         ) : noDataForYear ? (
-          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for FY {year}</span>
+          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for {cyLabel(year)}</span>
         ) : (
           <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
         )}
@@ -947,14 +1027,11 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
   // just explaining why the exact number isn't available (found: users
   // expect a month number here and don't know a narrower single-filter
   // query would actually give them one).
-  const { data: categoryMonthly } = useQuery({
-    queryKey: ['categoryMonthlyOnly', year, month, state],
-    queryFn: ({ signal }) => getCategories({ year, month, state }, signal),
-    enabled: !!month,
-  });
-  const categoryMonthlyCount = (categoryMonthly || []).find(
-    (c: { vehicle_category: string; total_count: number }) => c.vehicle_category === category
-  )?.total_count;
+  // Shared key with Overview's own /categories/ query (same year/month/
+  // state) -- this used to be a separate 'categoryMonthlyOnly' key that
+  // re-sent the identical request.
+  const { data: categoryMonthly } = useCategoriesQuery({ year, month, state }, { enabled: !!month });
+  const categoryMonthlyCount = (categoryMonthly || []).find((c) => c.vehicle_category === category)?.total_count;
 
   const { data: fuelMonthly } = useQuery({
     queryKey: ['fuelMonthlyOnly', year, month, state],
@@ -974,14 +1051,10 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
   // check either against -- shown side by side, clearly marked as modeled,
   // specifically so that disagreement stays visible rather than picking one
   // and presenting it as settled.
-  const { data: categoryYearly } = useQuery({
-    queryKey: ['categoryYearOnly', year, state],
-    queryFn: ({ signal }) => getCategories({ year, month: null, state }, signal),
-    enabled: !!month,
-  });
-  const categoryYearCount = (categoryYearly || []).find(
-    (c: { vehicle_category: string; total_count: number }) => c.vehicle_category === category
-  )?.total_count;
+  // Year-only: same cache entry Categories/CategoryDetail use for this
+  // year+state (was its own 'categoryYearOnly' key).
+  const { data: categoryYearly } = useCategoriesQuery({ year, month: null, state }, { enabled: !!month });
+  const categoryYearCount = (categoryYearly || []).find((c) => c.vehicle_category === category)?.total_count;
 
   const { data: fuelYearly } = useQuery({
     queryKey: ['fuelYearOnly', year, state],
@@ -1017,7 +1090,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
       <div className="mb-4">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{fuelGroup} {category}</h3>
         <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-          FY {year}{state && <> · {state}</>} — year total
+          {cyLabel(year)}{state && <> · {state}</>} — year total
         </p>
       </div>
       <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
@@ -1025,7 +1098,7 @@ function FuelCategoryPanel({ year, category, fuelGroup, month, state, hasYearDat
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
         ) : noDataForYear ? (
-          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for FY {year}</span>
+          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for {cyLabel(year)}</span>
         ) : (
           <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
         )}
@@ -1108,7 +1181,7 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData }: {
       <div className="mb-4">
         <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">{maker} — {fuelGroup}</h3>
         <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">
-          FY {year}{state && <> · {state}</>} — year total
+          {cyLabel(year)}{state && <> · {state}</>} — year total
         </p>
       </div>
       <div className="flex items-center justify-between flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
@@ -1116,7 +1189,7 @@ function MakerFuelPanel({ year, maker, fuelGroup, month, state, hasYearData }: {
         {isLoading ? (
           <span className="font-mono text-sm font-bold animate-pulse-soft">···</span>
         ) : noDataForYear ? (
-          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for FY {year}</span>
+          <span className="font-mono text-xs text-[var(--text-muted)]">not scraped for {cyLabel(year)}</span>
         ) : (
           <span className="font-mono text-sm font-bold text-[var(--text-primary)]">{count.toLocaleString('en-IN')}</span>
         )}

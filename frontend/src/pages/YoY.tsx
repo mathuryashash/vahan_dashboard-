@@ -9,6 +9,8 @@ import { getYoYMonthly, getYoYSummary } from '../api/vahan';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { LoadingBlock } from '../components/LoadingBlock';
+import { formatCompact, NO_VALUE } from '../utils/format';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -36,7 +38,16 @@ const SELECTABLE_YEARS = Array.from({ length: CURRENT_YEAR - 2002 }, (_, i) => C
 
 export function YoYPage() {
   const chart = useChartTheme();
-  const { comparisonYearA, comparisonYearB, setComparisonYears, selectedCategory } = useAppStore();
+  const { comparisonYearA, comparisonYearB, setComparisonYears, selectedCategory, selectedState } = useAppStore();
+  // The shared State filter is honoured here (it used to be silently dropped:
+  // a user arriving with state=Lakshadweep saw all-India numbers under no
+  // geography label). Both /yoy endpoints already accept `state` and clamp it
+  // to the account's scope server-side.
+  const stateParam = selectedState || undefined;
+  // Comparing a year with itself is always 0% and means nothing. The pickers
+  // can't produce it (each omits the other side's year); this guards a value
+  // arriving from elsewhere.
+  const sameYear = comparisonYearA === comparisonYearB;
   // Full year (1-12) by default -- same behavior as before this range picker
   // existed. A custom range (e.g. Apr-Jul) compares that exact window across
   // both selected years instead of the whole year.
@@ -45,13 +56,15 @@ export function YoYPage() {
   const isCustomRange = startMonth !== 1 || endMonth !== 12;
 
   const { data: monthly, isLoading, isError, refetch } = useQuery({
-    queryKey: ['yoy', comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory],
-    queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB, undefined, startMonth, endMonth, selectedCategory),
+    queryKey: ['yoy', comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory, stateParam ?? null],
+    queryFn: () => getYoYMonthly(comparisonYearA, comparisonYearB, stateParam, startMonth, endMonth, selectedCategory),
+    enabled: !sameYear,
   });
 
-  const { data: summary } = useQuery({
-    queryKey: ['yoySummary', comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory],
-    queryFn: () => getYoYSummary(comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory),
+  const { data: summary, isLoading: summaryLoading } = useQuery({
+    queryKey: ['yoySummary', comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory, stateParam ?? null],
+    queryFn: () => getYoYSummary(comparisonYearA, comparisonYearB, startMonth, endMonth, selectedCategory, stateParam),
+    enabled: !sameYear,
   });
 
   // growth_percent is null for months comparisonYearB hasn't reached yet
@@ -94,7 +107,8 @@ export function YoYPage() {
     .filter((d) => d.growth !== null)
     .filter((d) => d.name !== partialMonthName);
 
-  const growth = summary?.growth_percent ?? 0;
+  // null (no summary yet / no prior-year volume) renders as a dash, not "+0.0%".
+  const growth: number | null = summary && summary[`total_${comparisonYearA}`] ? (summary.growth_percent ?? null) : null;
   const colorA = chart.seriesColors[4];
   const colorB = chart.seriesColors[0];
 
@@ -102,10 +116,10 @@ export function YoYPage() {
   // scraped data currently starts 2016 -- picking an unscraped year returns
   // an empty `data` array rather than an error, so the charts below would
   // otherwise render with nothing in them and look broken instead of empty.
-  const hasNoData = !isLoading && (monthly?.data?.length ?? 0) === 0;
+  const hasNoData = !sameYear && !isLoading && (monthly?.data?.length ?? 0) === 0;
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-3 sm:p-6 space-y-5">
       {isError && (
         <ErrorBanner
           title="Couldn't load year-over-year data"
@@ -113,17 +127,20 @@ export function YoYPage() {
           action={{ label: 'Retry', onClick: () => refetch() }}
         />
       )}
-      <div className="flex items-center justify-between">
-        <div className="animate-entrance">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="animate-entrance min-w-0">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Year-over-Year Analysis</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-            {isCustomRange ? `${MONTH_NAMES[startMonth - 1]}-${MONTH_NAMES[endMonth - 1]}` : 'Full Year'} comparison — {comparisonYearA} vs {comparisonYearB} — {selectedCategory ?? 'All categories'}
+            {isCustomRange ? `${MONTH_NAMES[startMonth - 1]}-${MONTH_NAMES[endMonth - 1]}` : 'Full Year'} comparison — CY {comparisonYearA} vs CY {comparisonYearB} — {selectedState ?? 'All India'} — {selectedCategory ?? 'All categories'}
           </p>
         </div>
-        <div className="flex items-center gap-3 animate-entrance" style={{ animationDelay: '50ms' }}>
+        <div className="flex items-center gap-3 flex-wrap animate-entrance" style={{ animationDelay: '50ms' }}>
           <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
-            <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">Range</span>
+            <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]" id="yoy-range-label">Range</span>
+            <label htmlFor="yoy-start-month" className="sr-only">Range start month</label>
             <select
+              id="yoy-start-month"
+              aria-label="Range start month"
               value={startMonth}
               onChange={(e) => {
                 const v = Number(e.target.value);
@@ -134,8 +151,11 @@ export function YoYPage() {
             >
               {MONTH_NAMES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
             </select>
-            <span className="text-[var(--text-muted)]">→</span>
+            <span className="text-[var(--text-muted)]" aria-hidden="true">→</span>
+            <label htmlFor="yoy-end-month" className="sr-only">Range end month</label>
             <select
+              id="yoy-end-month"
+              aria-label="Range end month"
               value={endMonth}
               onChange={(e) => {
                 const v = Number(e.target.value);
@@ -148,42 +168,53 @@ export function YoYPage() {
             </select>
           </div>
           <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
+            <label htmlFor="yoy-year-a" className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">Year A</label>
             <select
+              id="yoy-year-a"
+              aria-label="Year A (baseline calendar year)"
               value={comparisonYearA}
               onChange={(e) => setComparisonYears(Number(e.target.value), comparisonYearB)}
               className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
             >
-              {SELECTABLE_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              {SELECTABLE_YEARS.filter((y) => y !== comparisonYearB).map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
-            <span className="text-[var(--text-muted)]">→</span>
-            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{(summary?.[`total_${comparisonYearA}`] || 0).toLocaleString('en-IN')}</span>
+            <span className="text-[var(--text-muted)]" aria-hidden="true">→</span>
+            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{summaryLoading ? '…' : (summary?.[`total_${comparisonYearA}`] || 0).toLocaleString('en-IN')}</span>
           </div>
           <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5" style={{ background: 'var(--bg-sunken)', borderColor: 'var(--border)', color: 'var(--accent)' }}>
+            <label htmlFor="yoy-year-b" className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">Year B</label>
             <select
+              id="yoy-year-b"
+              aria-label="Year B (comparison calendar year)"
               value={comparisonYearB}
               onChange={(e) => setComparisonYears(comparisonYearA, Number(e.target.value))}
               className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
               style={{ color: 'var(--accent)' }}
             >
-              {SELECTABLE_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+              {SELECTABLE_YEARS.filter((y) => y !== comparisonYearA).map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
-            <span className="text-[var(--text-muted)]">→</span>
-            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{(summary?.[`total_${comparisonYearB}`] || 0).toLocaleString('en-IN')}</span>
+            <span className="text-[var(--text-muted)]" aria-hidden="true">→</span>
+            <span className="text-[var(--text-primary)] font-mono text-xs font-semibold">{summaryLoading ? '…' : (summary?.[`total_${comparisonYearB}`] || 0).toLocaleString('en-IN')}</span>
           </div>
           <div
             className="px-3 py-1.5 rounded-lg text-xs font-bold font-mono border"
             style={{
               background: 'var(--bg-sunken)',
-              color: growth >= 0 ? 'var(--success)' : 'var(--danger)',
+              color: growth == null ? 'var(--text-muted)' : growth >= 0 ? 'var(--success)' : 'var(--danger)',
               borderColor: 'var(--border)',
             }}
+            title={growth == null ? `No ${comparisonYearA} volume to compare against` : undefined}
           >
-            {growth >= 0 ? '+' : ''}{growth.toFixed(1)}%
+            {growth == null ? NO_VALUE : `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`}
           </div>
         </div>
       </div>
 
-      {hasNoData ? (
+      {sameYear ? (
+        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] animate-entrance">
+          <EmptyState variant="no-selection" title="Pick two different years" description={`Year A and Year B are both ${comparisonYearA}; a year compared with itself is always 0%.`} />
+        </div>
+      ) : hasNoData ? (
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] animate-entrance" style={{ animationDelay: '80ms' }}>
           <EmptyState
             variant="no-data"
@@ -201,21 +232,23 @@ export function YoYPage() {
             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm inline-block" style={{ background: colorB }} /> {comparisonYearB}</span>
           </div>
         </div>
-        {isLoading ? <div className="h-64 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" /> : (
+        {isLoading ? <LoadingBlock className="h-64" /> : (
+          <div role="img" aria-label={`Monthly registrations, ${comparisonYearA} vs ${comparisonYearB}: ${chartData.map((d) => `${d.name} ${d[`${comparisonYearA}`] ?? NO_VALUE} vs ${d[`${comparisonYearB}`] ?? NO_VALUE}`).join(', ')}`}>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={chartData} barGap={4} margin={{ top: 20 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v/1000000).toFixed(1)}M`} width={40} />
+              <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={formatCompact} width={40} />
               <Tooltip content={<YoYTooltip chart={chart} />} />
               <Bar dataKey={`${comparisonYearA}`} fill={colorA} radius={[3, 3, 0, 0]} maxBarSize={20}>
-                <LabelList dataKey={`${comparisonYearA}`} position="top" formatter={(v: number) => `${(v / 1000000).toFixed(1)}M`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+                <LabelList dataKey={`${comparisonYearA}`} position="top" formatter={formatCompact} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
               </Bar>
               <Bar dataKey={`${comparisonYearB}`} fill={colorB} radius={[3, 3, 0, 0]} maxBarSize={20}>
-                <LabelList dataKey={`${comparisonYearB}`} position="top" formatter={(v: number) => `${(v / 1000000).toFixed(1)}M`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+                <LabelList dataKey={`${comparisonYearB}`} position="top" formatter={formatCompact} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          </div>
         )}
       </div>
 
@@ -255,7 +288,7 @@ export function YoYPage() {
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v/1000000).toFixed(1)}M`} width={40} />
+              <YAxis tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={formatCompact} width={40} />
               <Tooltip formatter={(val: number) => val.toLocaleString('en-IN')} contentStyle={chart.tooltipContentStyle()} {...chart.tooltipTextStyle} />
               <Line type="monotone" dataKey={`${comparisonYearA}`} stroke={colorA} strokeWidth={1.5} dot={{ r: 3, fill: colorA }} />
               <Line type="monotone" dataKey={`${comparisonYearB}`} stroke={colorB} strokeWidth={2.5} dot={{ r: 4, fill: colorB }} activeDot={{ r: 6 }} />

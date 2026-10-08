@@ -14,11 +14,37 @@ import { ExportCsvButton } from '../components/ExportCsvButton';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { useAuth } from '../contexts/AuthContext';
 import type { RTOListItem, RTOAnalysis } from '../types';
+import { LoadingBlock } from '../components/LoadingBlock';
+import { fyLabel, fyLongLabel, cyLabel, formatCompact } from '../utils/format';
 
 // Indian financial year: April `fyYear` through March `fyYear + 1`.
 const now = new Date();
 const CURRENT_FY = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
 const fyMonthsElapsed = (fyYear: number) => (fyYear === CURRENT_FY ? now.getMonth() - 3 + 1 : 12);
+
+/** Months of FY `fyYear` (Apr..Mar) up to and including the last month the
+ * data actually covers. The wall-clock count above counted October as
+ * "elapsed" in early October even though scraped data ended in September,
+ * so a fully-covered RTO read "6 / 7". Uses the backend's
+ * `last_scraped_month` when present (a calendar month number 1-12, or a
+ * "YYYY-MM" string); falls back to the wall clock for older backends. */
+export function fyMonthsCovered(fyYear: number, lastScraped: number | string | null | undefined): number {
+  const wallClock = fyMonthsElapsed(fyYear);
+  if (lastScraped == null || lastScraped === '') return wallClock;
+  let year: number | null = null;
+  let month: number;
+  if (typeof lastScraped === 'string') {
+    const m = /^(\d{4})-(\d{1,2})/.exec(lastScraped);
+    if (m) { year = Number(m[1]); month = Number(m[2]); } else { month = Number(lastScraped); }
+  } else {
+    month = lastScraped;
+  }
+  if (!Number.isFinite(month) || month < 1 || month > 12) return wallClock;
+  // Without an explicit year, Apr-Dec belong to fyYear and Jan-Mar to fyYear+1.
+  if (year == null) year = month >= 4 ? fyYear : fyYear + 1;
+  const idx = (year - fyYear) * 12 + (month - 4) + 1; // Apr fyYear = 1
+  return Math.max(0, Math.min(12, wallClock, idx));
+}
 
 export function RtoAnalysisPage() {
   const chart = useChartTheme();
@@ -119,7 +145,7 @@ export function RtoAnalysisPage() {
   const makerPieColors = distinctSeriesColors(chart, makerPieData.map((d) => d.name));
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-6">
       {rtosError && (
         <ErrorBanner
           title="Couldn't load RTO data"
@@ -130,7 +156,13 @@ export function RtoAnalysisPage() {
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">RTO Analysis</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-          State → District → RTO → company share breakdown — FY {fyYear}-{String((fyYear + 1) % 100).padStart(2, '0')} — {selectedCategory ?? 'All categories'}
+          State → District → RTO → company share breakdown — {fyLongLabel(fyYear)} — {selectedCategory ?? 'All categories'}
+        </p>
+        {/* B9: the year is shared with the other tabs, which are CALENDAR
+            years. Say out loud how it's read here so the same "2026" isn't
+            silently two different windows. */}
+        <p className="text-[10px] text-[var(--text-muted)] mt-1" data-testid="year-handoff-note">
+          This page uses the Indian financial year. {cyLabel(fyYear)} on the other tabs (Jan–Dec {fyYear}) is shown here as {fyLabel(fyYear)} (Apr {fyYear} – Mar {fyYear + 1}), so totals are not directly comparable.
         </p>
       </div>
 
@@ -180,7 +212,7 @@ export function RtoAnalysisPage() {
           className="bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-mono font-semibold cursor-pointer"
         >
           {(availableYears || [fyYear]).map((y) => (
-            <option key={y} value={y}>FY {y}-{String((y + 1) % 100).padStart(2, '0')}</option>
+            <option key={y} value={y}>{fyLabel(y)} (Apr–Mar)</option>
           ))}
         </LabeledSelect>
       </div>
@@ -199,7 +231,7 @@ export function RtoAnalysisPage() {
               <p className="text-[10px] text-[var(--text-muted)] font-mono mt-0.5">click an RTO to see its company breakdown below</p>
             </div>
             <div className="flex items-center gap-2">
-              <ExportCsvButton filename={`rtos-${stateCode}-fy${fyYear}`} rows={rtos} />
+              <ExportCsvButton filename={`rtos-${stateCode}-fy${fyYear}-${String((fyYear + 1) % 100).padStart(2, '0')}`} rows={rtos} />
               {rtoCode && (
                 <button onClick={() => setRtoCode(null)} className="text-[9px] uppercase font-mono tracking-wider text-[var(--accent)] hover:opacity-80 transition-opacity">
                   Clear Selection
@@ -208,7 +240,7 @@ export function RtoAnalysisPage() {
             </div>
           </div>
           {rtosLoading ? (
-            <div className="h-[300px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+            <LoadingBlock className="h-[300px]" />
           ) : rtoChartData.length === 0 ? (
             <EmptyState
               variant="no-data"
@@ -216,10 +248,11 @@ export function RtoAnalysisPage() {
               description={activeDistrict ? "Try a different district, year, or clear the district filter." : "Try a different year or state."}
             />
           ) : (
+            <div role="figure" aria-label={`RTOs ranked by registrations, ${fyLabel(fyYear)}: ${rtoChartData.slice(0, 10).map((d) => `${d.name} ${d.count.toLocaleString('en-IN')}`).join(', ')}${rtoChartData.length > 10 ? `, and ${rtoChartData.length - 10} more` : ''}`}>
             <ResponsiveContainer width="100%" height={Math.max(280, rtoChartData.length * 38)}>
               <BarChart data={rtoChartData} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} tickFormatter={formatCompact} />
                 <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={200} />
                 <Tooltip formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']} contentStyle={chart.tooltipContentStyle({ fontSize: 12 })} {...chart.tooltipTextStyle} />
                 <Bar
@@ -235,6 +268,7 @@ export function RtoAnalysisPage() {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
+            </div>
           )}
         </div>
       )}
@@ -242,7 +276,7 @@ export function RtoAnalysisPage() {
       {rtoCode && (
         <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance">
           {analysisLoading ? (
-            <div className="h-[400px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+            <LoadingBlock className="h-[400px]" />
           ) : (
             <>
               <div className="flex items-center justify-between mb-4">
@@ -254,7 +288,7 @@ export function RtoAnalysisPage() {
                   <ExportCsvButton filename={`${analysis?.rto_name || rtoCode}-companies-fy${fyYear}`} rows={analysis?.makers} />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
                 <div className="rounded-xl p-4 border border-[var(--border)]" style={{ background: 'var(--bg-sunken)' }}>
                   <p className="text-[9px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-1">Total Registrations</p>
                   <p className="text-lg font-bold font-mono text-[var(--text-primary)]">{(analysis?.total || 0).toLocaleString('en-IN')}</p>
@@ -266,10 +300,12 @@ export function RtoAnalysisPage() {
                 <div className="rounded-xl p-4 border border-[var(--border)]" style={{ background: 'var(--bg-sunken)' }}>
                   <p className="text-[9px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-1">Months With Data</p>
                   <p className="text-lg font-bold font-mono text-[var(--text-primary)]">
-                    {analysis?.months_with_data || 0} / {fyMonthsElapsed(fyYear)}
+                    {analysis?.months_with_data || 0} / {fyMonthsCovered(fyYear, analysis?.last_scraped_month)}
                   </p>
                   {fyYear === CURRENT_FY && (
-                    <p className="text-[9px] text-[var(--text-muted)] font-mono mt-1">FY in progress</p>
+                    <p className="text-[9px] text-[var(--text-muted)] font-mono mt-1">
+                      FY in progress{analysis?.last_scraped_month != null ? ' · counted to the latest scraped month' : ''}
+                    </p>
                   )}
                 </div>
               </div>

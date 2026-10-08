@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { getTopMakers, getCategories, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears, getBrandOptions } from '../api/vahan';
+import { getTopMakers, getFuelBreakdown, getMakerCategoryBreakdown, getMakerFuelBreakdown, getFuelCategoryBreakdown, getAvailableYears, getBrandOptions } from '../api/vahan';
 import { estimateTripleCells } from '../utils/tripleEstimate';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { useAppStore } from '../hooks/useAppStore';
@@ -13,6 +13,9 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
 import { LiveMakerLeaderboardPanel, LiveMakerQueryPanel } from '../components/LiveMakerQueryPanel';
+import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
+import { LoadingBlock } from '../components/LoadingBlock';
+import { cyLabel, cyLongLabel, formatCompact } from '../utils/format';
 import { useScopeLock } from '../hooks/useScopeLock';
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -36,10 +39,8 @@ export function MakersModelsPage() {
   } = useAppStore();
 
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
-  const { data: categories } = useQuery({
-    queryKey: ['categories', year, month],
-    queryFn: () => getCategories({ year, month }),
-  });
+  // Picker options: shared /categories/ cache entry (see useCategoriesQuery).
+  const { data: categories } = useCategoriesQuery({ year, month, state: selectedState });
 
   // Category and Powertrain each have a real Maker cross-tab (Maker x
   // Vehicle Category, Maker x Fuel -- both year-only, no month column, see
@@ -71,16 +72,8 @@ export function MakersModelsPage() {
   // pattern within the category roughly tracks the category's aggregate
   // pattern. Clearly labeled as modeled wherever it's shown, same as
   // Overview's dual-estimate panel.
-  const { data: categoryYearTotals } = useQuery({
-    queryKey: ['makersCategoryYear', year, selectedState],
-    queryFn: ({ signal }) => getCategories({ year, month: null, state: selectedState }, signal),
-    enabled: !!selectedCategory && !!month,
-  });
-  const { data: categoryMonthTotals } = useQuery({
-    queryKey: ['makersCategoryMonth', year, month, selectedState],
-    queryFn: ({ signal }) => getCategories({ year, month, state: selectedState }, signal),
-    enabled: !!selectedCategory && !!month,
-  });
+  const { data: categoryYearTotals } = useCategoriesQuery({ year, month: null, state: selectedState }, { enabled: !!selectedCategory && !!month });
+  const { data: categoryMonthTotals } = useCategoriesQuery({ year, month, state: selectedState }, { enabled: !!selectedCategory && !!month });
   const { data: fuelYearTotals } = useQuery({
     queryKey: ['makersFuelYear', year, selectedState],
     queryFn: () => getFuelBreakdown({ year, month: null, state: selectedState }),
@@ -208,7 +201,7 @@ export function MakersModelsPage() {
   const selectClass = "bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer";
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-6">
       {makersError && (
         <ErrorBanner
           title="Couldn't load maker data"
@@ -219,13 +212,13 @@ export function MakersModelsPage() {
       <div className="animate-entrance">
         <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">Makers</h2>
         <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-          Manufacturer leaderboard — FY {year}{selectedState ? ` · ${selectedState}` : ''}
+          Manufacturer leaderboard — {cyLongLabel(year)}{selectedState ? ` · ${selectedState}` : ''}
         </p>
       </div>
 
       <div className="flex items-end gap-3 flex-wrap animate-entrance" style={{ animationDelay: '40ms' }}>
-        <LabeledSelect label="Year" value={year} onChange={(e) => setYear(Number(e.target.value))} className={selectClass}>
-          {(availableYears || [year]).map((y) => <option key={y} value={y}>{y}</option>)}
+        <LabeledSelect label="Year (calendar)" value={year} onChange={(e) => setYear(Number(e.target.value))} className={selectClass}>
+          {(availableYears || [year]).map((y) => <option key={y} value={y}>{cyLabel(y)}</option>)}
         </LabeledSelect>
         <LabeledSelect
           label="Month"
@@ -283,12 +276,12 @@ export function MakersModelsPage() {
           {tripleLoading ? (
             'Computing an estimate for Maker × Category × Fuel — no VAHAN table has this combination directly…'
           ) : tripleChartData.length === 0 ? (
-            <>No real pairwise data to estimate from for <span className="font-semibold text-[var(--accent)]">{selectedCategory}</span> × <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span> in FY {year}. Try a different year, or clear one filter for a real ranking.</>
+            <>No real pairwise data to estimate from for <span className="font-semibold text-[var(--accent)]">{selectedCategory}</span> × <span className="font-semibold text-[var(--accent)]">{fuelGroup}</span> in CY {year}. Try a different year, or clear one filter for a real ranking.</>
           ) : (
             <>
               <span className="font-semibold text-[var(--accent)]">Estimated</span> — no VAHAN table pivots on Maker × Category × Fuel together, so this ranking is modeled from the three real pairwise cross-tabs (Maker×{selectedCategory}, Maker×{fuelGroup}, {selectedCategory}×{fuelGroup}) using a standard statistical technique for reconstructing a 3-way total from 2-way margins. It assumes each maker's {fuelGroup} share within {selectedCategory} doesn't diverge from what these three real numbers already imply — treat as a rough approximation, not an observed count.
               {tripleMonthApplied && (
-                <> A second layer of modeling is stacked on top for {MONTH_NAMES[month! - 1]}: the FY estimate above is further prorated by {selectedCategory}'s own real month-share of its year total ({(monthRatio! * 100).toFixed(1)}%) — two independent approximations compounded, treat this month-level number with extra caution.</>
+                <> A second layer of modeling is stacked on top for {MONTH_NAMES[month! - 1]}: the year estimate above is further prorated by {selectedCategory}'s own real month-share of its year total ({(monthRatio! * 100).toFixed(1)}%) — two independent approximations compounded, treat this month-level number with extra caution.</>
               )}
             </>
           )}
@@ -297,12 +290,12 @@ export function MakersModelsPage() {
         <div className={`bg-[var(--bg-card)] border rounded-xl px-4 py-2.5 text-xs text-[var(--text-secondary)] animate-entrance ${isEstimated ? 'border-dashed border-[var(--border)]' : 'border-[var(--border)]'}`}>
           {isEstimated ? (
             <>
-              <span className="font-semibold text-[var(--accent)]">Estimated</span> — Maker × {selectedCategory || fuelGroup} has no real data for {MONTH_NAMES[month! - 1]}, VAHAN only gives a year total for this combo. Every maker's FY {year} count below is prorated by {selectedCategory || fuelGroup}'s own real month-share of its year total ({(monthRatio! * 100).toFixed(1)}%) — modeled, not observed.
+              <span className="font-semibold text-[var(--accent)]">Estimated</span> — Maker × {selectedCategory || fuelGroup} has no real data for {MONTH_NAMES[month! - 1]}, VAHAN only gives a year total for this combo. Every maker's CY {year} count below is prorated by {selectedCategory || fuelGroup}'s own real month-share of its year total ({(monthRatio! * 100).toFixed(1)}%) — modeled, not observed.
             </>
           ) : month && (selectedCategory || fuelGroup) ? (
-            <>Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory || fuelGroup}</span> registrations for FY {year} — no data yet to estimate {MONTH_NAMES[month - 1]}, showing the year total instead.</>
+            <>Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory || fuelGroup}</span> registrations for CY {year} — no data yet to estimate {MONTH_NAMES[month - 1]}, showing the year total instead.</>
           ) : (
-            <>Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory || fuelGroup}</span> registrations for FY {year} — a year total. Pick a month above for an estimated month-level breakdown.</>
+            <>Ranked by <span className="font-semibold text-[var(--accent)]">{selectedCategory || fuelGroup}</span> registrations for CY {year} — a year total. Pick a month above for an estimated month-level breakdown.</>
           )}
         </div>
       )}
@@ -314,7 +307,7 @@ export function MakersModelsPage() {
         <div className="bg-[var(--bg-card)] border-2 border-[var(--danger,#dc2626)] rounded-xl px-4 py-3 text-xs text-[var(--text-primary)] animate-entrance">
           <span className="font-bold text-[var(--danger,#dc2626)]">Understated:</span>{' '}
           {partialMakers.join(', ')} — {partialMakers.length === 1 ? 'this maker is' : 'these makers are'}{' '}
-          recorded in far fewer RTOs for FY {year} than they normally cover, so the{' '}
+          recorded in far fewer RTOs for CY {year} than they normally cover, so the{' '}
           {partialMakers.length === 1 ? 'bar is' : 'bars are'} too low and the ranking is affected.
           Awaiting a re-scrape of this year.
         </div>
@@ -355,21 +348,21 @@ export function MakersModelsPage() {
                     (m: { maker: string; count: number }) => m.maker === d.name,
                   )?.count,
                   [`estimated_${MONTH_NAMES[month! - 1].toLowerCase()}_${year}`]: d.count,
-                  note: 'estimated month count is modeled from the FY total, not observed data',
+                  note: 'estimated month count is modeled from the year total, not observed data',
                 }))
               : makers}
           />
         </div>
         {comboImpossible ? (
           tripleLoading ? (
-            <div className="h-[420px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+            <LoadingBlock className="h-[420px]" />
           ) : tripleChartData.length === 0 ? (
             <EmptyState variant="no-data" title="No estimate available" description="Not enough overlapping real data between the two cross-tabs for this year/state to model a ranking." />
           ) : (
             <ResponsiveContainer width="100%" height={Math.max(280, tripleChartData.length * 38)}>
               <BarChart data={tripleChartData} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} tickFormatter={formatCompact} />
                 <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
                 <Tooltip
                   formatter={(val: number) => [`~${val.toLocaleString('en-IN')}`, 'Estimated registrations']}
@@ -385,18 +378,18 @@ export function MakersModelsPage() {
             </ResponsiveContainer>
           )
         ) : makersLoading ? (
-          <div className="h-[420px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          <LoadingBlock className="h-[420px]" />
         ) : makerChartData.length === 0 ? (
           <EmptyState
             variant="no-data"
-            title={`No maker data for FY ${year}${selectedCategory ? ` / ${selectedCategory}` : ''}${fuelGroup ? ` / ${fuelGroup}` : ''}`}
+            title={`No maker data for CY ${year}${selectedCategory ? ` / ${selectedCategory}` : ''}${fuelGroup ? ` / ${fuelGroup}` : ''}`}
             description="Try a different year."
           />
         ) : (
           <ResponsiveContainer width="100%" height={Math.max(280, makerChartData.length * 38)}>
             <BarChart data={makerChartData} layout="vertical" margin={{ right: 48 }}>
               <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+              <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} tickFormatter={formatCompact} />
               <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} />
               <Tooltip
                 formatter={(val: number) => [`${isEstimated ? '~' : ''}${val.toLocaleString('en-IN')}`, isEstimated ? 'Estimated registrations' : 'Registrations']}

@@ -46,10 +46,13 @@ export const compareStates = (state_a: string, state_b?: string, year?: number, 
   api.get('/comparison/states', { params: { state_a, state_b, year, vehicle_category, fuel_group } }).then(r => r.data);
 export const getYoYMonthly = (year_a: number, year_b: number, state?: string, start_month?: number, end_month?: number, vehicle_category?: string | null) =>
   api.get('/yoy/monthly', { params: { year_a, year_b, state, start_month, end_month, vehicle_category } }).then(r => r.data);
-export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number, vehicle_category?: string | null) =>
-  api.get('/yoy/summary', { params: { year_a, year_b, start_month, end_month, vehicle_category } }).then(r => r.data);
+export const getYoYSummary = (year_a: number, year_b: number, start_month?: number, end_month?: number, vehicle_category?: string | null, state?: string) =>
+  api.get('/yoy/summary', { params: { year_a, year_b, start_month, end_month, vehicle_category, state } }).then(r => r.data);
+// /categories/ is the one known-slow aggregate (12-19 s cold all-India, see
+// docs/review). 30 s cut it off right at the edge, after which the old retry
+// policy fired it again from scratch; 60 s lets the first request finish.
 export const getCategories = (params?: FilterParams, signal?: AbortSignal) =>
-  api.get('/categories/', { params, signal }).then(r => r.data);
+  api.get('/categories/', { params, signal, timeout: 60000 }).then(r => r.data);
 export const getTopMakers = (params?: FilterParams & { limit?: number }, signal?: AbortSignal) =>
   api.get('/categories/top-makers', { params, signal }).then(r => r.data);
 export const getFuelBreakdown = (params?: FilterParams) =>
@@ -65,6 +68,9 @@ export interface SourceStatus {
   detail: string;
   checked_at: string;
   down_since: string | null;
+  // Newer backends retry a failed probe before calling a source down and
+  // report how many checks in a row failed. Optional: older ones omit it.
+  consecutive_failures?: number;
 }
 // Admin-only hourly check of both VAHAN sites -- backend app/services/source_health.py.
 export const getSourceHealth = () =>
@@ -123,6 +129,11 @@ export const getLiveMakerQuery = (params: { state_code: string; year: number; ma
     fuel: string | null;
     rto: string | null;
     records: { month: number; category: string; count: number }[];
+    // 'live' = scraped from the source site just now / from the live cache;
+    // 'stored' = answered from data already in our tables (as_of = when that
+    // data was scraped). Both optional: older backends send neither.
+    source?: 'live' | 'stored' | string;
+    as_of?: string | null;
   });
 
 // Our own rto_codes the source site actually lists for this state -- only
@@ -142,6 +153,8 @@ export const getLiveMakerLeaderboard = (params: { state_code: string; year: numb
     year: number;
     fuel: string | null;
     makers: { maker: string; total: number }[];
+    source?: 'live' | 'stored' | string;
+    as_of?: string | null;
   });
 
 // Real maker names matching `q`, straight from the source site -- lets the

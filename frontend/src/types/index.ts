@@ -111,4 +111,8 @@ export interface RTOAnalysis {
   // served from the calendar-year category crosstab, which can't be cut to
   // an Apr-Mar financial year. Optional: older responses omit it.
   maker_period?: 'financial_year' | 'calendar_years_spanned';
+  // Latest month (1-12, calendar) with scraped data in this FY window, so
+  // "Months with data" isn't measured against months not yet scraped.
+  // Optional: older backends omit it and the wall-clock fallback applies.
+  last_scraped_month?: number | string | null;
 }

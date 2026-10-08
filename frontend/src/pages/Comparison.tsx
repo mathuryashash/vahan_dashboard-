@@ -2,7 +2,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, TooltipProps } from 'recharts';
 import { useState, useEffect } from 'react';
-import { getStatesComparison, compareStates, getCategories, getStates } from '../api/vahan';
+import { getStatesComparison, compareStates, getStates } from '../api/vahan';
+import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
+import { LoadingBlock } from '../components/LoadingBlock';
+import { formatCompact, cyLabel, cyLongLabel } from '../utils/format';
 import { useAppStore } from '../hooks/useAppStore';
 import { useScopeLock } from '../hooks/useScopeLock';
 import { useChartTheme } from '../hooks/useChartTheme';
@@ -53,14 +56,16 @@ export function ComparisonPage() {
   }, [selectedState]);
 
   const setStateA = (value: string) => {
+    // Picking B's state as A (e.g. from the ranked tiles) swaps the pair
+    // rather than producing a state-vs-itself comparison.
+    if (value === stateB) setStateB(stateA);
     setStateALocal(value);
     setSelectedState(value);
   };
 
-  const { data: categories } = useQuery({
-    queryKey: ['categories', selectedYear],
-    queryFn: () => getCategories({ year: selectedYear }),
-  });
+  // Shared /categories/ cache entry (all-India, whole year) -- the same one
+  // Categories/YoY-era pages use, so switching tabs doesn't re-run it.
+  const { data: categories } = useCategoriesQuery({ year: selectedYear });
 
   // Category x Powertrain can never be answered from the raw Registration
   // table: the vehicle_class-dimension pass is the only one carrying a real
@@ -71,7 +76,7 @@ export function ComparisonPage() {
   // -- the sections they feed are hidden instead of rendering zeros.
   const comboImpossible = !!(selectedCategory && fuelGroup);
 
-  const { data: allStates } = useQuery({
+  const { data: allStates, isLoading: allStatesLoading } = useQuery({
     queryKey: ['states', selectedYear, selectedCategory, fuelGroup],
     queryFn: () => getStatesComparison(selectedYear, 36, selectedCategory, fuelGroup),
     enabled: !comboImpossible,
@@ -84,14 +89,20 @@ export function ComparisonPage() {
   // /states/ is scope-clamped server-side the same way, so a state-locked
   // user still can't pick someone else's state.
   const { data: pickerStates } = useQuery({
-    queryKey: ['states-all'],
+    // Same key Overview/RtoAnalysis use for this endpoint.
+    queryKey: ['states'],
     queryFn: getStates,
   });
 
-  const { data: comparison, isError: comparisonError, refetch: refetchComparison } = useQuery({
+  // Comparing a state with itself renders two identical bars and reads as a
+  // real (if dull) answer. Blocked at the picker (each side's option list
+  // omits the other side's state) and, for a URL/store-driven collision,
+  // the query doesn't fire and the page says why.
+  const sameState = stateA === stateB;
+  const { data: comparison, isLoading: comparisonLoading, isError: comparisonError, refetch: refetchComparison } = useQuery({
     queryKey: ['compare', stateA, stateB, selectedYear, selectedCategory, fuelGroup],
     queryFn: () => compareStates(stateA, stateB, selectedYear, selectedCategory, fuelGroup),
-    enabled: !!stateA && !comboImpossible,
+    enabled: !!stateA && !comboImpossible && !sameState,
   });
 
   const stateOptions = (allStates || []).map((s: { state_name: string }) => s.state_name);
@@ -99,7 +110,8 @@ export function ComparisonPage() {
   // Until the list arrives (or if it somehow omits the current selection), the
   // selected value is still its own option -- a <select> can't display a value
   // that isn't one of its options, which is what used to render blank.
-  const optionsFor = (value: string) => (pickerOptions.includes(value) ? pickerOptions : [value, ...pickerOptions]);
+  const optionsFor = (value: string, other: string) =>
+    (pickerOptions.includes(value) ? pickerOptions : [value, ...pickerOptions]).filter((o) => o === value || o !== other);
   // Merged on the MONTH, never on array position. Each state's series comes
   // from its own GROUP BY and only contains months that have rows, so if B
   // is missing any month A has, a positional merge shifts every later B
@@ -126,7 +138,7 @@ export function ComparisonPage() {
   const colorB = chart.seriesColor(stateB);
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-3 sm:p-6 space-y-5">
       {comparisonError && (
         <ErrorBanner
           title="Couldn't load comparison data"
@@ -138,7 +150,7 @@ export function ComparisonPage() {
         <div className="animate-entrance">
           <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">State Comparison</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-            Cross-state registration analysis — FY {selectedYear}
+            Cross-state registration analysis — {cyLongLabel(selectedYear)}
             {selectedCategory ? ` · ${selectedCategory}` : ''}
             {fuelGroup ? ` · ${fuelGroup}` : ''}
           </p>
@@ -190,8 +202,8 @@ export function ComparisonPage() {
       </div>
 
       <div className={`grid grid-cols-1 gap-4 animate-entrance ${comboImpossible ? 'md:grid-cols-2' : 'md:grid-cols-3'}`} style={{ animationDelay: '40ms' }}>
-        {[{ label: 'State A', value: stateA, setter: setStateA },
-          { label: 'State B', value: stateB, setter: setStateB },
+        {[{ label: 'State A', value: stateA, other: stateB, setter: setStateA },
+          { label: 'State B', value: stateB, other: stateA, setter: setStateB },
         ].map((s) => (
           <div key={s.label} className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-4">
             <LabeledSelect
@@ -200,7 +212,7 @@ export function ComparisonPage() {
               onChange={(e) => s.setter(e.target.value)}
               className="w-full bg-[var(--bg-sunken)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm font-semibold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)] transition-colors"
             >
-              {optionsFor(s.value).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              {optionsFor(s.value, s.other).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
             </LabeledSelect>
           </div>
         ))}
@@ -212,7 +224,7 @@ export function ComparisonPage() {
             <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">States Active</p>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full" style={{ background: 'var(--success)' }} />
-              <span className="font-mono text-[var(--text-primary)] font-bold">{stateOptions.length} / 36</span>
+              <span className="font-mono text-[var(--text-primary)] font-bold">{allStatesLoading ? '…' : `${stateOptions.length} / 36`}</span>
             </div>
           </div>
         )}
@@ -255,7 +267,13 @@ export function ComparisonPage() {
         </div>
       )}
 
-      {!comboImpossible && (
+      {!comboImpossible && sameState && (
+        <div role="status" className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] px-4 py-3 text-xs text-[var(--text-secondary)]">
+          State A and State B are both <span className="font-semibold">{stateA}</span> — pick a different state for B to compare.
+        </div>
+      )}
+
+      {!comboImpossible && !sameState && (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-entrance" style={{ animationDelay: '80ms' }}>
         {[{
           label: stateA, total: totalA, color: colorA,
@@ -271,32 +289,42 @@ export function ComparisonPage() {
               <div className="w-3 h-3 rounded-full" style={{ background: card.color }} />
               <span className="text-xs font-semibold text-[var(--text-secondary)]">{card.label}</span>
             </div>
-            <div className="number-display text-2xl font-bold text-[var(--text-primary)] mb-1">{card.total?.toLocaleString('en-IN') || 0}</div>
+            {/* A skeleton while loading -- the old `|| 0` printed a confident
+                "0" for both states until the request came back. */}
+            {comparisonLoading ? (
+              <div className="h-8 w-32 rounded bg-[var(--bg-sunken)] animate-pulse-soft mb-1" />
+            ) : (
+              <div className="number-display text-2xl font-bold text-[var(--text-primary)] mb-1 break-words">{(card.total ?? 0).toLocaleString('en-IN')}</div>
+            )}
             <p className="text-[11px] text-[var(--text-muted)] font-mono">
-              Total registrations FY {selectedYear}
+              Total registrations {cyLabel(selectedYear)}
             </p>
           </div>
         ))}
       </div>
       )}
 
-      {!comboImpossible && (
+      {!comboImpossible && !sameState && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '120ms' }}>
-        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">{stateA} vs {stateB} — Monthly</h3>
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">{stateA} vs {stateB} — Monthly, {cyLabel(selectedYear)}</h3>
+        {comparisonLoading ? <LoadingBlock className="h-[280px]" /> : (
+        <div role="img" aria-label={`${stateA} vs ${stateB} monthly registrations, ${cyLabel(selectedYear)}: total ${totalA.toLocaleString('en-IN')} vs ${totalB.toLocaleString('en-IN')}`}>
         <ResponsiveContainer width="100%" height={280}>
           <BarChart data={merged} layout="vertical" barGap={6} margin={{ right: 40 }}>
             <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
-            <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${(v/1000).toFixed(0)}K`} />
+            <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} tickFormatter={formatCompact} />
             <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} axisLine={false} tickLine={false} width={36} />
             <Tooltip content={<StateTooltip chart={chart} />} />
             <Bar dataKey={stateA} fill={colorA} radius={[0, 3, 3, 0]} maxBarSize={16}>
-              <LabelList dataKey={stateA} position="right" formatter={(v: number) => `${(v / 1000).toFixed(0)}K`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+              <LabelList dataKey={stateA} position="right" formatter={formatCompact} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
             </Bar>
             <Bar dataKey={stateB} fill={colorB} radius={[0, 3, 3, 0]} maxBarSize={16}>
-              <LabelList dataKey={stateB} position="right" formatter={(v: number) => `${(v / 1000).toFixed(0)}K`} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
+              <LabelList dataKey={stateB} position="right" formatter={formatCompact} style={{ fill: chart.axisText, fontSize: 9, fontFamily: 'JetBrains Mono' }} />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
+        </div>
+        )}
         <div className="flex items-center justify-center gap-6 mt-3 text-[11px] font-mono">
           <span style={{ color: colorA }}>{stateA}</span>
           <span style={{ color: colorB }}>{stateB}</span>
@@ -306,7 +334,8 @@ export function ComparisonPage() {
 
       {!comboImpossible && (
       <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] p-5 animate-entrance" style={{ animationDelay: '160ms' }}>
-        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">All States — Ranked</h3>
+        <h3 className="text-sm font-bold text-[var(--text-primary)] tracking-tight mb-4">All States — Ranked, {cyLabel(selectedYear)}</h3>
+        {allStatesLoading ? <LoadingBlock className="h-40" /> : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           {(allStates || []).map((s: { state_name: string; count: number; share_percent: number }, i: number) => (
             <button
@@ -332,6 +361,7 @@ export function ComparisonPage() {
             </button>
           ))}
         </div>
+        )}
       </div>
       )}
     </div>

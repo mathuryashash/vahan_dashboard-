@@ -1,8 +1,11 @@
 // frontend/src/pages/CategoryDetail.tsx
 import { useQuery } from '@tanstack/react-query';
-import { Navigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { PieChart, Pie, Cell, BarChart, Bar, LabelList, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { getTopMakers, getFuelBreakdown, getCategories } from '../api/vahan';
+import { getTopMakers, getFuelBreakdown } from '../api/vahan';
+import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
+import { LoadingBlock } from '../components/LoadingBlock';
+import { cyLongLabel, formatCompact } from '../utils/format';
 import { useAppStore } from '../hooks/useAppStore';
 import { useScopeLock } from '../hooks/useScopeLock';
 import { ArrowLeft } from '../components/Icons';
@@ -18,6 +21,11 @@ import { insidePieLabel, TruncatedYAxisTick } from '../components/ChartAxisTick'
 // scraper_service.persist_rto_batch). There is no cross-tab of maker/fuel by
 // vehicle class in the source data for live-scraped years, so this is a real
 // data-source gap, not a bug to route around with estimated numbers.
+// The stored vehicle_category values (full words, see query_filters.py).
+// A slug outside this set (and outside whatever /categories/ returned) is a
+// typo or a stale link, not a category with no data.
+export const KNOWN_CATEGORIES = ['Two-Wheeler', 'Three-Wheeler', 'Four-Wheeler', 'Commercial Vehicle', 'Other'];
+
 const NO_CROSS_TAB_MESSAGE =
   "VAHAN's live reports can't cross-tabulate this against a vehicle category in one export -- this breakdown isn't available for this category yet.";
 
@@ -25,47 +33,81 @@ export function CategoryDetailPage() {
   const { vehicleClass } = useParams<{ vehicleClass: string }>();
   const decoded = decodeURIComponent(vehicleClass || '');
   const { selectedYear, selectedState } = useAppStore();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { lockedCategory } = useScopeLock();
   const chart = useChartTheme();
 
   // Same shared-filter fix as Categories.tsx -- these three queries ignored
   // selectedState, so drilling into a category after picking a state showed
   // national numbers under a state-filtered header.
-  const { data: cats } = useQuery({
-    queryKey: ['categories', selectedYear, selectedState],
-    queryFn: () => getCategories({ year: selectedYear, state: selectedState || undefined }),
-  });
+  const { data: cats, isLoading: catsLoading } = useCategoriesQuery({ year: selectedYear, state: selectedState });
 
-  const currentCat = (cats || []).find((c: { vehicle_category: string }) => c.vehicle_category === decoded);
+  const currentCat = (cats || []).find((c) => c.vehicle_category === decoded);
+  const isKnownCategory = KNOWN_CATEGORIES.includes(decoded) || (cats || []).some((c) => c.vehicle_category === decoded);
 
   const { data: makers, isLoading: makersLoading, isError: makersError, refetch: refetchMakers } = useQuery({
     queryKey: ['makers', decoded, selectedYear, selectedState],
     queryFn: () => getTopMakers({ vehicle_category: decoded, year: selectedYear, state: selectedState || undefined }),
-    enabled: !!decoded,
+    enabled: !!decoded && isKnownCategory && !(lockedCategory && decoded !== lockedCategory),
   });
 
   const { data: fuel, isLoading: fuelLoading } = useQuery({
     queryKey: ['fuel', decoded, selectedYear, selectedState],
     queryFn: () => getFuelBreakdown({ vehicle_category: decoded, year: selectedYear, state: selectedState || undefined }),
-    enabled: !!decoded,
+    enabled: !!decoded && isKnownCategory && !(lockedCategory && decoded !== lockedCategory),
   });
 
   const totalFuelCount = (fuel || []).reduce((sum: number, f: { count: number }) => sum + f.count, 0);
 
   // The server answers a scoped account with its OWN segment whatever the
   // URL says, which rendered one segment's data under another's heading.
+  // A category-scoped account asking for another segment: the server would
+  // answer with its OWN segment's data (scope clamp), which rendered one
+  // segment's numbers under another's heading. Send it to its own category,
+  // carrying a flag so the destination can say why.
   if (lockedCategory && decoded !== lockedCategory) {
-    return <Navigate to={`/categories/${encodeURIComponent(lockedCategory)}`} replace />;
+    return (
+      <Navigate
+        to={`/categories/${encodeURIComponent(lockedCategory)}${location.search}`}
+        replace
+        state={{ notInPlan: decoded }}
+      />
+    );
   }
 
+  // B11: an unknown slug used to render an empty detail page that looked
+  // like a real category with no data.
+  if (!isKnownCategory) {
+    return (
+      <div className="p-3 sm:p-6">
+        <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border)] animate-entrance" data-testid="category-not-found">
+          <EmptyState
+            variant="search"
+            title="Unknown category"
+            description={`"${decoded}" isn't a vehicle category in this dashboard. Categories are: ${KNOWN_CATEGORIES.join(', ')}.`}
+            action={{ label: 'Back to Categories', onClick: () => navigate(`/categories${location.search}`) }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const notInPlan = (location.state as { notInPlan?: string } | null)?.notInPlan;
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-6">
       {makersError && (
         <ErrorBanner
           title="Couldn't load maker data"
           description="The request to the server failed. Check your connection and try again."
           action={{ label: 'Retry', onClick: () => refetchMakers() }}
         />
+      )}
+      {notInPlan && (
+        <div role="status" className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] px-4 py-3 text-xs text-[var(--text-secondary)]" data-testid="not-in-plan">
+          <span className="font-semibold">{notInPlan}</span> is not in your plan — your account covers {lockedCategory} only, shown below.
+        </div>
       )}
       <div className="animate-entrance">
         <Link to="/categories" className="inline-flex items-center gap-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] font-mono mb-3 transition-colors">
@@ -77,7 +119,7 @@ export function CategoryDetailPage() {
           <div>
             <h2 className="text-xl font-bold text-[var(--text-primary)] tracking-tight">{decoded}</h2>
             <p className="text-[10px] text-[var(--text-muted)] mt-0.5 font-mono uppercase tracking-widest">
-              {selectedYear} · {currentCat?.total_count?.toLocaleString('en-IN') || 0} registrations
+              {cyLongLabel(selectedYear)}{selectedState ? ` · ${selectedState}` : ' · All India'} · {catsLoading ? '…' : (currentCat?.total_count ?? 0).toLocaleString('en-IN')} registrations
               {currentCat?.yoy_growth != null && (
                 <span className="ml-2 font-mono font-bold" style={{ color: (currentCat.yoy_growth as number) >= 0 ? chart.success : chart.danger }}>
                   {((currentCat.yoy_growth as number) >= 0 ? '+' : '')}{currentCat.yoy_growth?.toFixed(1)}% YoY
@@ -96,7 +138,7 @@ export function CategoryDetailPage() {
           </div>
         </div>
         {makersLoading ? (
-          <div className="h-[280px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          <LoadingBlock className="h-[280px]" slowMessage="Per-category maker and fuel breakdowns can take several seconds." />
         ) : (makers || []).length === 0 ? (
           <EmptyState title="No Maker Breakdown" description={NO_CROSS_TAB_MESSAGE} variant="no-data" className="py-8" />
         ) : (
@@ -107,7 +149,7 @@ export function CategoryDetailPage() {
             <ResponsiveContainer width="100%" height={Math.max(280, (makers || []).length * 38)}>
               <BarChart data={(makers || []).map((m: { maker: string; count: number }) => ({ name: m.maker, count: m.count }))} layout="vertical" margin={{ right: 48 }}>
                 <CartesianGrid strokeDasharray="1 2" stroke={chart.grid} horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: chart.axisText, fontFamily: 'JetBrains Mono' }} tickFormatter={formatCompact} />
                 <YAxis dataKey="name" type="category" tick={(props) => <TruncatedYAxisTick {...props} fill={chart.axisText} />} width={220} interval={0} />
                 <Tooltip
                   formatter={(val: number) => [val.toLocaleString('en-IN'), 'Registrations']}
@@ -142,7 +184,7 @@ export function CategoryDetailPage() {
           </span>
         </div>
         {fuelLoading ? (
-          <div className="h-[280px] rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
+          <LoadingBlock className="h-[280px]" slowMessage="Per-category maker and fuel breakdowns can take several seconds." />
         ) : (fuel || []).length === 0 ? (
           <EmptyState title="No Fuel Breakdown" description={NO_CROSS_TAB_MESSAGE} variant="no-data" className="py-8" />
         ) : (

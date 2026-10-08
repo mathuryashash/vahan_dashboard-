@@ -1,10 +1,25 @@
 // Exports the full row objects a page already has in memory -- every field
 // the API returned (share_percent, yoy_growth, etc.), not just what's shown
 // on screen, so the CSV carries the same computed metrics visible in the UI.
-function escapeCsvCell(value: unknown): string {
+//
+// CSV/formula injection (B14): a spreadsheet treats a cell starting with
+// = + - @ (or a tab / carriage return before one) as a formula. Maker and
+// model names come from a scraped third-party site, so a value like
+// `=HYPERLINK("http://evil","x")` must open as text. Such STRING cells get a
+// leading single quote (OWASP's recommendation). Real numbers are left
+// alone -- a negative yoy_growth of -5.2 must stay a number, not '-5.2.
+const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+
+export function neutraliseFormula(value: unknown): string {
   if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'boolean') return String(value);
   const str = String(value);
-  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+  return FORMULA_PREFIX.test(str) ? `'${str}` : str;
+}
+
+export function escapeCsvCell(value: unknown): string {
+  const str = neutraliseFormula(value);
+  return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
 
 export function downloadCsv(filename: string, rows: Record<string, unknown>[]) {

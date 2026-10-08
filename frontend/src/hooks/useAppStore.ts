@@ -10,6 +10,9 @@ interface AppState {
   comparisonYearA: number;
   comparisonYearB: number;
   sidebarCollapsed: boolean;
+  /** Below the md breakpoint the sidebar is an off-canvas drawer. */
+  mobileNavOpen: boolean;
+  setMobileNavOpen: (open: boolean) => void;
   setSelectedYear: (year: number) => void;
   setSelectedMonth: (month: number | null) => void;
   setSelectedState: (state: string | null) => void;
@@ -30,6 +33,8 @@ export const useAppStore = create<AppState>((set) => ({
   comparisonYearA: new Date().getFullYear() - 1,
   comparisonYearB: new Date().getFullYear(),
   sidebarCollapsed: false,
+  mobileNavOpen: false,
+  setMobileNavOpen: (open) => set({ mobileNavOpen: open }),
   setSelectedYear: (year) => set({ selectedYear: year }),
   setSelectedMonth: (month) => set({ selectedMonth: month }),
   setSelectedState: (state) => set({ selectedState: state }),

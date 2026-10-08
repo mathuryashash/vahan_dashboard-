@@ -5,6 +5,8 @@ import { useEffect, useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import type { RefreshStatus, ScrapeProgress } from '../types';
 import type { AuthUser } from '../api/auth';
+import { Menu } from './Icons';
+import { useAppStore } from '../hooks/useAppStore';
 
 const INTEGRITY_COLOR: Record<'green' | 'amber' | 'red', string> = {
   green: 'var(--success)',
@@ -61,21 +63,37 @@ function SourceHealthAlert() {
     refetchInterval: 5 * 60 * 1000,
   });
   if (!data) return null;
-  const down = Object.entries(data).filter(([, s]) => !s.ok);
-  if (!down.length) return null;
+  // A single failed probe is not an outage: newer backends re-check before
+  // declaring a source down and report `consecutive_failures`. With exactly
+  // one failure the pill says "check failed, retrying" in amber instead of a
+  // red "down" that a transient blip used to raise. Older backends omit the
+  // field and keep the original behaviour.
+  const flagged = Object.entries(data).filter(([, s]) => !s.ok || (s.consecutive_failures ?? 0) >= 1);
+  if (!flagged.length) return null;
   return (
     <>
-      {down.map(([name, s]) => (
-        <div
-          key={name}
-          role="alert"
-          className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest font-bold text-[var(--danger)]"
-          title={`${s.detail}${s.down_since ? ` — down since ${new Date(s.down_since).toLocaleString('en-IN')}` : ''}. Scrapes that depend on it will fail.`}
-        >
-          <div className="w-2 h-2 rounded-full animate-pulse-soft" style={{ background: 'var(--danger)' }} />
-          {SOURCE_LABEL[name] ?? name} down
-        </div>
-      ))}
+      {flagged.map(([name, s]) => {
+        const retrying = s.consecutive_failures === 1;
+        const label = SOURCE_LABEL[name] ?? name;
+        const tooltip = retrying
+          ? `${label}: check failed, retrying — one probe failed (${s.detail}); it is re-checked before being reported down.`
+          : `${s.detail}${s.down_since ? ` — down since ${new Date(s.down_since).toLocaleString('en-IN')}` : ''}${s.consecutive_failures ? ` (${s.consecutive_failures} checks failed in a row)` : ''}. Scrapes that depend on it will fail.`;
+        const color = retrying ? 'var(--warning, #d97706)' : 'var(--danger)';
+        return (
+          <div
+            key={name}
+            role={retrying ? 'status' : 'alert'}
+            className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest font-bold"
+            style={{ color }}
+            title={tooltip}
+            aria-label={tooltip}
+            data-testid={`source-health-${name}`}
+          >
+            <div className="w-2 h-2 rounded-full animate-pulse-soft" style={{ background: color }} />
+            {label} {retrying ? 'check failed, retrying' : 'down'}
+          </div>
+        );
+      })}
       <div className="w-px h-5 bg-[var(--border)]" />
     </>
   );
@@ -104,6 +122,8 @@ const SCOPE_LABEL: Record<AuthUser['scope_type'], (auth: AuthUser) => string> = 
 export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, onLogout }: HeaderProps) {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
+  const mobileNavOpen = useAppStore((s) => s.mobileNavOpen);
+  const setMobileNavOpen = useAppStore((s) => s.setMobileNavOpen);
 
   const status = refreshStatus?.status ?? 'idle';
   const lastUpdated = refreshStatus?.last_updated ?? null;
@@ -138,16 +158,26 @@ export function Header({ refreshStatus, statusUpdatedAt, scrapeProgress, auth, o
   };
 
   return (
-    <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-surface)] flex items-center justify-between px-6 shrink-0">
-      <div className="flex items-center gap-3">
-        <img src="/company-logo.png" alt="Grydence" className="w-8 h-8 rounded-lg object-cover" />
-        <div>
+    <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-surface)] flex items-center justify-between gap-2 px-3 md:px-6 shrink-0">
+      <div className="flex items-center gap-3 min-w-0">
+        <button
+          type="button"
+          className="md:hidden p-1.5 -ml-1 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]"
+          aria-label="Open navigation"
+          aria-controls="app-sidebar"
+          aria-expanded={mobileNavOpen}
+          onClick={() => setMobileNavOpen(true)}
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <img src="/company-logo.png" alt="Grydence" className="w-8 h-8 rounded-lg object-cover hidden sm:block" />
+        <div className="hidden sm:block">
           <h1 className="text-sm font-bold text-[var(--text-primary)] tracking-tight">GRYDENCE</h1>
           <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-widest">Market Intelligence &amp; MIS</p>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 md:gap-3 min-w-0 overflow-x-auto">
         {auth.role === 'admin' && <SourceHealthAlert />}
         <DataIntegrityBadge />
         <div className="w-px h-5 bg-[var(--border)]" />
