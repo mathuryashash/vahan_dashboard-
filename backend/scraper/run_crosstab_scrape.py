@@ -10,6 +10,7 @@ Usage: python -m scraper.run_crosstab_scrape --dimension maker_category [--year 
 """
 import argparse
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,7 +23,7 @@ pool_sizing.serial()  # before any app.* import -- see that module's docstring
 from sqlalchemy import select  # noqa: E402
 
 from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
-from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.core.scrape_lock import exit_if_run_lock_busy, scrape_run_lock, scrape_write_lock  # noqa: E402
 from app.models.models import FuelCategoryTotal, MakerCategoryTotal, MakerFuelTotal  # noqa: E402
 from app.services.scraper_service import (  # noqa: E402
     _state_code_lookup, persist_fuel_category_batch, persist_maker_category_batch, persist_maker_fuel_batch,
@@ -65,13 +66,24 @@ async def _already_done_rtos(db, model, year: int) -> dict[str, frozenset[str]]:
     return {state_name: frozenset(codes) for state_name, codes in done.items()}
 
 
-async def main(dimension: str, year: int, force: bool = False) -> None:
+async def main(dimension: str, year: int, force: bool = False,
+               only_rtos: dict[str, frozenset[str]] | None = None) -> None:
+    async with scrape_run_lock(engine, f"run_crosstab_scrape {dimension} {year}"):
+        await _main(dimension, year, force or only_rtos is not None, only_rtos)
+
+
+async def _main(dimension: str, year: int, force: bool, only_rtos: dict[str, frozenset[str]] | None,
+                take_write_lock: bool = True) -> int:
+    """Returns RTOs persisted. take_write_lock=False only for a caller that
+    already holds `<table>:<year>` itself and runs several RTO partitions of
+    the same table-year concurrently (scraper.run_targeted_scrape)."""
     dim = _DIMENSIONS[dimension]
     logger.info("Starting %s scrape (year=%s, force=%s) at %s", dim.label, year, force, datetime.now(timezone.utc))
     await init_db()
 
     lock_key = f"{dim.model.__tablename__}:{year}"
-    async with scrape_write_lock(engine, lock_key), AsyncSessionLocal() as db:
+    write_lock = scrape_write_lock(engine, lock_key) if take_write_lock else contextlib.nullcontext()
+    async with write_lock, AsyncSessionLocal() as db:
         state_codes = await _state_code_lookup(db)
         skip_rtos = {} if force else await _already_done_rtos(db, dim.model, year)
         if skip_rtos:
@@ -79,7 +91,8 @@ async def main(dimension: str, year: int, force: bool = False) -> None:
             logger.info("Resuming: %d RTOs across %d states already scraped this run", total_skipped, len(skip_rtos))
 
         rto_count = 0
-        async for item in dim.scrape(year=year, skip_rtos=skip_rtos):
+        extra = {} if only_rtos is None else {"only_rtos": only_rtos}
+        async for item in dim.scrape(year=year, skip_rtos=skip_rtos, **extra):
             if item.get("state_complete"):
                 state_name = item["state_name"]
                 total, skipped, succeeded = item["rto_total"], item["rto_skipped"], item["rto_succeeded"]
@@ -87,6 +100,12 @@ async def main(dimension: str, year: int, force: bool = False) -> None:
                 continue
 
             batch = item
+            if not batch["records"]:
+                # persist_* is delete-then-insert: an empty answer would wipe
+                # the RTO-year's existing rows with nothing to replace them.
+                # Empty is not evidence (see vahan_scraper._scrape_state).
+                logger.warning("%s / %s: empty answer -- existing rows kept", batch["state_name"], batch["rto_code"])
+                continue
             code = state_codes.get(batch["state_name"])
             if code is None:
                 logger.warning("No state_code found for '%s', skipping batch", batch["state_name"])
@@ -98,6 +117,7 @@ async def main(dimension: str, year: int, force: bool = False) -> None:
                 logger.info("Scraped %d RTOs so far...", rto_count)
 
     logger.info("%s scrape complete (year=%s). %d RTOs processed.", dim.label, year, rto_count)
+    return rto_count
 
 
 if __name__ == "__main__":
@@ -106,4 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("--year", type=int, default=datetime.now().year)
     parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data")
     args = parser.parse_args()
-    asyncio.run(main(args.dimension, args.year, args.force))
+    try:
+        asyncio.run(main(args.dimension, args.year, args.force))
+    except Exception as exc:  # a busy run lock exits 4 with a message; anything else re-raises
+        exit_if_run_lock_busy(exc)

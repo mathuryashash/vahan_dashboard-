@@ -21,8 +21,11 @@ dimension, so real concurrent writes there are already safe), which would
 be a regression, not a fix. The actual collision this guards against is
 narrower: two different processes writing the *same* target and year.
 """
+import asyncio
 import contextlib
 import logging
+import os
+import sys
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -80,3 +83,122 @@ async def scrape_write_lock(engine: AsyncEngine, lock_key: str):
             await conn.execute(text("SELECT pg_advisory_unlock(:classid, hashtext(:key))"), {"classid": _LOCK_CLASSID, "key": lock_key})
     finally:
         await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# One run at a time, across EVERY VAHAN scrape entry point.
+#
+# The per-target keys above only stop two processes writing the SAME
+# (table, year). They let a manual backfill of 2019 overlap the scheduled
+# 2026 refresh, a targeted re-scrape overlap a crosstab run, and so on --
+# each one polite on its own, together several times the request rate the
+# government site sees from a normal refresh, all fighting one connection
+# pool. SCRAPE_RUN_LOCK_KEY is the single shared key every entry point takes.
+#
+# It is held per PROCESS with a refcount, not per call: run_scraper and
+# backfill_all_years run the three dimension passes concurrently inside one
+# process on purpose, and those must share the run, not exclude each other.
+# Subprocesses launched by a holder (run_scraper -> run_full_scrape) inherit
+# it through SCRAPE_RUN_LOCK_ENV; a standalone invocation takes it itself.
+# ---------------------------------------------------------------------------
+SCRAPE_RUN_LOCK_KEY = "vahan-scrape-run"
+SCRAPE_RUN_LOCK_ENV = "VAHAN_SCRAPE_RUN_LOCK_HELD_BY"
+_run_lock_conn = None
+_run_lock_depth = 0
+
+
+class ScrapeRunLockBusyError(ScrapeAlreadyRunningError):
+    """Another scrape run (any entry point, any process) holds the run lock."""
+
+
+@contextlib.asynccontextmanager
+async def scrape_run_lock(engine: AsyncEngine, who: str = "scrape"):
+    """Hold the shared run lock for the block; raise ScrapeRunLockBusyError at
+    once (never queue) if another process holds it. Re-entrant within one
+    process; a no-op in a child whose parent passed SCRAPE_RUN_LOCK_ENV."""
+    global _run_lock_conn, _run_lock_depth
+    if str(engine.url).startswith("sqlite") or os.environ.get(SCRAPE_RUN_LOCK_ENV):
+        yield
+        return
+    async with _acquire_guard():
+        if _run_lock_depth == 0:
+            await _acquire_run_lock(engine, who)
+        _run_lock_depth += 1
+    try:
+        yield
+    finally:
+        _run_lock_depth -= 1
+        if _run_lock_depth == 0 and _run_lock_conn is not None:
+            conn, _run_lock_conn = _run_lock_conn, None
+            try:
+                await conn.execute(text("SELECT pg_advisory_unlock(:classid, hashtext(:key))"),
+                                   {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY})
+                await conn.commit()
+            finally:
+                await conn.close()
+
+
+_guard: asyncio.Lock | None = None
+
+
+def _acquire_guard() -> asyncio.Lock:
+    """Serializes FIRST acquisition among coroutines of one process (three
+    dimension passes entering at once must not each open a lock session)."""
+    global _guard
+    if _guard is None:
+        _guard = asyncio.Lock()
+    return _guard
+
+
+async def _acquire_run_lock(engine: AsyncEngine, who: str) -> None:
+    global _run_lock_conn
+    conn = await engine.connect()
+    try:
+        got = (await conn.execute(
+            text("SELECT pg_try_advisory_lock(:classid, hashtext(:key))"),
+            {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY},
+        )).scalar()
+        await conn.commit()  # don't leave the lock connection idle in a transaction for hours
+    except BaseException:
+        await conn.close()
+        raise
+    if got:
+        # Older builds (and the owner's running server) never take the run
+        # lock, only per-target keys under the same classid. Treat any of
+        # those held by another backend as "a scrape is running" too.
+        others = (await conn.execute(text(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted "
+            "AND classid::bigint = :classid AND pid <> pg_backend_pid()"
+        ), {"classid": _LOCK_CLASSID})).scalar()
+        await conn.commit()
+        if others:
+            await conn.execute(text("SELECT pg_advisory_unlock(:classid, hashtext(:key))"),
+                               {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY})
+            await conn.commit()
+            got = False
+    if not got:
+        await conn.close()
+        raise ScrapeRunLockBusyError(
+            f"{who}: another VAHAN scrape run holds the run lock ({SCRAPE_RUN_LOCK_KEY!r}) -- "
+            "refusing to start a second one against the government site. Wait for it to finish."
+        )
+    _run_lock_conn = conn
+    logger.info("%s: acquired scrape run lock", who)
+
+
+def child_env_holding_run_lock() -> dict[str, str]:
+    """Environment for a subprocess launched while this process holds the run lock."""
+    return {**os.environ, SCRAPE_RUN_LOCK_ENV: str(os.getpid())}
+
+
+def exit_if_run_lock_busy(exc: BaseException) -> None:
+    """For __main__ blocks: a busy run lock is a clean refusal, not a crash."""
+    if isinstance(exc, ScrapeRunLockBusyError):
+        print(f"SCRAPE_ALREADY_RUNNING: {exc}", flush=True)
+        sys.exit(SCRAPE_BUSY_EXIT_CODE)
+    raise exc
+
+
+# Exit code for "refused: another scrape run holds the lock". Distinct from 0
+# (did work), 1 (crash) and 3 (partial).
+SCRAPE_BUSY_EXIT_CODE = 4

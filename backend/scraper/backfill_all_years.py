@@ -16,7 +16,10 @@ import asyncio
 import logging
 from datetime import datetime
 
-from scraper.run_full_scrape import main as scrape_year_dimension
+from scraper.run_full_scrape import main as scrape_year_dimension  # first: it sizes the DB pool before app.* loads
+
+from app.core.database import engine  # noqa: I001
+from app.core.scrape_lock import ScrapeRunLockBusyError, exit_if_run_lock_busy, scrape_run_lock
 from scraper.vahan_scraper import DIMENSIONS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -38,6 +41,8 @@ async def _run_dimension_with_retries(year: int, dimension: str, concurrent_stat
         try:
             await scrape_year_dimension(year, dimension, concurrent_states, force)
             return
+        except ScrapeRunLockBusyError:
+            raise  # another run owns the site; retrying in 30s would just queue behind it
         except Exception as exc:
             if attempt == DIMENSION_RETRIES - 1:
                 raise
@@ -65,8 +70,10 @@ async def main(start_year: int, end_year: int, concurrent_states: int = CONCURRE
     step = -1 if start_year >= end_year else 1
     years = list(range(start_year, end_year + step, step))
     logger.info("Backfill plan: %d years, newest to oldest: %s (force=%s)", len(years), years, force)
-    for year in years:
-        await run_year(year, concurrent_states, force)
+    # Held for the whole backfill (re-entrant: the per-dimension mains share it).
+    async with scrape_run_lock(engine, "backfill_all_years"):
+        for year in years:
+            await run_year(year, concurrent_states, force)
     logger.info("Backfill complete: %s", datetime.now())
 
 
@@ -77,4 +84,7 @@ if __name__ == "__main__":
     parser.add_argument("--concurrent-states", type=int, default=1, help="Number of states to scrape in parallel per dimension (default: 1)")
     parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data, instead of only resuming an interrupted run")
     args = parser.parse_args()
-    asyncio.run(main(args.start_year, args.end_year, args.concurrent_states, args.force))
+    try:
+        asyncio.run(main(args.start_year, args.end_year, args.concurrent_states, args.force))
+    except Exception as exc:  # a busy run lock exits 4 with a message; anything else re-raises
+        exit_if_run_lock_busy(exc)

@@ -24,7 +24,7 @@ pool_sizing.serial()  # before any app.* import -- see that module's docstring
 from sqlalchemy import delete, select  # noqa: E402
 
 from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
-from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.core.scrape_lock import exit_if_run_lock_busy, scrape_run_lock, scrape_write_lock  # noqa: E402
 from app.models.models import Registration  # noqa: E402
 from app.services.scraper_service import persist_rto_batch, _state_code_lookup  # noqa: E402
 from scraper.vahan_scraper import DIMENSIONS, scrape_all_india  # noqa: E402
@@ -142,11 +142,29 @@ def classify_state(dimension: str, total: int, skipped: int, succeeded: int, emp
         return "partial"
     if skipped + succeeded + empty < total:
         return "partial"
+    if empty and not (skipped + succeeded):
+        # Not ONE RTO in the state returned data. Whatever the baseline says
+        # (early January every office "never had data this year"), a whole
+        # state answering blank is the source failing, not N closed offices.
+        return "partial_empty"
     if newly_empty:
         return "partial_empty"
     if empty:
         return "done_with_empty"
     return "purge" if dimension == "maker" else "done"
+
+
+def empty_baseline(state_name: str, had_data: dict[str, frozenset[str]],
+                   had_data_prev_year: dict[str, frozenset[str]]) -> frozenset[str]:
+    """Which RTOs count as "had data before" for one state. The current
+    year's rows when the state has any; otherwise (a new year, before the
+    first successful scrape) the PREVIOUS year's -- without that, in January
+    every office looked structurally empty and a source returning blank
+    tables for a whole state could still report success."""
+    current = had_data.get(state_name)
+    if current:
+        return current
+    return had_data_prev_year.get(state_name, frozenset())
 
 
 def split_empty(empty_codes, had_data_before: frozenset[str]) -> tuple[list[str], list[str]]:
@@ -158,7 +176,18 @@ def split_empty(empty_codes, had_data_before: frozenset[str]) -> tuple[list[str]
     return newly, structural
 
 
-async def main(year: int, dimension: str, concurrent_states: int = 1, force: bool = False) -> int:
+async def main(year: int, dimension: str, concurrent_states: int = 1, force: bool = False,
+               only_rtos: dict[str, frozenset[str]] | None = None) -> int:
+    """`only_rtos` ({state_name: {rto_code}}) restricts the run to exactly
+    those RTOs (scraper.run_targeted_scrape); implies force for them."""
+    async with scrape_run_lock(engine, f"run_full_scrape {dimension} {year}"):
+        return await _main(year, dimension, concurrent_states, force, only_rtos)
+
+
+async def _main(year: int, dimension: str, concurrent_states: int, force: bool,
+                only_rtos: dict[str, frozenset[str]] | None) -> int:
+    if only_rtos is not None:
+        force = True
     logger.info(
         "Starting live VAHAN4 scrape (year=%s, dimension=%s, concurrent_states=%s, force=%s) at %s",
         year, dimension, concurrent_states, force, datetime.now(timezone.utc),
@@ -177,6 +206,7 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
         # baseline for telling a newly-empty RTO (VAHAN degraded: report
         # partial) from a structurally empty one (never had data: not partial).
         had_data = await _already_done_rtos(db, year, dimension)
+        had_data_prev = await _already_done_rtos(db, year - 1, dimension)
         skip_rtos = {} if force else had_data
         if skip_rtos:
             total_skipped = sum(len(v) for v in skip_rtos.values())
@@ -187,7 +217,9 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
         states_partial = 0
         partial_states: list[str] = []
         structurally_empty: dict[str, list[str]] = {}
-        async for item in scrape_all_india(year=year, dimension=dimension, skip_rtos=skip_rtos, max_concurrent_states=concurrent_states):
+        extra = {} if only_rtos is None else {"only_rtos": only_rtos}
+        async for item in scrape_all_india(year=year, dimension=dimension, skip_rtos=skip_rtos,
+                                           max_concurrent_states=concurrent_states, **extra):
             if item.get("state_complete"):
                 state_name = item["state_name"]
                 total, skipped, succeeded = item["rto_total"], item["rto_skipped"], item["rto_succeeded"]
@@ -204,7 +236,7 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
                 if empty_codes is None:  # producer without per-code detail: conservative
                     newly, structural = [None] * empty, []
                 else:
-                    newly, structural = split_empty(empty_codes, had_data.get(state_name, frozenset()))
+                    newly, structural = split_empty(empty_codes, empty_baseline(state_name, had_data, had_data_prev))
                 outcome = classify_state(dimension, total, skipped, succeeded, empty, len(newly))
                 if structural:
                     structurally_empty[state_name] = structural
@@ -224,6 +256,11 @@ async def main(year: int, dimension: str, concurrent_states: int = 1, force: boo
                         state_name, done_now, total, empty, year, ", ".join(structural),
                         " -- synthetic rows kept, not purged" if dimension == "maker" else "",
                     )
+                elif outcome == "purge" and only_rtos is not None:
+                    # A targeted run covers a few RTOs, never the whole state:
+                    # it must not purge the state's synthetic fallback.
+                    states_replaced += 1
+                    logger.info("%s: %d targeted RTO(s) done", state_name, succeeded)
                 elif outcome == "purge":
                     purged = await _purge_synthetic_for_state(db, state_name, year)
                     await db.commit()
@@ -277,5 +314,8 @@ if __name__ == "__main__":
     parser.add_argument("--concurrent-states", type=int, default=1, help="Number of states to scrape in parallel (default: 1)")
     parser.add_argument("--force", action="store_true", help="Re-scrape every RTO even if it already has data (vs. only resuming an interrupted run)")
     args = parser.parse_args()
-    partial = asyncio.run(main(args.year, args.dimension, args.concurrent_states, args.force))
+    try:
+        partial = asyncio.run(main(args.year, args.dimension, args.concurrent_states, args.force))
+    except Exception as exc:  # a busy run lock exits 4 with a message; anything else re-raises
+        exit_if_run_lock_busy(exc)
     sys.exit(PARTIAL_EXIT_CODE if partial else 0)

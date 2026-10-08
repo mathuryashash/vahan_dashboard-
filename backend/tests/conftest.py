@@ -44,6 +44,25 @@ def _isolated_rto_retry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_scrape_run_lock(monkeypatch):
+    """run_scraper takes the shared scrape run lock on the APP engine, which
+    points at the real database. Tests that drive run_scraper with fake
+    subprocesses must neither touch that DB nor collide with a real scrape
+    running on this machine. Lock behaviour itself is tested against the
+    test DB in test_round4_scraper.py / test_scrape_lock.py."""
+    import contextlib
+
+    from app.services import scraper_service
+
+    @contextlib.asynccontextmanager
+    async def _no_lock(engine, who="scrape"):
+        yield
+
+    monkeypatch.setattr(scraper_service, "scrape_run_lock", _no_lock)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_login_rate_limiter():
     """login_rate_limiter is module-level state (see app/core/rate_limit.py)
     -- without this, a test that deliberately fails login 5x to exercise the
