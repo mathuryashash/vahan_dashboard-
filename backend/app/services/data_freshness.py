@@ -124,6 +124,14 @@ async def get_freshness(db: AsyncSession, *, use_cache: bool = True) -> Freshnes
         cached = _cache.get("freshness")
         if cached is not None:
             return cached
+    # Captured before the queries: a TTLCache.clear_all() (post-scrape) that
+    # lands while they run means this result predates the new data -- return
+    # it, but never cache it (same pattern as stored_live_service).
+    gen = TTLCache.generation
+    # `::timestamptz` is Postgres-only syntax; the SQLite dev mode reads the
+    # naive value as-is (it has no session zone; _as_utc treats it as UTC).
+    is_pg = db.bind.dialect.name == "postgresql"
+    cast = "::timestamptz" if is_pg else ""
     latest = (await db.execute(text(
         "SELECT year, (SELECT max(month) FROM registrations r2 WHERE r2.year = r.year) "
         "FROM (SELECT max(year) AS year FROM registrations) r"
@@ -131,14 +139,22 @@ async def get_freshness(db: AsyncSession, *, use_cache: bool = True) -> Freshnes
     year, month = (latest[0], latest[1]) if latest else (None, None)
     rec = None
     if year is not None and month is not None:
-        rec = (await db.execute(text(
-            "SELECT max(recorded_at)::timestamptz FROM registrations WHERE year = :y AND month = :m"
-        ), {"y": year, "m": month})).scalar()
+        rec = _parse_ts((await db.execute(text(
+            f"SELECT max(recorded_at){cast} FROM registrations WHERE year = :y AND month = :m"
+        ), {"y": year, "m": month})).scalar())
     try:
-        chk = (await db.execute(text("SELECT max(checked_at)::timestamptz FROM scrape_quality_log"))).scalar()
+        chk = _parse_ts((await db.execute(text(f"SELECT max(checked_at){cast} FROM scrape_quality_log"))).scalar())
     except Exception:  # table missing on an old schema -- recorded_at alone is fine
         chk = None
     candidates = [d for d in (_as_utc(rec), _as_utc(chk)) if d is not None]
     value = Freshness(max(candidates) if candidates else None, year, month, _as_utc(chk))
-    _cache.set("freshness", value)
+    if gen == TTLCache.generation:
+        _cache.set("freshness", value)
     return value
+
+
+def _parse_ts(value) -> datetime | None:
+    """SQLite returns max(timestamp) as a string; Postgres as a datetime."""
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))

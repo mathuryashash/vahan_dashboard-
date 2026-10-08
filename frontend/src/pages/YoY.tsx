@@ -1,17 +1,23 @@
 // frontend/src/pages/YoY.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   BarChart, Bar, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LineChart, Line, TooltipProps
 } from 'recharts';
 import { useAppStore } from '../hooks/useAppStore';
-import { getYoYMonthly, getYoYSummary } from '../api/vahan';
+import { getStates, getYoYMonthly, getYoYSummary } from '../api/vahan';
+import { useAuth } from '../contexts/AuthContext';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatCompact, NO_VALUE } from '../utils/format';
 import { monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
+
+// Same five buckets as CategoryDetail's KNOWN_CATEGORIES (not imported: that
+// would pull the lazily-loaded page into this chunk).
+const YOY_CATEGORIES = ['Two-Wheeler', 'Three-Wheeler', 'Four-Wheeler', 'Commercial Vehicle', 'Other'];
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -39,11 +45,40 @@ const SELECTABLE_YEARS = Array.from({ length: CURRENT_YEAR - 2002 }, (_, i) => C
 
 export function YoYPage() {
   const chart = useChartTheme();
-  const { comparisonYearA, comparisonYearB, setComparisonYears, selectedCategory, selectedState } = useAppStore();
-  // The shared State filter is honoured here (it used to be silently dropped:
-  // a user arriving with state=Lakshadweep saw all-India numbers under no
-  // geography label). Both /yoy endpoints already accept `state` and clamp it
-  // to the account's scope server-side.
+  const { comparisonYearA, comparisonYearB, setComparisonYears } = useAppStore();
+  const auth = useAuth();
+  // YoY has its OWN State and Category, independent of the Overview filters
+  // (it used to inherit the header's state, so a user who had once looked at
+  // Arunachal Pradesh stayed stuck on it here). Persisted in the URL as
+  // yoy_state / yoy_category; default All India / all categories. Scoped
+  // accounts are locked to their scope (the server clamps both regardless).
+  const isStateLocked = auth.scope_type !== 'national';
+  const lockedCategory = auth.scope_vehicle_category ?? null;
+  const [yoyState, setYoyState] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('yoy_state'),
+  );
+  const [yoyCategory, setYoyCategory] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('yoy_category'),
+  );
+  const selectedState = isStateLocked ? (auth.scope_state_name ?? null) : yoyState;
+  const selectedCategory = lockedCategory ?? yoyCategory;
+  const navigate = useNavigate();
+  useEffect(() => {
+    // Live query string, so the shared params useUrlSyncedFilters writes survive.
+    const next = new URLSearchParams(window.location.search);
+    const want: Record<string, string | null> = {
+      yoy_state: isStateLocked ? null : yoyState,
+      yoy_category: lockedCategory ? null : yoyCategory,
+    };
+    let changed = false;
+    for (const [k, v] of Object.entries(want)) {
+      if ((next.get(k) ?? null) === v) continue;
+      changed = true;
+      if (v) next.set(k, v); else next.delete(k);
+    }
+    if (changed) navigate({ search: `?${next.toString()}` }, { replace: true });
+  }, [yoyState, yoyCategory, isStateLocked, lockedCategory, navigate]);
+  const { data: stateList } = useQuery({ queryKey: ['states'], queryFn: getStates, enabled: !isStateLocked });
   const stateParam = selectedState || undefined;
   // Comparing a year with itself is always 0% and means nothing. The pickers
   // can't produce it (each omits the other side's year); this guards a value
@@ -154,6 +189,45 @@ export function YoYPage() {
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap animate-entrance" style={{ animationDelay: '50ms' }}>
+          <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
+            <label htmlFor="yoy-state" className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">State</label>
+            {isStateLocked ? (
+              <span id="yoy-state" className="text-xs font-mono font-semibold text-[var(--text-primary)]">{selectedState ?? NO_VALUE}</span>
+            ) : (
+              <select
+                id="yoy-state"
+                aria-label="Year-over-year state"
+                value={yoyState ?? ''}
+                onChange={(e) => setYoyState(e.target.value || null)}
+                className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1 max-w-[11rem]"
+              >
+                <option value="">All States / India</option>
+                {yoyState && !(stateList || []).some((st: { state_name: string }) => st.state_name === yoyState) && (
+                  <option value={yoyState}>{yoyState}</option>
+                )}
+                {(stateList || []).map((st: { state_code: string; state_name: string }) => (
+                  <option key={st.state_code} value={st.state_name}>{st.state_name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
+            <label htmlFor="yoy-category" className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]">Category</label>
+            {lockedCategory ? (
+              <span id="yoy-category" className="text-xs font-mono font-semibold text-[var(--text-primary)]">{lockedCategory}</span>
+            ) : (
+              <select
+                id="yoy-category"
+                aria-label="Year-over-year vehicle category"
+                value={yoyCategory ?? ''}
+                onChange={(e) => setYoyCategory(e.target.value || null)}
+                className="bg-[var(--bg-sunken)] text-xs font-mono font-semibold cursor-pointer rounded px-1"
+              >
+                <option value="">All categories</option>
+                {YOY_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
+          </div>
           <div className="px-2 py-1.5 rounded-lg border flex items-center gap-1.5 border-[var(--border)] text-[var(--text-secondary)]">
             <span className="text-[10px] uppercase tracking-widest text-[var(--text-muted)]" id="yoy-range-label">Range</span>
             <label htmlFor="yoy-start-month" className="sr-only">Range start month</label>

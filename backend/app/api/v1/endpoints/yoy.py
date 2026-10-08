@@ -132,6 +132,25 @@ async def get_yoy_summary(
     # progress) produces a nonsensical, deeply negative "growth" number.
     # Same fix already applied to summary.get_dashboard_kpis.
     effective_end = min([end_month, *candidates]) if candidates else end_month
+    partial = freshness.partial_month(year_b) or freshness.partial_month(year_a)
+    meta = {
+        "compare_through_month": effective_end,
+        "start_month": start_month,
+        "partial_month": partial,
+        "partial_month_year": (year_b if freshness.partial_month(year_b) else year_a) if partial else None,
+        "last_complete_month": (
+            f"{freshness.last_complete_month()[0]}-{freshness.last_complete_month()[1]:02d}"
+            if freshness.last_complete_month() else None
+        ),
+    }
+    if effective_end < start_month:
+        # N4: the requested window starts after the last complete month, so
+        # there is nothing comparable. Say so instead of "0 vs 0, +0.0%",
+        # which a customer reads as "no registrations".
+        return {
+            f"total_{year_a}": None, f"total_{year_b}": None, "growth_percent": None, **meta,
+            "empty_reason": "window after last complete month",
+        }
 
     q_a = apply_total_filters(select(func.sum(Registration.count)).where(
         Registration.year == year_a, Registration.month >= start_month, Registration.month <= effective_end
@@ -145,21 +164,14 @@ async def get_yoy_summary(
 
     total_a = result_a.scalar() or 0
     total_b = result_b.scalar() or 0
-    growth = round(((total_b - total_a) / total_a * 100), 2) if (total_a > 0 and effective_end >= start_month) else 0.0
-    partial = freshness.partial_month(year_b) or freshness.partial_month(year_a)
+    growth = round(((total_b - total_a) / total_a * 100), 2) if total_a > 0 else None
 
     return {
         f"total_{year_a}": total_a,
         f"total_{year_b}": total_b,
-        "compare_through_month": effective_end,
-        "start_month": start_month,
         "growth_percent": growth,
-        # The stored-but-incomplete month (excluded above), so the YoY page's
-        # partial-month notice can come from the data instead of today's date.
-        "partial_month": partial,
-        "partial_month_year": (year_b if freshness.partial_month(year_b) else year_a) if partial else None,
-        "last_complete_month": (
-            f"{freshness.last_complete_month()[0]}-{freshness.last_complete_month()[1]:02d}"
-            if freshness.last_complete_month() else None
-        ),
+        # partial_month: the stored-but-incomplete month (excluded above), so
+        # the YoY page's partial-month notice comes from the data, not the date.
+        **meta,
+        "empty_reason": None,
     }
