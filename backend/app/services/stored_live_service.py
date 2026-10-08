@@ -12,7 +12,7 @@ tables we already hold, instead of scraping the government analytics site
 | leaderboard, fuel                | maker_fuel_totals                  | yearly  |
 | leaderboard, no fuel             | maker_category_totals              | yearly  |
 | leaderboard, fuel + category     | NOT answerable                     |         |
-| maker search                     | DISTINCT maker over registrations  | cached  |
+| maker search                     | DISTINCT maker, maker_category_totals | cached |
 
 Checked against the live cache (scraper_review §4.3): MH 2024 Honda 678,126
 (live cache) vs 678,132 (registrations); Hero monthly identical ±1.
@@ -150,14 +150,17 @@ _MAKER_LIST_TTL = 3600.0
 _maker_list: tuple[float, list[str]] | None = None
 _maker_list_lock = asyncio.Lock()
 
-# Recursive "loose index scan" over idx_reg_year_maker_count: one index probe
-# per distinct maker instead of reading every registrations row. Measured on
-# prod: 7,326 makers in 591 ms vs 1,627 ms for COUNT(DISTINCT) on mct.
+# Recursive "loose index scan" over ix_maker_category_totals_maker: one index
+# probe per distinct maker. registrations has no maker-leading index (the
+# same scan there hit the statement timeout). Measured on prod: 7,326 makers
+# in 352 ms, an identical set (md5) to SELECT DISTINCT's 1,354 ms. It differs
+# from registrations' distinct makers by 4 names, and it is the table that
+# decides category membership anyway.
 _DISTINCT_MAKERS_SQL = text("""
 WITH RECURSIVE m AS (
-    (SELECT maker FROM registrations WHERE maker IS NOT NULL ORDER BY maker LIMIT 1)
+    (SELECT maker FROM maker_category_totals WHERE maker IS NOT NULL ORDER BY maker LIMIT 1)
     UNION ALL
-    SELECT (SELECT r.maker FROM registrations r WHERE r.maker > m.maker ORDER BY r.maker LIMIT 1)
+    SELECT (SELECT r.maker FROM maker_category_totals r WHERE r.maker > m.maker ORDER BY r.maker LIMIT 1)
     FROM m WHERE m.maker IS NOT NULL
 )
 SELECT maker FROM m WHERE maker IS NOT NULL
