@@ -57,7 +57,12 @@ def _clear_login_rate_limiter():
 
 @pytest.fixture
 async def db_session():
-    engine = create_async_engine(TEST_DATABASE_URL, future=True)
+    # Pin the session TimeZone to UTC (what docker's postgres runs) so tests
+    # that seed naive recorded_at/checked_at literals don't depend on the dev
+    # server's configured zone (Asia/Calcutta here). Tests exercising another
+    # zone SET TIME ZONE explicitly -- see test_freshness_and_scheduler.py.
+    engine = create_async_engine(TEST_DATABASE_URL, future=True,
+                                 connect_args={"server_settings": {"timezone": "UTC"}})
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)

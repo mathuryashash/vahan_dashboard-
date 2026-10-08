@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 
 from app.core.cache import TTLCache, single_flight
 from app.core.config import settings
@@ -77,6 +78,29 @@ async def test_refresh_status_last_updated_derived_from_data_after_restart(clien
 
     dq = (await client.get("/api/v1/refresh/data-quality")).json()
     assert dq["last_updated"] == "2026-09-19 21:01 UTC"
+
+
+async def test_naive_timestamps_are_read_in_the_db_session_timezone(client, db_session, monkeypatch):
+    """P2-2/N1: func.now() writes IST wall-clock on an Asia/Calcutta server.
+    21:01 IST is 15:31 UTC -- reading the naive value as UTC made the header
+    5h30m too fresh and delayed the scheduler's catch-up by 5h30m."""
+    monkeypatch.setattr(settings, "LAST_UPDATED", None)
+    await _geo(db_session)
+    db_session.add_all([
+        _reg(2026, 9, 10, datetime(2026, 9, 19, 21, 1)),
+        ScrapeQualityLog(rto_code="MH1", state_name="Maharashtra", year=2026, month=9, maker_total=1,
+                         vehicle_class_total=1, fuel_total=1, max_pct_diff=0.0, is_clean=True,
+                         checked_at=datetime(2026, 9, 19, 20, 0)),
+    ])
+    await db_session.commit()
+    await db_session.execute(text("SET TIME ZONE 'Asia/Kolkata'"))
+    body = (await client.get("/api/v1/refresh/status")).json()
+    assert body["last_updated"] == "2026-09-19 15:31 UTC", (
+        "21:01 is IST wall clock; 21:01 UTC means the naive value was read as UTC")
+    f = await data_freshness.get_freshness(db_session, use_cache=False)
+    assert f.last_success_at == datetime(2026, 9, 19, 14, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 19, 16, 30, tzinfo=timezone.utc)
+    assert f.age_seconds(now) == pytest.approx(2 * 3600), "scheduler age must use the real instant"
 
 
 async def test_refresh_status_prefers_in_memory_value_and_handles_empty_db(client, monkeypatch):

@@ -87,8 +87,9 @@ class Freshness:
 def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
-    # recorded_at / checked_at are naive timestamps written by func.now() on a
-    # UTC server (docker) -- treat naive as UTC.
+    # get_freshness reads recorded_at / checked_at already cast to timestamptz
+    # in SQL (see there), so DB values arrive tz-aware. A naive value only
+    # reaches here from callers/tests passing literal datetimes; treat as UTC.
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
@@ -112,6 +113,13 @@ def last_complete_month(year: int | None, month: int | None,
 
 
 async def get_freshness(db: AsyncSession, *, use_cache: bool = True) -> Freshness:
+    # recorded_at / checked_at are `timestamp WITHOUT time zone` filled by
+    # func.now(), i.e. the DB server's wall clock in its session TimeZone --
+    # Asia/Calcutta on the native install, UTC in docker. Treating the naive
+    # value as UTC made last_updated 5h30m too fresh (and the scheduler's
+    # catch-up 5h30m late) on IST servers. `::timestamptz` makes Postgres
+    # interpret the wall clock in the session TimeZone, which is the zone
+    # func.now() wrote it in, so the value comes back as a correct instant.
     if use_cache:
         cached = _cache.get("freshness")
         if cached is not None:
@@ -124,10 +132,10 @@ async def get_freshness(db: AsyncSession, *, use_cache: bool = True) -> Freshnes
     rec = None
     if year is not None and month is not None:
         rec = (await db.execute(text(
-            "SELECT max(recorded_at) FROM registrations WHERE year = :y AND month = :m"
+            "SELECT max(recorded_at)::timestamptz FROM registrations WHERE year = :y AND month = :m"
         ), {"y": year, "m": month})).scalar()
     try:
-        chk = (await db.execute(text("SELECT max(checked_at) FROM scrape_quality_log"))).scalar()
+        chk = (await db.execute(text("SELECT max(checked_at)::timestamptz FROM scrape_quality_log"))).scalar()
     except Exception:  # table missing on an old schema -- recorded_at alone is fine
         chk = None
     candidates = [d for d in (_as_utc(rec), _as_utc(chk)) if d is not None]
