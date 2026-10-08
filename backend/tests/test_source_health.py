@@ -78,14 +78,47 @@ def test_going_down_alerts_once_and_keeps_the_original_down_since(caplog):
     source_health._record("old_site", True, "report page loads", t0)
     with caplog.at_level(logging.WARNING, logger="source_health"):
         source_health._record("old_site", False, "HTTP 503", t0 + timedelta(hours=1))
+        source_health._record("old_site", False, "HTTP 503", t0 + timedelta(hours=1, seconds=90))
         source_health._record("old_site", False, "HTTP 503", t0 + timedelta(hours=2))
 
     alerts = [r for r in caplog.records if "SOURCE DOWN" in r.getMessage()]
-    assert len(alerts) == 1 and alerts[0].levelno == logging.ERROR, "alert on the transition, not every hour"
-    assert source_health.current_status()["old_site"]["down_since"] == (t0 + timedelta(hours=1)).isoformat()
+    assert len(alerts) == 1 and alerts[0].levelno == logging.ERROR, "alert on the transition, not every check"
+    st = source_health.current_status()["old_site"]
+    # down_since = first failure of the streak, not the confirming probe.
+    assert st["down_since"] == (t0 + timedelta(hours=1)).isoformat()
+    assert st["consecutive_failures"] == 3 and st["ok"] is False
 
 
-def test_a_healthy_first_check_is_silent_and_a_failing_one_alerts(caplog):
+def test_one_transient_failure_does_not_report_down(caplog):
+    """Found live: one ConnectError pinned the header at DOWN for an hour."""
+    t0 = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    source_health._record("old_site", True, "report page loads", t0)
+    with caplog.at_level(logging.WARNING, logger="source_health"):
+        source_health._record("old_site", False, "ConnectError", t0 + timedelta(hours=1))
+    st = source_health.current_status()["old_site"]
+    assert st["ok"] is True and st["down_since"] is None
+    assert st["consecutive_failures"] == 1
+    assert not [r for r in caplog.records if "SOURCE DOWN" in r.getMessage()]
+    # ...and the next probe is a fast re-check, not an hour away.
+    assert source_health.next_check_delay() == source_health.RECHECK_SECONDS
+    source_health._record("old_site", True, "report page loads", t0 + timedelta(hours=1, seconds=90))
+    st = source_health.current_status()["old_site"]
+    assert st["ok"] is True and st["consecutive_failures"] == 0
+    assert source_health.next_check_delay() == source_health.CHECK_INTERVAL_SECONDS
+
+
+def test_cadence_hourly_when_healthy_fast_when_failing_and_down():
+    t0 = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
+    assert source_health.next_check_delay() == 3600
+    source_health._record("new_site", True, "ok", t0)
+    assert source_health.next_check_delay() == 3600
+    source_health._record("old_site", False, "x", t0)
+    assert 60 <= source_health.next_check_delay() <= 120
+    source_health._record("old_site", False, "x", t0 + timedelta(seconds=90))
+    assert source_health.next_check_delay() == source_health.DOWN_RECHECK_SECONDS
+
+
+def test_a_healthy_first_check_is_silent_and_two_failures_alert(caplog):
     """Found live: every boot logged "SOURCE RECOVERED" for healthy sites,
     because no previous status was treated as a transition."""
     now = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
@@ -93,17 +126,23 @@ def test_a_healthy_first_check_is_silent_and_a_failing_one_alerts(caplog):
         source_health._record("new_site", True, "report page loads", now)
         assert caplog.records == []
         source_health._record("old_site", False, "HTTP 503", now)
-    assert [r.levelno for r in caplog.records] == [logging.ERROR]
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        source_health._record("old_site", False, "HTTP 503", now + timedelta(seconds=90))
+    assert [r.levelno for r in caplog.records] == [logging.WARNING, logging.ERROR]
 
 
 def test_recovery_clears_down_since():
     t0 = datetime(2026, 9, 20, 3, 0, tzinfo=timezone.utc)
     source_health._record("old_site", False, "HTTP 503", t0)
+    source_health._record("old_site", False, "HTTP 503", t0 + timedelta(seconds=90))
+    assert source_health.current_status()["old_site"]["ok"] is False
     source_health._record("old_site", True, "report page loads", t0 + timedelta(hours=1))
-    assert source_health.current_status()["old_site"]["down_since"] is None
+    st = source_health.current_status()["old_site"]
+    assert st["down_since"] is None and st["ok"] is True and st["consecutive_failures"] == 0
 
 
 async def test_status_endpoint_is_admin_only(client):
+    source_health._record("old_site", False, "HTTP 503", datetime.now(timezone.utc))
     source_health._record("old_site", False, "HTTP 503", datetime.now(timezone.utc))
     r = await client.get("/api/v1/refresh/source-health")
     assert r.status_code == 200 and r.json()["old_site"]["ok"] is False

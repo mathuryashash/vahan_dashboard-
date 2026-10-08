@@ -22,6 +22,15 @@ from scraper import vahan_scraper as old_site
 logger = logging.getLogger("source_health")
 
 CHECK_INTERVAL_SECONDS = 3600
+# One transient ConnectError used to pin the header at DOWN for a full hour.
+# A source is reported down only after FAILURES_BEFORE_DOWN consecutive failed
+# probes; after any failure the next probe comes RECHECK_SECONDS later instead
+# of an hour later, so a blip clears (or is confirmed) within ~90s. While a
+# source is confirmed down it is re-probed every DOWN_RECHECK_SECONDS so the
+# recovery shows up promptly too. Healthy sources keep the hourly cadence.
+FAILURES_BEFORE_DOWN = 2
+RECHECK_SECONDS = 90
+DOWN_RECHECK_SECONDS = 300
 _status: dict[str, dict] = {}
 
 # Each probe is the exact call a scrape starts with, so the check and the
@@ -44,16 +53,46 @@ async def check(name: str, client: httpx.AsyncClient) -> tuple[bool, str]:
 
 def _record(name: str, ok: bool, detail: str, now: datetime) -> None:
     prev = _status.get(name)
-    down_since = None if ok else (prev["down_since"] if prev and not prev["ok"] else now.isoformat())
+    prev_failures = prev.get("consecutive_failures", 0) if prev else 0
+    failures = 0 if ok else prev_failures + 1
+    first_failure_at = None if ok else (
+        prev.get("first_failure_at") if prev and prev_failures else now.isoformat())
+    confirmed_down = failures >= FAILURES_BEFORE_DOWN
+    was_down = bool(prev) and not prev["ok"]
+    # down_since is the first failure of the streak, not the confirming one:
+    # that is when the source actually stopped answering.
+    down_since = first_failure_at if confirmed_down else None
     # Only real transitions. A healthy first check after boot is not a
     # "recovery" -- logging it as one on every restart teaches people to
     # skim past these lines, which is the opposite of an alert.
-    if not ok and (prev is None or prev["ok"]):
+    if confirmed_down and not was_down:
         # ERROR, so anything watching the logs (docker, a log shipper) sees it.
-        logger.error("SOURCE DOWN: %s -- %s. Scrapes that depend on it will fail.", name, detail)
-    elif ok and prev is not None and not prev["ok"]:
+        logger.error("SOURCE DOWN: %s -- %s (%d consecutive failures). Scrapes that depend on it will fail.",
+                     name, detail, failures)
+    elif not ok:
+        logger.warning("source probe failed: %s -- %s (failure %d/%d, re-checking in %ds)",
+                       name, detail, failures, FAILURES_BEFORE_DOWN, RECHECK_SECONDS)
+    elif was_down:
         logger.warning("SOURCE RECOVERED: %s -- %s", name, detail)
-    _status[name] = {"ok": ok, "detail": detail, "checked_at": now.isoformat(), "down_since": down_since}
+    _status[name] = {
+        # ok stays True through a single unconfirmed failure -- that is the point.
+        "ok": not confirmed_down,
+        "detail": detail,
+        "checked_at": now.isoformat(),
+        "down_since": down_since,
+        "consecutive_failures": failures,
+        "first_failure_at": first_failure_at,
+    }
+
+
+def next_check_delay() -> int:
+    """Seconds until the next probe: fast re-check while any source is failing."""
+    failures = [s.get("consecutive_failures", 0) for s in _status.values()]
+    if any(0 < f < FAILURES_BEFORE_DOWN for f in failures):
+        return RECHECK_SECONDS
+    if any(f >= FAILURES_BEFORE_DOWN for f in failures):
+        return DOWN_RECHECK_SECONDS
+    return CHECK_INTERVAL_SECONDS
 
 
 async def check_all() -> dict[str, dict]:
@@ -75,4 +114,4 @@ async def run_source_health_loop() -> None:
             await check_all()
         except Exception:
             logger.exception("source health check itself failed")
-        await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+        await asyncio.sleep(next_check_delay())
