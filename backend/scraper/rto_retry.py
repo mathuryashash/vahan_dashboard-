@@ -11,8 +11,10 @@ The skip-list is OFF by default (SCRAPER_SKIP_AFTER_FAILED_RUNS=0). When set
 to N > 0, an RTO that failed in N consecutive runs (per dimension) is skipped
 -- reported, never silently treated as done -- so a permanently broken office
 stops costing retries and delay on every run. Its state is reported partial.
-State lives in a small JSON file (SCRAPER_DATA_DIR/rto_failures.json), never
-in the database. Delete the file (or one entry) to un-skip.
+State lives in small per-dimension JSON files
+(SCRAPER_DATA_DIR/rto_failures.<dimension>.json), never in the database.
+A skipped RTO is re-probed every SCRAPER_SKIP_RECHECK_EVERY_RUNS-th run (default
+5), so quarantine is not permanent. Delete a file (or one entry) to un-skip.
 """
 from __future__ import annotations
 
@@ -46,6 +48,8 @@ RTO_RETRIES = _env_int("SCRAPER_RTO_RETRIES", 2)  # extra attempts after the fir
 RTO_RETRY_BASE_SECONDS = _env_float("SCRAPER_RTO_RETRY_BASE_SECONDS", 2.0)
 RTO_RETRY_MAX_SECONDS = _env_float("SCRAPER_RTO_RETRY_MAX_SECONDS", 30.0)
 SKIP_AFTER_FAILED_RUNS = _env_int("SCRAPER_SKIP_AFTER_FAILED_RUNS", 0)  # 0 = off
+# A quarantined RTO is re-probed every Nth run it would be skipped (0 = never).
+SKIP_RECHECK_EVERY_RUNS = _env_int("SCRAPER_SKIP_RECHECK_EVERY_RUNS", 5)
 
 
 def backoff_delay(attempt: int, base: float = RTO_RETRY_BASE_SECONDS, cap: float = RTO_RETRY_MAX_SECONDS,
@@ -82,31 +86,71 @@ class RtoFailureTracker:
 
     A run counts once per RTO no matter how many retries failed inside it;
     any success resets the count. threshold <= 0 disables skipping entirely
-    (failures are still recorded so turning it on later has history)."""
+    (failures are still recorded so turning it on later has history).
+
+    Persistence is ONE FILE PER DIMENSION (`rto_failures.<dimension>.json`
+    next to `path`): run_scraper launches the maker / vehicle_class / fuel
+    passes as three concurrent OS processes, and with a single shared file
+    each rewrote it from its own in-memory dict -- last writer won and the
+    other passes' counts were lost. Each process only ever writes its own
+    dimension's file, through a pid+uuid-unique temp name (a shared
+    `rto_failures.tmp` also collided across processes). A legacy combined
+    `rto_failures.json` is still read on load.
+
+    Quarantine is not permanent: a skipped RTO is re-probed every
+    `recheck_every`-th run it would otherwise be skipped (default
+    SCRAPER_SKIP_RECHECK_EVERY_RUNS=5), so an office that recovered can
+    `record_success` and leave the list.
+    """
 
     def __init__(self, path: str | os.PathLike | None, threshold: int = SKIP_AFTER_FAILED_RUNS,
-                 run_id: str | None = None):
+                 run_id: str | None = None, recheck_every: int | None = None):
         self.path = Path(path) if path else None
         self.threshold = threshold
+        self.recheck_every = SKIP_RECHECK_EVERY_RUNS if recheck_every is None else recheck_every
         self.run_id = run_id or uuid.uuid4().hex
         self._lock = threading.Lock()
         self._data: dict[str, dict] = {}
-        if self.path and self.path.exists():
-            try:
-                self._data = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                logger.warning("Ignoring unreadable RTO failure file %s", self.path)
-                self._data = {}
+        if self.path:
+            files = [self.path] if self.path.exists() else []
+            files += sorted(self.path.parent.glob(f"{self.path.stem}.*{self.path.suffix}"))
+            for f in files:
+                try:
+                    self._data.update(json.loads(f.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    logger.warning("Ignoring unreadable RTO failure file %s", f)
 
     @staticmethod
     def _key(dimension: str, rto_code: str) -> str:
         return f"{dimension}:{rto_code}"
 
+    def dimension_path(self, dimension: str) -> Path | None:
+        if not self.path:
+            return None
+        return self.path.with_name(f"{self.path.stem}.{dimension}{self.path.suffix}")
+
     def consecutive_failures(self, dimension: str, rto_code: str) -> int:
         return int(self._data.get(self._key(dimension, rto_code), {}).get("failed_runs", 0))
 
     def should_skip(self, dimension: str, rto_code: str) -> bool:
-        return self.threshold > 0 and self.consecutive_failures(dimension, rto_code) >= self.threshold
+        """True if the RTO is quarantined for THIS run. Every recheck_every-th
+        run that it would be skipped, it is let through once instead (a
+        re-probe); idempotent within one run (keyed by run_id)."""
+        if not (self.threshold > 0 and self.consecutive_failures(dimension, rto_code) >= self.threshold):
+            return False
+        if self.recheck_every <= 0:
+            return True
+        with self._lock:
+            entry = self._data[self._key(dimension, rto_code)]
+            if entry.get("last_skip_run") != self.run_id:
+                entry["skipped_runs"] = int(entry.get("skipped_runs", 0)) + 1
+                entry["last_skip_run"] = self.run_id
+                self._save(dimension)
+            recheck = entry["skipped_runs"] % self.recheck_every == 0
+        if recheck:
+            logger.info("%s / %s: quarantined, but re-probing this run (every %d runs)",
+                        dimension, rto_code, self.recheck_every)
+        return not recheck
 
     def record_failure(self, dimension: str, rto_code: str, error: str = "") -> None:
         with self._lock:
@@ -115,23 +159,30 @@ class RtoFailureTracker:
                 entry["failed_runs"] = int(entry.get("failed_runs", 0)) + 1
                 entry["last_run"] = self.run_id
             entry["last_error"] = error[:300]
-            self._save()
+            self._save(dimension)
 
     def record_success(self, dimension: str, rto_code: str) -> None:
         with self._lock:
             if self._data.pop(self._key(dimension, rto_code), None) is not None:
-                self._save()
+                self._save(dimension)
 
-    def _save(self) -> None:
-        if not self.path:
+    def _save(self, dimension: str) -> None:
+        target = self.dimension_path(dimension)
+        if target is None:
             return
+        prefix = f"{dimension}:"
+        payload = {k: v for k, v in self._data.items() if k.startswith(prefix)}
+        tmp = target.with_name(f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._data, indent=1, sort_keys=True), encoding="utf-8")
-            tmp.replace(self.path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
+            tmp.replace(target)
         except OSError:
-            logger.exception("Could not persist RTO failure file %s", self.path)
+            logger.exception("Could not persist RTO failure file %s", target)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 _default_tracker: RtoFailureTracker | None = None

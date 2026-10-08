@@ -359,3 +359,50 @@ async def test_failed_rto_is_recorded_in_tracker(monkeypatch, tmp_path):
     assert tracker.consecutive_failures("maker", "MH1") == 1
     assert tracker.consecutive_failures("maker", "MH12") == 0
 
+
+
+def test_concurrent_dimension_trackers_do_not_lose_each_others_updates(tmp_path):
+    """P2-3: maker / vehicle_class / fuel run as three processes, each loading
+    the file once at start. With one shared file the last writer clobbered the
+    others (and a shared .tmp name collided). Interleave three trackers that
+    all loaded the same (empty) state, as the three processes do."""
+    path = tmp_path / "rto_failures.json"
+    trackers = {d: RtoFailureTracker(path, threshold=2, run_id="run1") for d in ("maker", "vehicle_class", "fuel")}
+    trackers["maker"].record_failure("maker", "MH4", "x")
+    trackers["fuel"].record_failure("fuel", "MH4", "y")
+    trackers["vehicle_class"].record_failure("vehicle_class", "MH12", "z")
+    trackers["maker"].record_failure("maker", "MH1", "x")  # maker writes again after the others
+    reloaded = RtoFailureTracker(path, threshold=2, run_id="run2")
+    assert reloaded.consecutive_failures("maker", "MH4") == 1
+    assert reloaded.consecutive_failures("maker", "MH1") == 1
+    assert reloaded.consecutive_failures("fuel", "MH4") == 1, "fuel's update was lost (shared-file clobber)"
+    assert reloaded.consecutive_failures("vehicle_class", "MH12") == 1
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "rto_failures.fuel.json", "rto_failures.maker.json", "rto_failures.vehicle_class.json",
+    ], "one file per dimension, no leftover .tmp files"
+
+
+def test_legacy_combined_file_is_still_read(tmp_path):
+    import json
+    (tmp_path / "rto_failures.json").write_text(json.dumps({"maker:MH4": {"failed_runs": 3}}))
+    assert RtoFailureTracker(tmp_path / "rto_failures.json", threshold=2).should_skip("maker", "MH4")
+
+
+def test_quarantined_rto_is_reprobed_every_nth_run(tmp_path):
+    """P3: quarantine used to be permanent -- a skipped RTO was never fetched,
+    so it could never record_success and leave the list."""
+    path = tmp_path / "rto_failures.json"
+    seed = RtoFailureTracker(path, threshold=2, run_id="seed", recheck_every=3)
+    seed.record_failure("maker", "MH4")
+    seed.run_id = "seed2"
+    seed.record_failure("maker", "MH4")
+    decisions = []
+    for run in range(1, 7):
+        t = RtoFailureTracker(path, threshold=2, run_id=f"run{run}", recheck_every=3)
+        decisions.append(t.should_skip("maker", "MH4"))
+        assert t.should_skip("maker", "MH4") == decisions[-1], "idempotent within a run"
+    assert decisions == [True, True, False, True, True, False]
+    # The re-probe succeeds -> leaves the list for good.
+    t = RtoFailureTracker(path, threshold=2, run_id="run7", recheck_every=3)
+    t.record_success("maker", "MH4")
+    assert not RtoFailureTracker(path, threshold=2, run_id="run8", recheck_every=3).should_skip("maker", "MH4")
