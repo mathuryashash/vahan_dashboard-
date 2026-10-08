@@ -16,6 +16,11 @@ Plan sources (pick one):
                          RTO-year, or any RTO-month < 95%, or the class pass
                          knows >= 20 fewer classes than maker_category_totals
       fuel-short         fuel pass < 99.5% of the maker pass (year or month<95%)
+      crosstab-off       (crosstab dimensions) the table's RTO-year total is
+                         off the maker pass by > 1% (and >= 5 units), or the
+                         RTO-year is missing from the table
+      all-rtos           every RTO with maker-pass rows for the year (a full
+                         refresh of a crosstab table, split across sessions)
 
 Usage (from backend/):
   python -m scraper.run_targeted_scrape --dimension maker --detect maker-fingerprint \
@@ -24,10 +29,11 @@ Usage (from backend/):
   python -m scraper.run_targeted_scrape --dimension maker_category --plan plan.csv --partitions 4
 
 `--dimension` is a registrations pass (maker | vehicle_class | fuel) or a
-crosstab table (maker_category | maker_fuel | fuel_category). Crosstab runs
-are serial per session, so --partitions N splits the plan's states across N
-concurrent sessions (default 1). Takes the shared scrape run lock: exits 4
-with a message if another scrape is running.
+crosstab table (maker_category | maker_fuel | fuel_category), or several
+comma-separated -- those run concurrently, one plan each, like run_scraper's
+three passes. Crosstab runs are serial per session, so --partitions N splits
+each plan's states across N concurrent sessions (default 1). Takes the shared
+scrape run lock: exits 4 with a message if another scrape is running.
 """
 import argparse
 import asyncio
@@ -38,7 +44,7 @@ from collections import defaultdict
 
 from scraper import pool_sizing
 
-pool_sizing.serial()  # before any app.* import -- see that module's docstring
+pool_sizing.concurrent_workers()  # before any app.* import: up to dims x partitions sessions at once
 
 from sqlalchemy import text  # noqa: E402
 
@@ -103,16 +109,40 @@ _DETECT_SQL = {
     """,
 }
 
+_DETECT_SQL["all-rtos"] = """
+    SELECT DISTINCT state_name, rto_code FROM registrations
+    WHERE year = :y AND is_supplementary IS NOT TRUE AND rto_code IS NOT NULL ORDER BY 1, 2
+"""
+_CROSSTAB_OFF_SQL = """
+    WITH m AS (
+        SELECT rto_code, min(state_name) AS state_name, sum(count) AS t FROM registrations
+        WHERE year = :y AND is_supplementary IS NOT TRUE AND rto_code IS NOT NULL GROUP BY rto_code
+    ), x AS (
+        SELECT rto_code, sum(count) AS t FROM {table} WHERE year = :y GROUP BY rto_code
+    )
+    SELECT m.state_name, m.rto_code FROM m LEFT JOIN x USING (rto_code)
+    WHERE m.t > 0 AND abs(coalesce(x.t, 0) - m.t) > greatest(5, 0.01 * m.t) ORDER BY 1, 2
+"""
+
 Plan = dict[int, dict[str, frozenset[str]]]  # year -> state_name -> rto_codes
 
 
-async def detect_plan(kind: str, from_year: int, to_year: int) -> Plan:
+def _detect_sql(kind: str, dimension: str) -> str:
+    if kind == "crosstab-off":
+        if dimension not in CROSSTAB_DIMENSIONS:
+            raise SystemExit("--detect crosstab-off needs a crosstab --dimension")
+        return _CROSSTAB_OFF_SQL.format(table=run_crosstab_scrape._DIMENSIONS[dimension].model.__tablename__)
+    return _DETECT_SQL[kind]
+
+
+async def detect_plan(kind: str, from_year: int, to_year: int, dimension: str = "maker") -> Plan:
     plan: Plan = {}
+    sql = _detect_sql(kind, dimension)
     async with engine.connect() as conn:
         await conn.execute(text("SET TRANSACTION READ ONLY"))
         await conn.execute(text("SET LOCAL statement_timeout = '600s'"))
         for y in range(from_year, to_year + 1):
-            rows = (await conn.execute(text(_DETECT_SQL[kind]), {"y": y})).all()
+            rows = (await conn.execute(text(sql), {"y": y})).all()
             if rows:
                 by_state: dict[str, set[str]] = defaultdict(set)
                 for state_name, rto_code in rows:
@@ -156,6 +186,8 @@ async def run(dimension: str, plan: Plan, concurrent_states: int = 1, partitions
     partial_years = 0
     async with scrape_run_lock(engine, f"run_targeted_scrape {dimension}"):
         for year in sorted(plan, reverse=True):
+            if not plan[year]:
+                continue
             n = sum(len(v) for v in plan[year].values())
             logger.info("=== %s %d: %d RTO(s) across %d state(s) ===", dimension, year, n, len(plan[year]))
             if dimension in CROSSTAB_DIMENSIONS:
@@ -173,27 +205,40 @@ async def run(dimension: str, plan: Plan, concurrent_states: int = 1, partitions
 
 
 async def amain(args) -> int:
-    if args.plan:
-        plan = read_plan(args.plan)
-    else:
-        plan = await detect_plan(args.detect, args.from_year, args.to_year)
-    total = sum(len(c) for y in plan.values() for c in y.values())
-    logger.info("Plan: %d RTO-year(s) over %d year(s): %s", total, len(plan),
-                ", ".join(f"{y}:{sum(len(c) for c in plan[y].values())}" for y in sorted(plan)))
-    print(f"PLAN_RTO_YEARS: {total}", flush=True)
-    if args.write_plan:
-        write_plan(plan, args.write_plan)
-    if args.dry_run or not plan:
+    dims = [d.strip() for d in args.dimension.split(",") if d.strip()]
+    bad = [d for d in dims if d not in set(DIMENSIONS) | CROSSTAB_DIMENSIONS]
+    if bad:
+        raise SystemExit(f"unknown dimension(s): {bad}")
+    plans: dict[str, Plan] = {}
+    for d in dims:
+        plans[d] = read_plan(args.plan) if args.plan else await detect_plan(args.detect, args.from_year, args.to_year, d)
+        plan = plans[d]
+        total = sum(len(c) for y in plan.values() for c in y.values())
+        logger.info("Plan %s: %d RTO-year(s) over %d year(s): %s", d, total, len(plan),
+                    ", ".join(f"{y}:{sum(len(c) for c in plan[y].values())}" for y in sorted(plan)))
+        print(f"PLAN_RTO_YEARS {d}: {total}", flush=True)
+        if args.write_plan:
+            write_plan(plan, args.write_plan if len(dims) == 1 else args.write_plan.replace(".csv", f".{d}.csv"))
+    if args.dry_run:
         return 0
-    return await run(args.dimension, plan, args.concurrent_states, args.partitions)
+    async with scrape_run_lock(engine, "run_targeted_scrape"):
+        results = await asyncio.gather(*(run(d, plans[d], args.concurrent_states, args.partitions)
+                                         for d in dims if plans[d]), return_exceptions=True)
+    failed = [r for r in results if isinstance(r, BaseException)]
+    for r in failed:
+        logger.error("dimension run failed: %r", r)
+    if failed:
+        raise failed[0]
+    return sum(results)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dimension", required=True, choices=sorted(set(DIMENSIONS) | CROSSTAB_DIMENSIONS))
+    ap.add_argument("--dimension", required=True, help="one or more (comma-separated) of: "
+                    + ", ".join(sorted(set(DIMENSIONS) | CROSSTAB_DIMENSIONS)))
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--plan")
-    src.add_argument("--detect", choices=sorted(_DETECT_SQL))
+    src.add_argument("--detect", choices=sorted(set(_DETECT_SQL) | {"crosstab-off"}))
     ap.add_argument("--from-year", type=int, default=2003)
     ap.add_argument("--to-year", type=int, default=2025)
     ap.add_argument("--concurrent-states", type=int, default=1)

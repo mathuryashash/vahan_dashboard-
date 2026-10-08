@@ -273,3 +273,17 @@ async def test_targeted_only_filter_limits_rtos(monkeypatch):
                                    frozenset(), only=frozenset({"MH2"}))
     assert seen == ["2"]
     assert items[-1]["rto_total"] == 1 and items[-1]["rto_succeeded"] == 1
+
+
+def test_targeted_partition_balances_by_rto_count():
+    from scraper.run_targeted_scrape import partition
+    parts = partition({"A": frozenset("abcd"), "B": frozenset("ab"), "C": frozenset("ab"), "D": frozenset("a")}, 2)
+    assert sorted(sum(len(v) for v in p.values()) for p in parts) == [4, 5]
+    assert set().union(*parts) == {"A", "B", "C", "D"}
+
+
+def test_targeted_plan_roundtrip(tmp_path):
+    from scraper.run_targeted_scrape import read_plan, write_plan
+    plan = {2019: {"Tamil Nadu": frozenset({"TN33", "TN39"})}, 2025: {"Chhattisgarh": frozenset({"CG6"})}}
+    write_plan(plan, tmp_path / "p.csv")
+    assert read_plan(tmp_path / "p.csv") == plan
