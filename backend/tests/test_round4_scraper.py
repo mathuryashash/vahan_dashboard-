@@ -126,7 +126,9 @@ def test_child_env_skips_the_lock(monkeypatch):
 
 
 @pytest.mark.parametrize("module", ["scraper.run_full_scrape", "scraper.run_crosstab_scrape",
-                                    "scraper.backfill_all_years", "scraper.run_targeted_scrape"])
+                                    "scraper.backfill_all_years", "scraper.run_targeted_scrape",
+                                    "scraper.run_analytics_scrape", "scraper.run_analytics_fuel_scrape",
+                                    "scraper.run_top_makers_scrape"])
 def test_every_entry_point_takes_the_run_lock(module):
     import importlib
     import inspect

@@ -19,7 +19,7 @@ from scraper import pool_sizing
 pool_sizing.concurrent_workers()  # before any app.* import -- see that module's docstring
 
 from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
-from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.core.scrape_lock import exit_if_run_lock_busy, scrape_run_lock, scrape_write_lock  # noqa: E402
 from app.models.models import State, StateMonthCategoryTotal  # noqa: E402
 from app.services.scraper_service import persist_state_month_category_batch  # noqa: E402
 from scraper.analytics_scraper import CaptchaSolveError, load_session, scrape_state_year, verify_tesseract  # noqa: E402
@@ -84,16 +84,17 @@ async def main(from_year: int, to_year: int, concurrent: int = 4, force: bool = 
     async with AsyncSessionLocal() as db:
         states = await _state_list(db)
 
-    for year in range(from_year, to_year + 1):
-        lock_key = f"state_month_category_totals:{year}"
-        try:
-            async with scrape_write_lock(engine, lock_key):
-                await _run_year(states, year, concurrent, force, tesseract_path)
-        except Exception:
-            # Lock contention (another process already scraping this year)
-            # or a DB hiccup in _already_done shouldn't abort every other
-            # year in a multi-year --from-year/--to-year range.
-            logger.exception("year=%d: failed, moving to next year", year)
+    async with scrape_run_lock(engine, "run_analytics_scrape"):
+        for year in range(from_year, to_year + 1):
+            lock_key = f"state_month_category_totals:{year}"
+            try:
+                async with scrape_write_lock(engine, lock_key):
+                    await _run_year(states, year, concurrent, force, tesseract_path)
+            except Exception:
+                # Lock contention (another process already scraping this year)
+                # or a DB hiccup in _already_done shouldn't abort every other
+                # year in a multi-year --from-year/--to-year range.
+                logger.exception("year=%d: failed, moving to next year", year)
 
     logger.info("Analytics scrape complete (years=%d-%d).", from_year, to_year)
 
@@ -119,4 +120,7 @@ if __name__ == "__main__":
     else:
         parser.error("pass either --year or both --from-year and --to-year")
 
-    asyncio.run(main(from_year, to_year, args.concurrent, args.force))
+    try:
+        asyncio.run(main(from_year, to_year, args.concurrent, args.force))
+    except Exception as exc:  # busy shared run lock -> exit 4 with a message
+        exit_if_run_lock_busy(exc)

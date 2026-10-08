@@ -31,7 +31,7 @@ from scraper import pool_sizing
 pool_sizing.concurrent_workers()  # before any app.* import -- see that module's docstring
 
 from app.core.database import AsyncSessionLocal, engine, init_db  # noqa: E402
-from app.core.scrape_lock import scrape_write_lock  # noqa: E402
+from app.core.scrape_lock import exit_if_run_lock_busy, scrape_run_lock, scrape_write_lock  # noqa: E402
 from app.models.models import MakerCategoryTotal, State  # noqa: E402
 from app.services import live_scrape_service  # noqa: E402
 from app.services.live_scrape_service import TesseractUnavailableError, get_or_scrape_maker_query  # noqa: E402
@@ -116,17 +116,18 @@ async def main(limit: int, from_year: int, to_year: int, concurrent: int) -> Non
     logger.info("Resolved top %d makers, %d states -- %d combos across %d years",
                 len(makers), len(states), total_combos, to_year - from_year + 1)
 
-    for year in range(from_year, to_year + 1):
-        lock_key = f"maker_live_query_cache:{year}"
-        try:
-            async with scrape_write_lock(engine, lock_key):
-                logger.info("year=%d: starting (%d maker x state combos)", year, len(makers) * len(states))
-                await _run_year(makers, states, year, concurrent)
-                logger.info("year=%d: done", year)
-        except Exception:
-            # Lock contention or a DB hiccup shouldn't abort every other
-            # year in the range.
-            logger.exception("year=%d: failed, moving to next year", year)
+    async with scrape_run_lock(engine, "run_top_makers_scrape"):
+        for year in range(from_year, to_year + 1):
+            lock_key = f"maker_live_query_cache:{year}"
+            try:
+                async with scrape_write_lock(engine, lock_key):
+                    logger.info("year=%d: starting (%d maker x state combos)", year, len(makers) * len(states))
+                    await _run_year(makers, states, year, concurrent)
+                    logger.info("year=%d: done", year)
+            except Exception:
+                # Lock contention or a DB hiccup shouldn't abort every other
+                # year in the range.
+                logger.exception("year=%d: failed, moving to next year", year)
 
     logger.info("Top-%d makers scrape complete (years=%d-%d).", limit, from_year, to_year)
 
@@ -138,4 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--to-year", type=int, default=2026)
     parser.add_argument("--concurrent", type=int, default=10, help="Concurrent maker/state combos per year")
     args = parser.parse_args()
-    asyncio.run(main(args.limit, args.from_year, args.to_year, args.concurrent))
+    try:
+        asyncio.run(main(args.limit, args.from_year, args.to_year, args.concurrent))
+    except Exception as exc:  # busy shared run lock -> exit 4 with a message
+        exit_if_run_lock_busy(exc)
