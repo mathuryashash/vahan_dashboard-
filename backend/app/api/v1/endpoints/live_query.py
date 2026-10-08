@@ -14,7 +14,9 @@ from app.core.validation import MAX_YEAR, MIN_YEAR
 from app.models.models import User, UserScope
 from app.core.config import settings
 from app.models.models import RTO
+from app.services import fuel_groups
 from app.services import stored_live_service as stored
+from app.core.cache import TTLCache, single_flight
 from app.services.live_scrape_service import (
     UnknownRtoCodeError, UnknownStateCodeError, get_or_scrape_maker_query, get_site_rto_codes,
     get_top_makers_leaderboard, search_makers,
@@ -22,6 +24,70 @@ from app.services.live_scrape_service import (
 from scraper.analytics_scraper import CaptchaSolveError, TesseractUnavailableError
 
 router = APIRouter()
+
+
+def _parse_group(value: str | None) -> str | None:
+    try:
+        return fuel_groups.normalize_group(value)
+    except ValueError:
+        raise HTTPException(
+            422,
+            detail=f"Unknown fuel_group {value!r}; expected one of {', '.join(fuel_groups.FUEL_GROUPS)}.",
+        )
+
+
+# Maker dropdown options: a per-state GROUP BY (~15-300 ms). Keyed on the
+# fully resolved scope (state, rto, category) plus the filters, so one
+# tenant's list can never be served to another.
+_maker_options_cache = TTLCache(600)
+
+
+@router.get("/fuel-groups")
+async def list_fuel_groups(_user: User = Depends(get_current_user)):
+    """The six fuel groups the Maker Lookup / Top Makers panels offer, with
+    the raw VAHAN fuel labels each one sums (fuel_groups.py is the single
+    source of this mapping)."""
+    return fuel_groups.mapping_table()
+
+
+@router.get("/maker-options")
+@single_flight
+async def get_maker_options(
+    year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
+    fuel_group: str | None = Query(None, max_length=20),
+    rto: str | None = Query(None, max_length=10),
+    state_code: str = Depends(require_state_code),
+    user_category: str | None = Depends(get_effective_category),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Makers with stored registrations for this state (or RTO) + year (+
+    fuel group), sorted by volume -- the Maker Lookup's dropdown. A maker
+    absent here has no registrations for that combination, so the UI cannot
+    offer it. Scope: state via require_state_code, RTO forced for RTO-tier
+    accounts (same contract as /maker), category via get_effective_category;
+    fuel group + category is refused with a reason (maker_fuel_totals has
+    no category axis)."""
+    if user.scope_type == UserScope.RTO:
+        if rto and rto != user.scope_rto_code:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not permitted to view this state/RTO")
+        rto = user.scope_rto_code
+    group = _parse_group(fuel_group)
+    key = (state_code, rto, user_category, year, group)
+    cached = _maker_options_cache.get(key)
+    if cached is not None:
+        return cached
+    answer = await stored.maker_options(db, state_code, year, group, user_category, rto)
+    response = {
+        "state_code": state_code, "year": year, "fuel_group": group, "rto": rto,
+        "makers": answer.records, "source": "stored", "grain": answer.grain,
+        "unanswerable_reason": answer.unanswerable_reason,
+        # Lets the UI word the panel as "Live ..." only when the fallback is on.
+        "live_fallback": settings.LIVE_SCRAPE_FALLBACK,
+    }
+    _maker_options_cache.set(key, response)
+    return response
+
 
 # Server-side caps kept BELOW the browser timeouts in frontend/src/api/
 # vahan.ts (30s for /maker, 60s for /leaderboard): a server that outlives the
@@ -37,6 +103,7 @@ async def get_maker_query(
     year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
     maker: str = Query(..., max_length=200),
     fuel: str | None = Query(None, max_length=50),
+    fuel_group: str | None = Query(None, max_length=20, description="One of " + ", ".join(fuel_groups.FUEL_GROUPS)),
     rto: str | None = Query(None, max_length=10),
     state_code: str = Depends(require_state_code),
     user_category: str | None = Depends(get_effective_category),
@@ -67,6 +134,16 @@ async def get_maker_query(
         if rto and rto != user.scope_rto_code:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Not permitted to view this state/RTO")
         rto = user.scope_rto_code
+    group = _parse_group(fuel_group)
+    if group:
+        # Fuel GROUPS are a stored-data concept (several raw labels summed),
+        # answered from our tables even when the live fallback is on.
+        answer = await stored.maker_query_by_group(db, state_code, year, maker, group, rto, user_category)
+        return {
+            "state_code": state_code, "year": year, "maker": maker, "fuel": None, "fuel_group": group,
+            "rto": rto, "records": answer.records, "source": "stored", "as_of": await stored.as_of(db),
+            "grain": answer.grain, "unanswerable_reason": answer.unanswerable_reason,
+        }
     if not settings.LIVE_SCRAPE_FALLBACK:
         # Phase A: answered from our own tables, no government-site request.
         answer = await stored.maker_query(db, state_code, year, maker, fuel, rto, user_category)
@@ -159,6 +236,7 @@ async def get_leaderboard(
     request: Request,  # required by @limiter.limit, unused otherwise
     year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
     fuel: str | None = None,
+    fuel_group: str | None = Query(None, max_length=20),
     limit: int = Query(10, ge=1, le=20),
     state_code: str = Depends(require_state_code),
     user_category: str | None = Depends(get_effective_category),
@@ -182,6 +260,14 @@ async def get_leaderboard(
     # subscriber. Same shape as the /rto/{state}/list leak, and the fourth
     # recurrence in this codebase; the sibling /maker route above already
     # narrows RTO unconditionally for exactly this reason.
+    group = _parse_group(fuel_group)
+    if group:
+        answer = await stored.leaderboard(db, state_code, year, None, limit, user_category, user_rto, fuel_group=group)
+        return {
+            "state_code": state_code, "year": year, "fuel": None, "fuel_group": group, "makers": answer.records,
+            "source": "stored", "as_of": await stored.as_of(db), "grain": answer.grain,
+            "unanswerable_reason": answer.unanswerable_reason,
+        }
     if not settings.LIVE_SCRAPE_FALLBACK:
         answer = await stored.leaderboard(db, state_code, year, fuel, limit, user_category, user_rto)
         return {

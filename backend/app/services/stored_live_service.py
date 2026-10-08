@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import TTLCache
 from app.models.models import MakerCategoryTotal, MakerFuelTotal, Registration
-from app.services import data_freshness
+from app.services import data_freshness, fuel_groups
 
 GRAIN_MONTH = "month"
 GRAIN_YEAR = "year"
@@ -120,11 +120,98 @@ async def maker_query(
     )
 
 
-async def leaderboard(
-    db: AsyncSession, state_code: str, year: int, fuel: str | None = None, limit: int = 10,
+FUEL_GROUP_AND_CATEGORY_REASON = (
+    "Maker x fuel x vehicle category is not held in our tables (maker_fuel_totals has no "
+    "category axis), so a fuel filter cannot be combined with your account's vehicle category."
+)
+
+
+async def maker_options(
+    db: AsyncSession, state_code: str, year: int, fuel_group: str | None = None,
     category: str | None = None, rto: str | None = None,
 ) -> StoredAnswer:
-    """Top makers by stored yearly volume; `records` is [{maker, total}]."""
+    """Makers that actually registered vehicles in this state (or RTO) and
+    year -- within one fuel GROUP when given -- with their stored yearly
+    volume, largest first. `records` is [{maker, total}].
+
+    This is what the Maker Lookup's maker dropdown lists, so a maker with no
+    registrations for the chosen fuel group is simply not offered (Karnataka x
+    HERO MOTOCORP x Diesel used to be pickable and then failed).
+
+    Sources: fuel group -> maker_fuel_totals, every raw fuel label in the
+    group summed (fuel_groups.group_of decides membership); no fuel group ->
+    maker_category_totals (category-clamped for category-scoped accounts).
+    Fuel group + category is refused: maker_fuel_totals has no category axis.
+    """
+    if fuel_group and category:
+        return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_GROUP_AND_CATEGORY_REASON)
+    totals: dict[str, int] = {}
+    if fuel_group:
+        q = (
+            select(MakerFuelTotal.maker, MakerFuelTotal.fuel_type, func.sum(MakerFuelTotal.count))
+            .where(MakerFuelTotal.state_code == state_code, MakerFuelTotal.year == year)
+            .group_by(MakerFuelTotal.maker, MakerFuelTotal.fuel_type)
+        )
+        if rto:
+            q = q.where(MakerFuelTotal.rto_code == rto)
+        for maker, raw_fuel, cnt in (await db.execute(q)).all():
+            if cnt and fuel_groups.group_of(raw_fuel) == fuel_group:
+                totals[maker] = totals.get(maker, 0) + int(cnt)
+    else:
+        q = (
+            select(MakerCategoryTotal.maker, func.sum(MakerCategoryTotal.count))
+            .where(MakerCategoryTotal.state_code == state_code, MakerCategoryTotal.year == year)
+            .group_by(MakerCategoryTotal.maker)
+        )
+        if category:
+            q = q.where(MakerCategoryTotal.vehicle_category == category)
+        if rto:
+            q = q.where(MakerCategoryTotal.rto_code == rto)
+        for maker, cnt in (await db.execute(q)).all():
+            if cnt:
+                totals[maker] = int(cnt)
+    ranked = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
+    return StoredAnswer(records=[{"maker": m, "total": t} for m, t in ranked if m and t > 0], grain=GRAIN_YEAR)
+
+
+async def maker_query_by_group(
+    db: AsyncSession, state_code: str, year: int, maker: str, fuel_group: str,
+    rto: str | None = None, category: str | None = None,
+) -> StoredAnswer:
+    """One maker's yearly volume in one fuel GROUP: one record per raw fuel
+    label inside the group (month=0, category=<raw label>), so the records
+    sum to the group total and the split stays visible."""
+    if category:
+        return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_GROUP_AND_CATEGORY_REASON)
+    maker = maker.strip().upper()
+    q = (
+        select(MakerFuelTotal.fuel_type, func.sum(MakerFuelTotal.count))
+        .where(MakerFuelTotal.state_code == state_code, MakerFuelTotal.year == year,
+               MakerFuelTotal.maker == maker)
+        .group_by(MakerFuelTotal.fuel_type)
+        .order_by(MakerFuelTotal.fuel_type)
+    )
+    if rto:
+        q = q.where(MakerFuelTotal.rto_code == rto)
+    rows = (await db.execute(q)).all()
+    return StoredAnswer(
+        records=[{"month": 0, "category": f, "count": int(c)} for f, c in rows
+                 if c and fuel_groups.group_of(f) == fuel_group],
+        grain=GRAIN_YEAR,
+    )
+
+
+async def leaderboard(
+    db: AsyncSession, state_code: str, year: int, fuel: str | None = None, limit: int = 10,
+    category: str | None = None, rto: str | None = None, fuel_group: str | None = None,
+) -> StoredAnswer:
+    """Top makers by stored yearly volume; `records` is [{maker, total}].
+    `fuel_group` (one of fuel_groups.FUEL_GROUPS) takes precedence over the
+    legacy raw `fuel` label."""
+    if fuel_group:
+        answer = await maker_options(db, state_code, year, fuel_group, category, rto)
+        answer.records = answer.records[:limit]
+        return answer
     fuel = fuel.strip().upper() if fuel else None
     if fuel and category:
         return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_AND_CATEGORY_REASON)
@@ -197,7 +284,17 @@ def reset_maker_list() -> None:
 # as the maker list. The key is the full resolved scope tuple, so a national
 # result can never be handed to a narrower account.
 _allowed_makers_cache: dict[tuple, tuple[float, frozenset[str]]] = {}
-_allowed_makers_lock = asyncio.Lock()
+# One lock PER scope key: a 2 s cold build of the Four-Wheeler set must not
+# hold up the first search of an unrelated UP or UP32 account (round-3 P3).
+# Same-key callers still serialise, so each key is built once.
+_allowed_makers_locks: dict[tuple, asyncio.Lock] = {}
+
+
+def _lock_for(key: tuple) -> asyncio.Lock:
+    lock = _allowed_makers_locks.get(key)
+    if lock is None:
+        lock = _allowed_makers_locks[key] = asyncio.Lock()
+    return lock
 
 
 async def allowed_makers(db: AsyncSession, *, category: str | None = None,
@@ -211,7 +308,7 @@ async def allowed_makers(db: AsyncSession, *, category: str | None = None,
     hit = _allowed_makers_cache.get(key)
     if hit and time.monotonic() - hit[0] < _MAKER_LIST_TTL:
         return hit[1]
-    async with _allowed_makers_lock:
+    async with _lock_for(key):
         hit = _allowed_makers_cache.get(key)
         if hit and time.monotonic() - hit[0] < _MAKER_LIST_TTL:
             return hit[1]
