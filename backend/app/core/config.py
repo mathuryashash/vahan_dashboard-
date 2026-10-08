@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     # i.e. an overdue scrape starts shortly after boot. Set
     # SCRAPE_CATCHUP_ON_BOOT=false for dev/test servers that must never
     # scrape on boot (then the first run is a full interval after boot).
+    # FIRST DEPLOY: data is ~19 days old, so a full scrape starts ~60s after
+    # boot -- see docs/DEPLOY_NOTES_fix-review-2026-10-08.md.
     SCRAPE_CATCHUP_ON_BOOT: bool = True
     # The UI's live maker lookup / leaderboard used to scrape the government
     # analytics site on every request. They are now answered from stored

@@ -8,6 +8,28 @@ VALIDATE` step should be preceded by a SELECT proving zero violators. Run
 be proven with `BEGIN; DROP INDEX …; EXPLAIN <real queries>; ROLLBACK;`,
 because `idx_scan` counters reset on restart.
 
+**Lock safety (applies to every statement below).** `ADD CONSTRAINT`,
+`SET NOT NULL`, `DROP COLUMN` and `DROP INDEX` (non-concurrent) take a brief
+ACCESS EXCLUSIVE lock, and `CREATE INDEX` (non-concurrent) takes SHARE. Behind
+a long-running scrape transaction or a slow dashboard query they queue, and
+every later query on the table queues behind THEM. Run each DDL statement in
+its own session with:
+```sql
+SET lock_timeout = '5s';        -- give up instead of stalling the table
+SET statement_timeout = '0';    -- VALIDATE / CONCURRENTLY builds can be long
+```
+and retry on `lock_not_available` (55P03) with a backoff, outside scrape
+windows. Never wrap a `CONCURRENTLY` statement in a transaction.
+
+**Boot-path coupling (read before §3).** `init_db` runs on EVERY boot and
+recreates what `models.py` declares: `ensure_indexes` issues a
+non-concurrent `CREATE INDEX IF NOT EXISTS` for every `Index(...)` and every
+`index=True` column, and `ensure_no_duplicate_rows` short-circuits only when
+the unique index it is told about (`unique_index_name=`) exists **by name**.
+Any index drop/rename below must therefore ship in the SAME deploy as the
+matching `models.py` / `database.py` change, or the next boot silently undoes
+it -- under a SHARE lock that blocks scrapes for the whole build.
+
 Code-only fixes shipped in the same review need **no** DDL: the categories
 range-split, the loose-index-scan year lists, the coverage-gap hash-distinct
 rewrite and removing the kpis tautology. See §6 for what each DDL item
@@ -43,8 +65,10 @@ ALTER TABLE registrations ADD CONSTRAINT ck_reg_pass_shape CHECK (
 ) NOT VALID;
 ALTER TABLE registrations VALIDATE CONSTRAINT ck_reg_pass_shape;
 ```
-All 18.4M rows satisfy it. This would have made the 2x and 53x
-double-count bug classes impossible to write. It also forbids synthetic
+All 18.4M rows satisfy it (0 violators, 0 NULL-evaluating; run it AFTER
+1a -- a NULL `is_supplementary` would pass a CHECK). It makes the
+three-pass data invariant explicit and enforced; the historical 2x/53x
+overcounts were query bugs, which it does not prevent. It also forbids synthetic
 seed rows (`NOT supp AND class <> 'All'`), so adopt it as a deliberate
 decision.
 
@@ -57,12 +81,25 @@ ALTER TABLE registrations VALIDATE CONSTRAINT fk_reg_state_code_name;
 -- same for maker_category_totals / fuel_category_totals / maker_fuel_totals
 ```
 `rto_name` changes over time (RTO renames), so it stays denormalised.
+Decide the `ON UPDATE` behaviour before adding the FK: with the default
+(`NO ACTION`) a state rename is blocked until 18.4M+ child rows are updated
+by hand; `ON UPDATE CASCADE` performs that update implicitly inside the
+rename. Either is defensible -- choose explicitly.
 Longer term (P3): `maker_id int REFERENCES makers`.
 
-### 1d. Missing FK
-`maker_live_query_cache.rto_code` has no FK to `rtos`. This is
-SUSPECTED intentional, because live codes can precede the rtos backfill.
-Decide explicitly. If wanted, add it `NOT VALID` and then `VALIDATE`.
+### 1d. `maker_live_query_cache.rto_code` -> `rtos`: NOT possible as written
+Measured 2026-10-08: **977,239 of 977,262** rows carry `rto_code = 'ALL'`, a
+sentinel meaning "whole state" (the column is NOT NULL); the remaining 23 have
+0 orphans. `VALIDATE` would fail on 99.998% of rows, so an FK is impossible
+without first changing the sentinel. Options:
+1. Keep it FK-less (recommended while the table is a cache that Phase A
+   largely retires): document `'ALL'` as the whole-state sentinel.
+2. If integrity is wanted: make the column nullable, change the writer
+   (`live_scrape_service`) and every reader to use NULL for "whole state",
+   migrate `UPDATE ... SET rto_code = NULL WHERE rto_code = 'ALL'` in
+   batches, rebuild the cache's unique key with `NULLS NOT DISTINCT`, then
+   `ADD CONSTRAINT ... FOREIGN KEY (rto_code) REFERENCES rtos NOT VALID` and
+   `VALIDATE`. That is a code + data migration, not a one-line DDL.
 
 ## 2. Columns and types
 
@@ -73,10 +110,22 @@ Decide explicitly. If wanted, add it `NOT VALID` and then `VALIDATE`.
     ALTER TABLE registrations DROP COLUMN vehicle_model, DROP COLUMN norms_type, DROP COLUMN day;
     ```
     It is catalogue-only (no rewrite, brief ACCESS EXCLUSIVE).
-- **`recorded_at timestamp` → `timestamptz`:** this is a full rewrite, so do it only as part of §5's partition migration:
+- **`recorded_at timestamp` → `timestamptz`:** this is a full rewrite, so do it only as part of §5's partition migration.
+  The stored values are the DB server's WALL CLOCK at write time
+  (`func.now()` into a `timestamp without time zone`), in the server's
+  `TimeZone` setting -- which on this (native) install is **`Asia/Calcutta`**
+  (`SHOW TimeZone`; source = configuration file), not UTC. Converting with
+  `AT TIME ZONE 'UTC'` would shift every value by +5:30. Use the zone that
+  was in effect when the rows were written, verified per environment
+  (docker's postgres image defaults to UTC):
   ```sql
-  ALTER TABLE registrations ALTER COLUMN recorded_at TYPE timestamptz USING recorded_at AT TIME ZONE 'UTC';
+  SHOW TimeZone;   -- Asia/Calcutta here; must be the zone func.now() wrote in
+  ALTER TABLE registrations ALTER COLUMN recorded_at TYPE timestamptz
+    USING recorded_at AT TIME ZONE 'Asia/Calcutta';
+  -- same for scrape_quality_log.checked_at
   ```
+  (The app already reads both columns as `::timestamptz` in the session zone
+  -- `data_freshness.get_freshness` -- so it is correct before and after.)
 
 ## 3. Indexes
 
@@ -85,10 +134,30 @@ Decide explicitly. If wanted, add it `NOT VALID` and then `VALIDATE`.
 CREATE UNIQUE INDEX CONCURRENTLY ux_reg_natural
   ON registrations (rto_code, year, is_supplementary, month, vehicle_class, maker, fuel_type)
   INCLUDE (count) NULLS NOT DISTINCT;
--- after plan comparison on rto list/analysis and updating persist_rto_batch's ON CONFLICT target:
+-- after plan comparison on rto list/analysis:
 DROP INDEX CONCURRENTLY idx_reg_natural_key;                      -- 2,514 MB
 DROP INDEX CONCURRENTLY idx_reg_rto_year_supp_month_maker_count;  -- 2,195 MB
 ```
+Pre-check (run 2026-10-08): 0 duplicates on the new key, 0 empty-string
+maker/fuel values, so `NULLS NOT DISTINCT` has the same semantics as the
+COALESCE expression. (`persist_rto_batch` is delete+insert -- there is no
+`ON CONFLICT` target to update.)
+
+**Must change in the SAME deploy as the drops** (see "Boot-path coupling"):
+- `models.py`: remove `Index("idx_reg_rto_year_supp_month_maker_count", ...)`
+  (~line 131) and the `idx_reg_natural_key` declaration (~line 168), and
+  declare `ux_reg_natural` instead. Otherwise the next boot's
+  `ensure_indexes` rebuilds 4.7 GB of indexes NON-concurrently under a SHARE
+  lock, blocking every scrape write for the duration.
+- `database.py` (~line 166): change
+  `ensure_no_duplicate_rows(..., unique_index_name="idx_reg_natural_key")` to
+  `"ux_reg_natural"`. That function skips its work only when the named index
+  exists; with the old name gone, EVERY boot would run the 18.4M-row
+  `GROUP BY ... DELETE` duplicate sweep.
+- If the `CONCURRENTLY` build fails or is interrupted it leaves an INVALID
+  index that still costs writes: check `SELECT indexrelid::regclass FROM
+  pg_index WHERE NOT indisvalid;`, then `DROP INDEX CONCURRENTLY ux_reg_natural;`
+  and retry.
 
 ### 3b. Class-pass partial index (optional, on top of the shipped range-split)
 ```sql
@@ -119,6 +188,13 @@ index-only.
 
 `registrations` carries 8.16 GB of indexes against a 3.25 GB heap.
 
+**Same boot-path coupling as 3a:** every index in this table comes from
+`index=True` on a `models.py` column (`registrations.month` /
+`state_code` / `vehicle_category`, and `year` on the three crosstab models --
+~lines 54, 58, 110, 192, 240, 280). Remove `index=True` in the same deploy
+as the drop, or the next boot's non-concurrent `CREATE INDEX IF NOT EXISTS`
+recreates each one under a SHARE lock.
+
 ## 4. Rollup for the Overview family
 ```sql
 CREATE MATERIALIZED VIEW reg_state_month_rollup AS
@@ -144,7 +220,7 @@ verdict is P3: the shipped query fixes give larger wins for far less risk.
 
 ## 6. Boot path: `ensure_rtos_backfilled` (53 s every boot) — DOCUMENTED ONLY
 The current statement is a Parallel Seq Scan of 18.4M rows, with an
-external merge sort of 257 MB, and it UPSERTs all ~1,412 `rtos` rows on
+external merge sort of 257 MB, and it UPSERTs the `rtos` rows (1,784 rows in `rtos` as of 2026-10-08; 1,412 refreshed per boot) on
 every boot. **This was not changed in this review.** The worktree test boot
 runs `init_db` against the production database, and this step writes to it
 (boot log: `rtos backfill: inserted/refreshed 1412 row(s)`). The brief allows
@@ -169,7 +245,7 @@ WHERE (rtos.rto_name, rtos.state_code) IS DISTINCT FROM (EXCLUDED.rto_name, EXCL
 ```
 Better still, move the step out of boot and run it after each successful
 scrape. Also:
-- Run migrations as a separate deploy step, with `lock_timeout`.
+- Run migrations as a separate deploy step, with `SET lock_timeout = '5s'` and retry (see the top of this doc).
 - Adopt Alembic with a baseline revision (§5.3 of the review).
 
 ---
@@ -207,6 +283,15 @@ year | classpass_short_rto_months / rto_months | classpass_missing_units | rto_y
 2026 | 0 / 12560 | 0 | 0 | 0 |
 TOTAL classpass_short_rto_months=26321 classpass_missing_units=58932356 rto_years_missing_25=79 their_units=442519
 ```
+Re-run 2026-10-08 (round 2, 179.2 s, read-only) with the FINGERPRINT query
+switched to `LEFT JOIN` (RTO-years present in mct with ZERO maker-pass rows
+are no longer dropped) and a `>= 25` column: identical class-pass and
+exactly-25 numbers, plus
+`rto_years_missing_ge25=84` (2019: 24, 2021: 25, 2025: 35 -- 5 RTO-years
+missing more than one page) and `rto_years_no_maker_pass=0` (no RTO-year is
+entirely absent from the maker pass, so the inner JOIN hid nothing today).
+Full output: `D:\hf-cache\vahan_review\check_integrity_r2.out`.
+
 This matches the reconciliation evidence:
 - **Class pass:** 2024 has 1,233 short RTO-months / 3,901,426 missing units; 2019 has 2,025 / 5,648,738.
 - **Maker pass:** 2025 has 34 RTO-years / 237,763 units (CG 27, HR 5, JH 1, MZ 1); 2019 has 22 / 132,785; 2021 has 23 / 71,971.
@@ -259,6 +344,7 @@ those makers. For example, CG6 2025 has no HERO, BAJAJ or HONDA rows in
 4. Add the "distinct-maker diff = 25" query to the nightly check or CI so this signature cannot recur silently.
 
 ### 7c. Prerequisites and safety
-- **Scheduler:** it is now data-age based. A production boot with `SCRAPE_CATCHUP_ON_BOOT=true` starts an overdue current-year scrape. Schedule the backfill windows so they do not overlap it; the advisory locks fail fast if they do.
-- **Synthetic purge:** an empty RTO no longer counts as a success, so a state with empty RTOs is never purged and the run reports itself as `partial`.
-- **Skip-list:** RTOs that keep returning 500 (31 RTOs) can be skipped with `SCRAPER_SKIP_AFTER_FAILED_RUNS=N`, which is off by default. Do not enable it during the backfill.
+- **Scheduler:** it is now data-age based. A production boot with `SCRAPE_CATCHUP_ON_BOOT=true` (the default) starts an overdue current-year scrape ~60 s after boot -- on the first deploy of this branch that is a FULL scrape, because the data is ~19 days old. See `docs/DEPLOY_NOTES_fix-review-2026-10-08.md`. Schedule the backfill windows so they do not overlap it; the advisory locks fail fast if they do.
+- **Synthetic purge:** an empty RTO no longer counts as a success, so a state with ANY empty RTO is never purged. For status, only NEWLY-empty RTOs (had data for that year+pass before the run) or failed/skipped RTOs make a state `partial`; structurally empty RTOs (no prior data -- ~376 of 1,784 have no 2026 maker data) do not, and are counted in `/refresh/status` `structurally_empty_rtos`.
+- **Skip-list:** RTOs that keep returning 500 (31 RTOs) can be skipped with `SCRAPER_SKIP_AFTER_FAILED_RUNS=N`, which is off by default. Do not enable it during the backfill. State is per pass (`SCRAPER_DATA_DIR/rto_failures.<dimension>.json`); a skipped RTO is re-probed every `SCRAPER_SKIP_RECHECK_EVERY_RUNS` (default 5) runs.
+- **Maker search scope (N7):** on the stored path (`LIVE_SCRAPE_FALLBACK=false`, the default) `/live-query/makers/search` lists only makers with `maker_category_totals` rows in the caller's state/RTO (and category). With `LIVE_SCRAPE_FALLBACK=true` it returns the source site's national maker list, category-clamped only -- metadata (names), no volumes.
