@@ -9,6 +9,7 @@ deletes anything). States not in the plan are never requested.
 
 Plan sources (pick one):
   --plan FILE          CSV with header year,state_name,rto_code
+                       (or dim=FILE,dim=FILE for one plan per dimension)
   --detect KIND        derive the plan from the DB with a READ-ONLY query:
       maker-fingerprint  maker pass knows >= 25 fewer makers than
                          maker_category_totals for the RTO-year
@@ -204,6 +205,17 @@ async def run(dimension: str, plan: Plan, concurrent_states: int = 1, partitions
     return partial_years
 
 
+def _plan_file_for(spec: str, dimension: str) -> str:
+    """`--plan FILE` (one plan for every dimension) or
+    `--plan dim=FILE,dim=FILE` (one plan per dimension)."""
+    if "=" not in spec:
+        return spec
+    pairs = dict(p.split("=", 1) for p in spec.split(","))
+    if dimension not in pairs:
+        raise SystemExit(f"--plan has no file for dimension {dimension!r}")
+    return pairs[dimension]
+
+
 async def amain(args) -> int:
     dims = [d.strip() for d in args.dimension.split(",") if d.strip()]
     bad = [d for d in dims if d not in set(DIMENSIONS) | CROSSTAB_DIMENSIONS]
@@ -211,7 +223,8 @@ async def amain(args) -> int:
         raise SystemExit(f"unknown dimension(s): {bad}")
     plans: dict[str, Plan] = {}
     for d in dims:
-        plans[d] = read_plan(args.plan) if args.plan else await detect_plan(args.detect, args.from_year, args.to_year, d)
+        plans[d] = read_plan(_plan_file_for(args.plan, d)) if args.plan else await detect_plan(
+            args.detect, args.from_year, args.to_year, d)
         plan = plans[d]
         total = sum(len(c) for y in plan.values() for c in y.values())
         logger.info("Plan %s: %d RTO-year(s) over %d year(s): %s", d, total, len(plan),

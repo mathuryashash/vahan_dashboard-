@@ -289,3 +289,11 @@ def test_targeted_plan_roundtrip(tmp_path):
     plan = {2019: {"Tamil Nadu": frozenset({"TN33", "TN39"})}, 2025: {"Chhattisgarh": frozenset({"CG6"})}}
     write_plan(plan, tmp_path / "p.csv")
     assert read_plan(tmp_path / "p.csv") == plan
+
+
+def test_targeted_plan_spec_per_dimension():
+    from scraper.run_targeted_scrape import _plan_file_for
+    assert _plan_file_for("p.csv", "maker") == "p.csv"
+    assert _plan_file_for("maker=a.csv,fuel=b.csv", "fuel") == "b.csv"
+    with pytest.raises(SystemExit):
+        _plan_file_for("maker=a.csv", "fuel")
