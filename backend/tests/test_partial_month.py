@@ -160,3 +160,32 @@ async def test_yoy_monthly_withholds_growth_for_partial_month(client, db_session
     assert rows[9]["growth_percent"] is None and rows[9]["is_partial"] is True  # not a fake -60%
     assert body["partial_month"] == 9 and body["partial_month_year"] == 2026
     assert body["data_scraped_at"].startswith("2026-09-19T21:01")
+
+
+# Round 5 P2-1: a month AFTER the newest scraped one (Nov when data ends in
+# Sep) compared 0 against a full prior month and read -100%; the partial
+# month itself read -88.8% on /month-detail, which had no guard at all.
+async def test_kpis_future_month_has_no_yoy(client, db_session):
+    await _seed_partial_september(db_session)
+    body = (await client.get("/api/v1/summary/kpis", params={"year": 2026, "month": 11})).json()
+    assert body["total_this_month"] == 0
+    assert body["yoy_growth_percent"] is None, "-100.0 means a future month was compared"
+    assert body["month_incomplete"] is True and body["latest_month"] == 9
+
+
+async def test_month_detail_partial_and_future_months_withhold_yoy(client, db_session):
+    await _seed_partial_september(db_session)
+    for month in (9, 11):
+        body = (await client.get("/api/v1/summary/month-detail", params={"year": 2026, "month": month})).json()
+        assert body["month_incomplete"] is True, month
+        assert body["month_yoy_growth_percent"] is None, f"month {month}: fake decline"
+        assert body["ytd_yoy_growth_percent"] is None, f"month {month}: fake YTD decline"
+    body = (await client.get("/api/v1/summary/month-detail", params={"year": 2026, "month": 8})).json()
+    assert body["month_incomplete"] is False
+    assert body["month_yoy_growth_percent"] == 10.0 and body["ytd_yoy_growth_percent"] == 10.0
+
+
+async def test_categories_future_month_has_no_yoy(client, db_session):
+    await _seed_class_pass(db_session)
+    body = (await client.get("/api/v1/categories/", params={"year": 2026, "month": 11})).json()
+    assert all(r["yoy_growth"] is None for r in body)

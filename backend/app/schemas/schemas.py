@@ -46,6 +46,10 @@ class DashboardKPIs(BaseModel):
     # populated whether or not a month was requested.
     yoy_compare_through_month: int | None = None
     partial_month: int | None = None
+    # Newest stored month of `year` (the month picker hides later ones), and
+    # whether the requested month is partial or not scraped yet (YoY = None).
+    latest_month: int | None = None
+    month_incomplete: bool = False
 
 
 class StateComparisonItem(BaseModel):
@@ -194,6 +198,8 @@ class MonthDetail(BaseModel):
     month_yoy_growth_percent: float | None
     ytd_count: int
     ytd_yoy_growth_percent: float | None
+    # Month is partial or after the newest scraped month: both YoYs are None.
+    month_incomplete: bool = False
 
 
 class OemStatus(BaseModel):

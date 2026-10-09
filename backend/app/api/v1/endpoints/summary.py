@@ -122,10 +122,12 @@ async def get_dashboard_kpis(
     # from the data (when the newest month was scraped), not today's date.
     freshness = await get_freshness(db)
     partial = freshness.partial_month(current_year)
+    incomplete = bool(month) and freshness.month_incomplete(current_year, month)
     if month:
-        # An explicitly requested month that is itself the partial month is
-        # not comparable either (kpis?year=2026&month=9 read -21.95%).
-        compare_through = None if month == partial else month
+        # An explicitly requested month that is the partial month, or any
+        # month after the newest scraped one, is not comparable either
+        # (kpis?year=2026&month=9 read -21.95%; month=11 read -100%).
+        compare_through = None if incomplete else month
     else:
         compare_through = freshness.complete_through(current_year, max_month)
     cutoff = month if month else max_month
@@ -215,6 +217,8 @@ async def get_dashboard_kpis(
         last_updated=last_updated,
         yoy_compare_through_month=compare_through,
         partial_month=partial,
+        latest_month=max_month,
+        month_incomplete=incomplete,
     )
     _kpis_cache.set(cache_key, kpis)
     return kpis
@@ -417,15 +421,22 @@ async def get_month_detail(
     prior_months_count = await _period_sum(db, year, month_lt=month, **filters)
     ytd_count = prior_months_count + month_count
 
-    month_prev = await _period_sum(db, prev_year, month=month, **filters)
-    prior_months_prev = await _period_sum(db, prev_year, month_lt=month, **filters)
-    ytd_prev = prior_months_prev + month_prev
+    # A partial or not-yet-scraped month vs a full one is a fake decline
+    # (month=11 read -100%, the partial October -88.8%): withhold both YoYs.
+    incomplete = (await get_freshness(db)).month_incomplete(year, month)
+    month_growth = ytd_growth = None
+    if not incomplete:
+        month_prev = await _period_sum(db, prev_year, month=month, **filters)
+        prior_months_prev = await _period_sum(db, prev_year, month_lt=month, **filters)
+        month_growth = _growth_percent(month_count, month_prev)
+        ytd_growth = _growth_percent(ytd_count, prior_months_prev + month_prev)
 
     return {
         "year": year,
         "month": month,
         "month_count": month_count,
-        "month_yoy_growth_percent": _growth_percent(month_count, month_prev),
+        "month_yoy_growth_percent": month_growth,
         "ytd_count": ytd_count,
-        "ytd_yoy_growth_percent": _growth_percent(ytd_count, ytd_prev),
+        "ytd_yoy_growth_percent": ytd_growth,
+        "month_incomplete": incomplete,
     }

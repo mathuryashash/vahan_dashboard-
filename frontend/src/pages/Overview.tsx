@@ -29,13 +29,13 @@ import { monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function PeriodStat({ label, count, growth }: { label: string; count: number; growth: number | null }) {
+function PeriodStat({ label, count, growth, incomplete }: { label: string; count: number; growth: number | null; incomplete?: boolean }) {
   return (
     <div className="bg-[var(--bg-sunken)] rounded-xl p-4">
       <p className="text-[10px] uppercase tracking-widest text-[var(--text-muted)] font-mono mb-2">{label}</p>
       <p className="number-display text-xl font-bold text-[var(--text-primary)] mb-2">{count.toLocaleString('en-IN')}</p>
       {growth == null ? (
-        <span className="text-[11px] text-[var(--text-muted)] font-mono">YoY N/A — no prior-year data</span>
+        <span className="text-[11px] text-[var(--text-muted)] font-mono">— {incomplete ? 'month not complete yet' : 'YoY N/A, no prior-year data'}</span>
       ) : (
         <div
           className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-lg font-mono"
@@ -238,6 +238,8 @@ export function OverviewPage() {
     // stored month that was still in progress when scraped.
     yoy_compare_through_month?: number | null;
     partial_month?: number | null;
+    latest_month?: number | null;
+    month_incomplete?: boolean;
   }>({
     queryKey: ['kpis', selectedYear, selectedMonth, selectedState, selectedCategory, fuelGroup, selectedMaker],
     queryFn: ({ signal }) => getKPIs({
@@ -564,9 +566,10 @@ export function OverviewPage() {
 
         <LabeledSelect label="Month" value={selectedMonth || ''} onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)} className={selectClass}>
           <option value="">All Months</option>
-          {MONTH_NAMES.map((name, idx) => (
+          {/* No months after the newest scraped one (Nov/Dec 2026 had no data and read -100%). */}
+          {MONTH_NAMES.map((name, idx) => idx + 1 <= (kpis?.latest_month ?? 12) || idx + 1 === selectedMonth ? (
             <option key={name} value={idx + 1}>{name}</option>
-          ))}
+          ) : null)}
         </LabeledSelect>
 
         {isCategoryLocked ? (
@@ -714,7 +717,7 @@ export function OverviewPage() {
                   value={yoy == null ? NO_VALUE : `${yoy >= 0 ? '+' : ''}${yoy.toFixed(1)}%`}
                   // Name the window the % actually compares (the backend
                   // cuts at the last complete month), e.g. "Jan–Aug vs Jan–Aug".
-                  noChangeLabel={cfMonthReal && cfMonthPrior && !cfMonthPrior.available ? `no reliable ${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear - 1} figure` : undefined}
+                  noChangeLabel={cfMonthReal && cfMonthPrior && !cfMonthPrior.available ? `no reliable ${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear - 1} figure` : !kpiComboImpossible && kpis?.month_incomplete ? 'month not complete yet' : undefined}
                   sub={yoy == null ? undefined : (() => {
                     if (cfMonthReal) return `${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear} vs ${MONTH_NAMES[selectedMonth! - 1]} ${selectedYear - 1}`;
                     const through = !kpiComboImpossible ? kpis?.yoy_compare_through_month : null;
@@ -838,6 +841,8 @@ export function OverviewPage() {
                   ? `Not scraped for ${cyLabel(selectedYear)} yet.`
                   : selectedMaker
                   ? `${selectedMaker} has no registrations in any category for ${cyLabel(selectedYear)}.`
+                  : selectedMonth != null && kpis?.latest_month != null && selectedMonth > kpis.latest_month
+                  ? `No data for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear} yet; the newest scraped month is ${MONTH_NAMES[kpis.latest_month - 1]}.`
                   : "Run a sync for 'vehicle_class' to load category breakdowns."
               }
               variant="no-data"
@@ -905,8 +910,8 @@ export function OverviewPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <PeriodStat label={`${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`} count={monthDetail.month_count} growth={monthDetail.month_yoy_growth_percent} />
-            <PeriodStat label={`Year to Date (through ${MONTH_NAMES[selectedMonth - 1]})`} count={monthDetail.ytd_count} growth={monthDetail.ytd_yoy_growth_percent} />
+            <PeriodStat label={`${MONTH_NAMES[selectedMonth - 1]} ${selectedYear}`} count={monthDetail.month_count} growth={monthDetail.month_yoy_growth_percent} incomplete={monthDetail.month_incomplete} />
+            <PeriodStat label={`Year to Date (through ${MONTH_NAMES[selectedMonth - 1]})`} count={monthDetail.ytd_count} growth={monthDetail.ytd_yoy_growth_percent} incomplete={monthDetail.month_incomplete} />
           </div>
         )}
       </div>

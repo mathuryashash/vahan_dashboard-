@@ -83,6 +83,14 @@ class Freshness:
             return None
         return self.latest_month
 
+    def month_incomplete(self, year: int, month: int) -> bool:
+        """True for the partial month and for any month after the newest
+        scraped one: comparing it with last year reads as a fake decline
+        (-100% for a future month)."""
+        if self.latest_year is None or self.latest_month is None:
+            return False
+        return (year, month) > (self.latest_year, self.latest_month) or month == self.partial_month(year)
+
 
 def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:

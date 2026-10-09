@@ -217,11 +217,11 @@ async def get_categories(
     # the like-for-like Jan-Aug figure is +20.69%. total_count/share keep
     # covering every stored month (the headline, as kpis does); only the
     # comparison is cut at the last COMPLETE scraped month. An explicit
-    # month that is itself the partial month gets yoy_growth=None.
+    # month that is the partial month or not scraped yet gets yoy_growth=None.
     freshness = await get_freshness(db)
     partial = freshness.partial_month(year)
     if month:
-        compare_through = None if month == partial else month
+        compare_through = None if freshness.month_incomplete(year, month) else month
     else:
         compare_through = freshness.complete_through(year, await latest_month_with_data(db, year))
 

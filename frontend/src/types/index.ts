@@ -67,6 +67,8 @@ export interface MonthDetail {
   month_yoy_growth_percent: number | null;
   ytd_count: number;
   ytd_yoy_growth_percent: number | null;
+  /** Partial or not-yet-scraped month: both YoYs are withheld (null). */
+  month_incomplete?: boolean;
 }
 
 export interface ScrapeProgress {
