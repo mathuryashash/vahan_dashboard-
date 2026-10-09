@@ -17,6 +17,9 @@ Plan sources (pick one):
                          RTO-year, or any RTO-month < 95%, or the class pass
                          knows >= 20 fewer classes than maker_category_totals
       fuel-short         fuel pass < 99.5% of the maker pass (year or month<95%)
+      maker-short        maker pass total > 1% below maker_category_totals
+                         for the RTO-year (catches 23-24-maker losses the
+                         fingerprint misses)
       crosstab-off       (crosstab dimensions) the table's RTO-year total is
                          off the maker pass by > 1% (and >= 5 units), or the
                          RTO-year is missing from the table
@@ -110,6 +113,20 @@ _DETECT_SQL = {
     """,
 }
 
+# The fingerprint above misses RTO-years that lost a page holding 23-24
+# makers (TN68 2019: 24 of 58 missing). Total-based instead: the maker pass
+# is > 1% (and >= 5 units) below maker_category_totals for the RTO-year.
+_DETECT_SQL["maker-short"] = """
+    WITH reg AS (
+        SELECT rto_code, sum(count) AS t FROM registrations
+        WHERE year = :y AND is_supplementary IS NOT TRUE GROUP BY rto_code
+    ), x AS (
+        SELECT rto_code, min(state_name) AS state_name, sum(count) AS t
+        FROM maker_category_totals WHERE year = :y AND rto_code IS NOT NULL GROUP BY rto_code
+    )
+    SELECT x.state_name, x.rto_code FROM x LEFT JOIN reg USING (rto_code)
+    WHERE x.t - coalesce(reg.t, 0) > greatest(5, 0.01 * x.t) ORDER BY 1, 2
+"""
 _DETECT_SQL["all-rtos"] = """
     SELECT DISTINCT state_name, rto_code FROM registrations
     WHERE year = :y AND is_supplementary IS NOT TRUE AND rto_code IS NOT NULL ORDER BY 1, 2
