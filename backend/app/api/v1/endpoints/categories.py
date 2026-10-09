@@ -770,7 +770,7 @@ async def get_crosstab_detail(
 
     total = sum(per_state_this.values())
     prior_total = sum(per_state_prior.values())
-    yoy = ((total - prior_total) / prior_total * 100) if prior_total > 0 else None
+    yoy = round((total - prior_total) / prior_total * 100, 2) if prior_total > 0 else None
 
     top_state = None
     if not state and per_state_this:

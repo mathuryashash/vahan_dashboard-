@@ -171,3 +171,16 @@ async def test_month_figure_refused_for_rto_scope(client, db_session):
         assert body["available"] is False and body["count"] is None
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+async def test_category_fuel_coverage_is_measured_within_the_category(client, db_session):
+    """Round 5 P3: coverage_pct_off compared ALL-category fct against ALL-
+    category mct, so a 4W user's ratio was a whole-state figure. A 2W gap
+    must not move the 4W coverage."""
+    await _seed(db_session)
+    db_session.add(_mct("MH1", "MH", "Two-Wheeler", 900, maker="Y"))  # 2W category total far above the 2W crosstab
+    await db_session.commit()
+    body = await _get(client, "comparison/category-fuel", year=2025, vehicle_category="Four-Wheeler", fuel_group="ICE")
+    mh = next(s for s in body["states"] if s["state_name"] == "Maharashtra")
+    assert mh["coverage_pct_off"] == 0.0 and mh["incomplete"] is False
+    assert body["coverage_pct_off"] == 0.0 and body["coverage_incomplete"] is False

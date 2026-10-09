@@ -135,3 +135,22 @@ async def test_crosstab_detail_computes_total_top_state_and_yoy(client, db_sessi
     assert data["total"] == 270
     assert data["top_state"] == "Uttar Pradesh"
     assert data["yoy_growth_percent"] == 170.0
+
+
+async def test_crosstab_detail_yoy_is_rounded_to_2dp(client, db_session):
+    """Round 5: crosstab-detail returned 36.29894852026558; every other
+    endpoint rounds YoY to 2 dp."""
+    await _seed_maker_category(db_session)  # HONDA 2W 2026 = 70
+    await persist_maker_category_batch(
+        db_session,
+        {"state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
+         "records": [{"maker": "HONDA", "vehicle_class": "M-CYCLE/SCOOTER", "count": 3}]},
+        state_code="DL", year=2025,
+    )
+    await db_session.commit()
+    response = await client.get(
+        "/api/v1/categories/crosstab-detail",
+        params={"year": 2026, "vehicle_category": "Two-Wheeler", "maker": "HONDA"},
+    )
+    assert response.status_code == 200
+    assert response.json()["yoy_growth_percent"] == 2233.33  # (70 - 3) / 3

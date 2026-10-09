@@ -222,17 +222,20 @@ async def compare_category_fuel(
         .group_by(FuelCategoryTotal.state_name, FuelCategoryTotal.vehicle_category, FuelCategoryTotal.fuel_type),
         FuelCategoryTotal,
     ))).all()
-    mct_rows = (await db.execute(_scoped(
-        select(MakerCategoryTotal.state_name, func.sum(MakerCategoryTotal.count))
-        .where(MakerCategoryTotal.year == year).group_by(MakerCategoryTotal.state_name),
-        MakerCategoryTotal,
-    ))).all()
+    # Coverage is measured within the effective category only (a 4W account
+    # gets a 4W ratio, not a whole-state all-category one).
+    mct_q = select(MakerCategoryTotal.state_name, func.sum(MakerCategoryTotal.count)).where(
+        MakerCategoryTotal.year == year).group_by(MakerCategoryTotal.state_name)
+    if vehicle_category:
+        mct_q = mct_q.where(MakerCategoryTotal.vehicle_category == vehicle_category)
+    mct_rows = (await db.execute(_scoped(mct_q, MakerCategoryTotal))).all()
 
     per_state: dict[str, int] = {}
     fct_all: dict[str, int] = {}
     for state_name, cat, raw_fuel, cnt in fct_rows:
         cnt = int(cnt or 0)
-        fct_all[state_name] = fct_all.get(state_name, 0) + cnt
+        if not vehicle_category or cat == vehicle_category:
+            fct_all[state_name] = fct_all.get(state_name, 0) + cnt
         if (vehicle_category is None or cat == vehicle_category) and query_fuel_group(raw_fuel) == fuel_group:
             per_state[state_name] = per_state.get(state_name, 0) + cnt
     mct_all = {s: int(c or 0) for s, c in mct_rows}
