@@ -5,7 +5,7 @@ import time
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlalchemy.schema import CreateIndex
+from sqlalchemy.schema import CheckConstraint, CreateIndex, ForeignKeyConstraint, UniqueConstraint
 
 from app.core.query_filters import _VEHICLE_CATEGORY_MAP
 
@@ -74,6 +74,46 @@ async def ensure_indexes(engine: AsyncEngine, metadata) -> None:
             if elapsed > 1:
                 logger.info("  [%d/%d] %s on %s took %.1fs", i, len(indexes), index.name, table.name, elapsed)
         logger.info("Index check complete.")
+
+
+async def ensure_declared_constraints(engine: AsyncEngine, metadata) -> None:
+    """Add any NAMED check / unique / FK constraint declared in `metadata`
+    that an existing database lacks (create_all only covers new tables).
+
+    Probed by name in pg_constraint, so on the live DB (which got these from
+    the round-4 DDL by hand) this is 0 DDL statements. Missing ones are added
+    NOT VALID then VALIDATEd (short lock on big tables). A failure (existing
+    rows violate the rule) is logged loudly and skipped, never a boot crash
+    and never a data change. Unique constraints go first: the state-name FKs
+    reference uq_states_code_name. Postgres-only.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    wanted = [
+        (t, c) for t in metadata.sorted_tables for c in t.constraints
+        if isinstance(c, (CheckConstraint, UniqueConstraint, ForeignKeyConstraint)) and isinstance(c.name, str)
+        and _IDENTIFIER_RE.match(c.name)
+    ]
+    wanted.sort(key=lambda tc: not isinstance(tc[1], UniqueConstraint))
+    async with engine.connect() as conn:
+        have = set((await conn.execute(text(
+            "SELECT conname FROM pg_constraint WHERE connamespace = 'public'::regnamespace"
+        ))).scalars())
+    for table, con in wanted:
+        if con.name in have:
+            continue
+        # Not AddConstraint(con): it disables the constraint's inline
+        # creation in later create_all calls (mutates con._create_rule).
+        ddl = f"ALTER TABLE {table.name} ADD " + engine.dialect.ddl_compiler(engine.dialect, None).process(con)
+        not_valid = not isinstance(con, UniqueConstraint)
+        logger.info("Adding constraint %s on %s...", con.name, table.name)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(ddl + (" NOT VALID" if not_valid else "")))
+                if not_valid:
+                    await conn.execute(text(f"ALTER TABLE {table.name} VALIDATE CONSTRAINT {con.name}"))
+        except Exception as exc:  # existing rows break the rule: say so, keep booting
+            logger.error("Constraint %s on %s NOT added (existing rows violate it?): %s", con.name, table.name, exc)
 
 
 async def ensure_bigint_id(engine: AsyncEngine, table_name: str) -> None:

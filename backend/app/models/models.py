@@ -1,6 +1,33 @@
-from sqlalchemy import BigInteger, Column, Integer, String, Float, Date, DateTime, Boolean, ForeignKey, Index, text
+from sqlalchemy import (
+    BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, Float, ForeignKey, ForeignKeyConstraint, Index,
+    Integer, String, UniqueConstraint, text,
+)
 from sqlalchemy.sql import func
 from app.core.database import Base
+
+
+# Round-4 DDL (§1b/§1c) constraints, applied by hand on the live DB and declared
+# here so a fresh DB / CI / Docker gets the same schema; migrations.
+# ensure_declared_constraints adds any that an older existing DB lacks.
+def _year_ck(p):
+    return CheckConstraint("year >= 2000 AND year <= 2100", name=f"ck_{p}_year")
+
+
+def _month_ck(p, low=1):
+    return CheckConstraint(f"month >= {low} AND month <= 12", name=f"ck_{p}_month")
+
+
+def _count_ck(p, nullable=True):
+    return CheckConstraint("count IS NULL OR count >= 0" if nullable else "count >= 0", name=f"ck_{p}_count")
+
+
+def _state_name_fk(table):
+    # The denormalised state_name must match states; ON UPDATE CASCADE so a
+    # rename in `states` flows through.
+    return ForeignKeyConstraint(
+        ["state_code", "state_name"], ["states.state_code", "states.state_name"],
+        name=f"fk_{table}_state_code_name", onupdate="CASCADE",
+    )
 
 
 class State(Base):
@@ -9,6 +36,8 @@ class State(Base):
     state_code = Column(String(5), primary_key=True)
     state_name = Column(String(100), nullable=False)
     zone_code = Column(String(10), ForeignKey("zones.zone_code"), nullable=True)
+
+    __table_args__ = (UniqueConstraint("state_code", "state_name", name="uq_states_code_name"),)
 
 
 class RTO(Base):
@@ -120,6 +149,15 @@ class Registration(Base):
     # These covering indexes support the dashboard's high-cardinality
     # aggregates on both PostgreSQL and SQLite migration sources.
     __table_args__ = (
+        # The three-pass shape (see is_supplementary): maker pass, class pass,
+        # fuel pass. Guards the 2x / 53x overcount bug classes at write time.
+        CheckConstraint(
+            "(NOT is_supplementary AND vehicle_class = 'All' AND fuel_type IS NULL AND maker IS NOT NULL)"
+            " OR (is_supplementary AND maker IS NULL AND vehicle_class <> 'All' AND fuel_type IS NULL)"
+            " OR (is_supplementary AND maker IS NULL AND vehicle_class = 'All' AND fuel_type IS NOT NULL)",
+            name="ck_reg_pass_shape",
+        ),
+        _count_ck("reg"), _month_ck("reg"), _year_ck("reg"), _state_name_fk("registrations"),
         Index("idx_reg_year_month_supp_count", "year", "month", "is_supplementary", "count"),
         Index("idx_reg_state_year_month_count", "state_name", "year", "month", "count"),
         Index("idx_reg_year_class_month_count", "year", "vehicle_class", "month", "count"),
@@ -205,6 +243,7 @@ class MakerCategoryTotal(Base):
     count = Column(Integer, default=0)
 
     __table_args__ = (
+        _count_ck("mct"), _year_ck("mct"), _state_name_fk("maker_category_totals"),
         Index("idx_mct_year_category_maker", "year", "vehicle_category", "maker"),
         # idx_mct_year_maker (year, maker) removed -- fully subsumed by the
         # wider index below sharing its leading two columns (dropped in
@@ -255,6 +294,7 @@ class FuelCategoryTotal(Base):
     count = Column(Integer, default=0)
 
     __table_args__ = (
+        _count_ck("fct"), _year_ck("fct"), _state_name_fk("fuel_category_totals"),
         Index("idx_fct_year_category_fuel", "year", "vehicle_category", "fuel_type"),
         Index("idx_fct_year_fuel", "year", "fuel_type"),
         # Same state_name gap as MakerCategoryTotal above, for crosstab-detail
@@ -293,6 +333,7 @@ class MakerFuelTotal(Base):
     count = Column(Integer, default=0)
 
     __table_args__ = (
+        _count_ck("mft"), _year_ck("mft"), _state_name_fk("maker_fuel_totals"),
         # idx_mft_year_maker (year, maker) removed -- fully subsumed by the
         # wider index below sharing its leading two columns (dropped in
         # migrations.py, nothing here recreates it).
@@ -335,6 +376,7 @@ class StateMonthCategoryTotal(Base):
     count = Column(Integer, nullable=False, default=0)
 
     __table_args__ = (
+        _count_ck("smct", nullable=False), _month_ck("smct"),
         # No COALESCE needed (unlike Registration/OEMMonthlySales) -- none of
         # these 4 columns are nullable, so a plain multi-column UNIQUE index
         # is correct. Also serves "every row for one state+year" lookups via
@@ -375,6 +417,7 @@ class StateMonthCategoryFuelTotal(Base):
     count = Column(Integer, nullable=False, default=0)
 
     __table_args__ = (
+        _count_ck("smcft", nullable=False), _month_ck("smcft"),
         Index("idx_smcft_natural_key", "state_code", "year", "fuel", "month", "category", unique=True),
     )
 
@@ -424,6 +467,8 @@ class MakerLiveQueryCache(Base):
     scraped_at = Column(DateTime, default=func.now())
 
     __table_args__ = (
+        # month 0 = whole year (sentinel), hence the 0 lower bound.
+        _count_ck("mlqc", nullable=False), _month_ck("mlqc", low=0),
         # Renamed (was idx_mlqc_natural_key) when rto_code joined the key:
         # ensure_indexes only ever CREATEs, so a same-named index already on
         # a deployed DB would keep its old, now-too-narrow definition

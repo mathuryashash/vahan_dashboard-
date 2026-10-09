@@ -14,8 +14,12 @@ async def _seed_ap(db_session):
     await db_session.commit()
 
 
-def _reg(year, month, count, state_code="AP", state_name="Andhra Pradesh", vehicle_class="Two-Wheeler"):
+def _reg(year, month, count, state_code="AP", state_name="Andhra Pradesh", vehicle_class="All"):
+    # ck_reg_pass_shape: 'All' = maker-pass row (has a maker); a real class =
+    # class-pass row (is_supplementary, no maker).
+    cls_pass = vehicle_class != "All"
     return Registration(
+        is_supplementary=cls_pass, maker=None if cls_pass else "M",
         state_code=state_code,
         state_name=state_name,
         rto_code="AP1",

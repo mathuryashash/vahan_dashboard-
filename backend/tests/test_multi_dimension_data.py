@@ -261,7 +261,7 @@ async def test_top_makers_rejects_month_with_category(client, db_session):
 
 
 async def test_persist_rto_batch_sets_vehicle_category(db_session):
-    await _seed_rto(db_session, "DL", "DL1")
+    await _seed_rto(db_session, "DL", "DL1", "Delhi")
     vc_batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [{"label": "Heavy Truck", "month": 1, "year": 2026, "count": 5}],
@@ -281,7 +281,7 @@ async def test_persist_rto_batch_maker_pass_classifies_from_placeholder_all(db_s
     # Maker-pass rows always store vehicle_class='All' (see persist_rto_batch
     # docstring) -- classify_vehicle('All') resolves to ("Other", None), same
     # as any other unrecognized/placeholder value.
-    await _seed_rto(db_session, "DL", "DL1")
+    await _seed_rto(db_session, "DL", "DL1", "Delhi")
     maker_batch = {
         "state_name": "Delhi", "rto_code": "DL1", "rto_name": "Test RTO",
         "records": [{"label": "HONDA", "month": 1, "year": 2026, "count": 5}],
@@ -315,6 +315,9 @@ async def test_purge_synthetic_does_not_delete_real_vehicle_class_rows(db_sessio
     await _seed_real_rto(db_session, state_name="Delhi", rto_code="DL1")
 
     # Old-style synthetic seed row: broken out by class, is_supplementary defaults False.
+    # ck_reg_pass_shape now forbids this shape; drop it to model a legacy DB.
+    from sqlalchemy import text
+    await db_session.execute(text("ALTER TABLE registrations DROP CONSTRAINT ck_reg_pass_shape"))
     db_session.add(Registration(
         state_code="DL", state_name="Delhi", rto_code="DL1", rto_name="Test RTO",
         month=1, year=2026, count=999, vehicle_class="Three-Wheeler", maker=None, fuel_type=None,

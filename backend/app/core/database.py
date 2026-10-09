@@ -96,7 +96,8 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     from app.core.migrations import (
-        drop_orphaned_indexes, ensure_analyzed, ensure_bigint_id, ensure_columns, ensure_foreign_key,
+        drop_orphaned_indexes, ensure_analyzed, ensure_bigint_id, ensure_columns, ensure_declared_constraints,
+        ensure_foreign_key,
         ensure_indexes, ensure_no_duplicate_rows, ensure_reclassified, ensure_rtos_backfilled, ensure_vehicle_category_backfilled,
     )
     await ensure_columns(engine, {
@@ -216,4 +217,5 @@ async def init_db():
     await ensure_foreign_key(engine, "state_month_category_totals", "state_code", "states", "state_code")
     await ensure_foreign_key(engine, "state_month_category_fuel_totals", "state_code", "states", "state_code")
     await ensure_foreign_key(engine, "maker_live_query_cache", "state_code", "states", "state_code")
+    await ensure_declared_constraints(engine, Base.metadata)
     await ensure_analyzed(engine, list(Base.metadata.tables))

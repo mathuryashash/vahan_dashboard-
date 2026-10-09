@@ -51,9 +51,9 @@ async def test_districts_filtered_to_those_with_data_in_the_financial_year(clien
     await db_session.commit()
     db_session.add_all([
         Registration(state_code="AP", state_name="Andhra Pradesh", rto_code="AP07",
-                     year=2026, month=5, vehicle_class="All", count=10),
+                     year=2026, month=5, vehicle_class="All", maker="M", count=10),
         Registration(state_code="AP", state_name="Andhra Pradesh", rto_code="AP16",
-                     year=2026, month=2, vehicle_class="All", count=10),
+                     year=2026, month=2, vehicle_class="All", maker="M", count=10),
     ])
     await db_session.commit()
 
