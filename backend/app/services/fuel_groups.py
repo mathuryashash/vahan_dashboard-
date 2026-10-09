@@ -34,21 +34,6 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Petrol", ("PETROL",)),
 )
 
-# Every raw label seen in the stored tables (maker_fuel_totals,
-# fuel_category_totals, registrations fuel pass, state_month_category_fuel_totals)
-# plus the analytics portal's static enum. Used by tests and the API's
-# /fuel-groups listing; group_of() handles unseen labels by rule anyway.
-KNOWN_RAW_FUELS: tuple[str, ...] = (
-    "BIO-CNG/BIO-GAS", "CNG ONLY", "DI-METHYL ETHER", "DIESEL", "DIESEL/HYBRID",
-    "DUAL DIESEL/BIO CNG", "DUAL DIESEL/CNG", "DUAL DIESEL/LNG", "ELECTRIC(BOV)",
-    "ETHANOL(E100)", "FLEX-FUEL(BIO-DIESEL)", "FLEX-FUEL(ETHANOL)", "FUEL CELL HYDROGEN",
-    "HCNG", "HYDROGEN(ICE)", "LNG", "LPG ONLY", "METHANOL", "NOT APPLICABLE", "PETROL",
-    "PETROL(E20)", "PETROL(E20)/CNG", "PETROL(E20)/HYBRID", "PETROL(E20)/HYBRID/CNG",
-    "PETROL(E20)/LPG", "PETROL/CNG", "PETROL/ETHANOL", "PETROL/HYBRID", "PETROL/HYBRID/CNG",
-    "PETROL/LPG", "PETROL/METHANOL", "PLUG-IN HYBRID EV", "PURE EV", "SOLAR", "STRONG HYBRID EV",
-)
-
-
 def group_of(raw_fuel: str | None) -> str:
     """Fuel group for one raw VAHAN fuel label (case-insensitive)."""
     upper = (raw_fuel or "").upper()
@@ -68,10 +53,3 @@ def normalize_group(value: str | None) -> str | None:
             return g
     raise ValueError(value)
 
-
-def mapping_table() -> list[dict]:
-    """[{group, raw_labels}] over KNOWN_RAW_FUELS, in FUEL_GROUPS order."""
-    return [
-        {"group": g, "raw_labels": sorted(f for f in KNOWN_RAW_FUELS if group_of(f) == g)}
-        for g in FUEL_GROUPS
-    ]

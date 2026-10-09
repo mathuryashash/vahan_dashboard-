@@ -43,9 +43,7 @@ def _clear_response_caches() -> None:
     responses. Called again after the quality check, which feeds the
     freshness timestamp."""
     from app.core.cache import TTLCache
-    from app.services.stored_live_service import reset_maker_list
     TTLCache.clear_all()
-    reset_maker_list()
 
 
 def _mark_retry_pending(message: str) -> None:

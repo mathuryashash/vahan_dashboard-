@@ -50,14 +50,6 @@ def _parse_group(value: str | None) -> str | None:
 _maker_options_cache = TTLCache(600)
 
 
-@router.get("/fuel-groups")
-async def list_fuel_groups(_user: User = Depends(get_current_user)):
-    """The six fuel groups the Maker Lookup / Top Makers panels offer, with
-    the raw VAHAN fuel labels each one sums (fuel_groups.py is the single
-    source of this mapping)."""
-    return fuel_groups.mapping_table()
-
-
 @router.get("/maker-options")
 @single_flight
 async def get_maker_options(
@@ -146,7 +138,7 @@ async def get_maker_query(
     if group:
         # Fuel GROUPS are a stored-data concept (several raw labels summed),
         # answered from our tables even when the live fallback is on.
-        answer = await stored.maker_query_by_group(db, state_code, year, maker, group, rto, user_category)
+        answer = await stored.maker_query(db, state_code, year, maker, rto=rto, category=user_category, fuel_group=group)
         return {
             "state_code": state_code, "year": year, "maker": maker, "fuel": None, "fuel_group": group,
             "rto": rto, "records": answer.records, "source": "stored", "as_of": await stored.as_of(db),

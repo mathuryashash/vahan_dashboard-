@@ -42,13 +42,6 @@ def test_group_of(raw, group):
     assert fuel_groups.group_of(raw) == group
 
 
-def test_every_known_label_lands_in_exactly_one_group():
-    table = fuel_groups.mapping_table()
-    assert [row["group"] for row in table] == list(fuel_groups.FUEL_GROUPS)
-    flat = [label for row in table for label in row["raw_labels"]]
-    assert sorted(flat) == sorted(fuel_groups.KNOWN_RAW_FUELS)
-
-
 def test_normalize_group():
     assert fuel_groups.normalize_group("cng/lpg") == "CNG/LPG"
     assert fuel_groups.normalize_group("") is None
@@ -68,11 +61,6 @@ async def _seed_multi(db):
         _mft("MH1", "MH", TATA, "PETROL(E20)/CNG", 5),
     ])
     await db.commit()
-
-
-async def test_fuel_groups_listing(client):
-    body = await _get(client, "fuel-groups")
-    assert [r["group"] for r in body] == list(fuel_groups.FUEL_GROUPS)
 
 
 async def test_maker_options_lists_only_makers_with_that_fuel(client, db_session):

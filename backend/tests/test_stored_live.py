@@ -15,7 +15,7 @@ from app.main import app
 from app.models.models import (
     RTO, MakerCategoryTotal, MakerFuelTotal, Registration, State, User, UserScope, VehicleCategoryScope,
 )
-from app.services import stored_live_service
+from app.core.cache import TTLCache
 
 HONDA = "HONDA CARS INDIA LTD"
 TATA = "TATA MOTORS LTD"
@@ -42,9 +42,7 @@ def _no_live_site(monkeypatch):
         raise AssertionError("stored path must not touch the live site")
     for name in ("get_or_scrape_maker_query", "get_top_makers_leaderboard", "search_makers", "get_site_rto_codes"):
         monkeypatch.setattr(f"app.api.v1.endpoints.live_query.{name}", _boom)
-    stored_live_service.reset_maker_list()
     yield
-    stored_live_service.reset_maker_list()
     app.dependency_overrides.pop(get_current_user, None)
 
 
@@ -230,7 +228,7 @@ async def test_maker_search_geo_scope_lists_only_makers_in_scope(client, db_sess
     db_session.add(_mct("DL1", "DL", "DELHI ONLY MOTORS LTD", "MOTOR CAR", "Four-Wheeler", 5))
     db_session.add(_mct("MH2", "MH", "PUNE ONLY LTD", "MOTOR CAR", "Four-Wheeler", 5))
     await db_session.commit()
-    stored_live_service.reset_maker_list()
+    TTLCache.clear_all()
     assert await _get(client, "makers/search", q="ltd") == [
         "DELHI ONLY MOTORS LTD", HERO, HONDA, "PUNE ONLY LTD", TATA]  # national: everything
     _login_as(**MH_STATE)
@@ -260,7 +258,7 @@ async def test_maker_search_scope_set_is_cached_per_scope_key(client, db_session
     _login_as(scope_type=UserScope.NATIONAL, scope_vehicle_category=VehicleCategoryScope.TWO_WHEELER)
     assert await _get(client, "makers/search", q="ltd") == [HERO, HONDA]
     assert len(calls) == 2
-    stored_live_service.reset_maker_list()  # post-scrape hook clears it
+    TTLCache.clear_all()  # post-scrape hook clears it
     await _get(client, "makers/search", q="ltd")
     assert len(calls) == 3
 

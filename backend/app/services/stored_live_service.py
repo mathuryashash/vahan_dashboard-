@@ -30,7 +30,6 @@ usual scope dependencies -- this module never widens them.
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass, field
 
 from sqlalchemy import func, select, text
@@ -65,24 +64,32 @@ async def as_of(db: AsyncSession) -> str | None:
 async def maker_query(
     db: AsyncSession, state_code: str, year: int, maker: str,
     fuel: str | None = None, rto: str | None = None, category: str | None = None,
+    fuel_group: str | None = None,
 ) -> StoredAnswer:
+    """`fuel_group` (one of fuel_groups.FUEL_GROUPS) takes precedence over the
+    raw `fuel` label: one record per raw label inside the group (month=0,
+    category=<raw label>), so the records sum to the group total."""
     maker = maker.strip().upper()
     fuel = fuel.strip().upper() if fuel else None
-    if fuel and category:
+    if (fuel or fuel_group) and category:
         return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_AND_CATEGORY_REASON)
 
-    if fuel:
+    if fuel or fuel_group:
         q = (
             select(MakerFuelTotal.fuel_type, func.sum(MakerFuelTotal.count))
             .where(MakerFuelTotal.state_code == state_code, MakerFuelTotal.year == year,
-                   MakerFuelTotal.maker == maker, MakerFuelTotal.fuel_type == fuel)
+                   MakerFuelTotal.maker == maker)
             .group_by(MakerFuelTotal.fuel_type)
+            .order_by(MakerFuelTotal.fuel_type)
         )
+        if not fuel_group:
+            q = q.where(MakerFuelTotal.fuel_type == fuel)
         if rto:
             q = q.where(MakerFuelTotal.rto_code == rto)
         rows = (await db.execute(q)).all()
         return StoredAnswer(
-            records=[{"month": 0, "category": f, "count": int(c)} for f, c in rows if c],
+            records=[{"month": 0, "category": f, "count": int(c)} for f, c in rows
+                     if c and (not fuel_group or fuel_groups.group_of(f) == fuel_group)],
             grain=GRAIN_YEAR,
         )
 
@@ -120,12 +127,6 @@ async def maker_query(
     )
 
 
-FUEL_GROUP_AND_CATEGORY_REASON = (
-    "Maker x fuel x vehicle category is not held in our tables (maker_fuel_totals has no "
-    "category axis), so a fuel filter cannot be combined with your account's vehicle category."
-)
-
-
 async def maker_options(
     db: AsyncSession, state_code: str, year: int, fuel_group: str | None = None,
     category: str | None = None, rto: str | None = None,
@@ -144,7 +145,7 @@ async def maker_options(
     Fuel group + category is refused: maker_fuel_totals has no category axis.
     """
     if fuel_group and category:
-        return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_GROUP_AND_CATEGORY_REASON)
+        return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_AND_CATEGORY_REASON)
     totals: dict[str, int] = {}
     if fuel_group:
         q = (
@@ -172,33 +173,6 @@ async def maker_options(
                 totals[maker] = int(cnt)
     ranked = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
     return StoredAnswer(records=[{"maker": m, "total": t} for m, t in ranked if m and t > 0], grain=GRAIN_YEAR)
-
-
-async def maker_query_by_group(
-    db: AsyncSession, state_code: str, year: int, maker: str, fuel_group: str,
-    rto: str | None = None, category: str | None = None,
-) -> StoredAnswer:
-    """One maker's yearly volume in one fuel GROUP: one record per raw fuel
-    label inside the group (month=0, category=<raw label>), so the records
-    sum to the group total and the split stays visible."""
-    if category:
-        return StoredAnswer(grain=GRAIN_YEAR, unanswerable_reason=FUEL_GROUP_AND_CATEGORY_REASON)
-    maker = maker.strip().upper()
-    q = (
-        select(MakerFuelTotal.fuel_type, func.sum(MakerFuelTotal.count))
-        .where(MakerFuelTotal.state_code == state_code, MakerFuelTotal.year == year,
-               MakerFuelTotal.maker == maker)
-        .group_by(MakerFuelTotal.fuel_type)
-        .order_by(MakerFuelTotal.fuel_type)
-    )
-    if rto:
-        q = q.where(MakerFuelTotal.rto_code == rto)
-    rows = (await db.execute(q)).all()
-    return StoredAnswer(
-        records=[{"month": 0, "category": f, "count": int(c)} for f, c in rows
-                 if c and fuel_groups.group_of(f) == fuel_group],
-        grain=GRAIN_YEAR,
-    )
 
 
 async def leaderboard(
@@ -233,8 +207,8 @@ async def leaderboard(
 
 # ---- maker search -----------------------------------------------------------
 
-_MAKER_LIST_TTL = 3600.0
-_maker_list: tuple[float, list[str]] | None = None
+# Both cleared by TTLCache.clear_all() (tests, and after every scrape).
+_maker_list_cache = TTLCache(3600)
 _maker_list_lock = asyncio.Lock()
 
 # Recursive "loose index scan" over ix_maker_category_totals_maker: one index
@@ -255,35 +229,27 @@ SELECT maker FROM m WHERE maker IS NOT NULL
 
 
 async def distinct_makers(db: AsyncSession) -> list[str]:
-    """Every maker name we hold (all years), cached for an hour. Cleared by
-    TTLCache.clear_all()'s post-scrape hook via reset_maker_list()."""
-    global _maker_list
-    now = time.monotonic()
-    if _maker_list and now - _maker_list[0] < _MAKER_LIST_TTL:
-        return _maker_list[1]
+    """Every maker name we hold (all years), cached for an hour."""
+    names = _maker_list_cache.get("all")
+    if names is not None:
+        return names
     async with _maker_list_lock:
-        if _maker_list and time.monotonic() - _maker_list[0] < _MAKER_LIST_TTL:
-            return _maker_list[1]
+        names = _maker_list_cache.get("all")
+        if names is not None:
+            return names
         gen = TTLCache.generation
         names = [r[0] for r in (await db.execute(_DISTINCT_MAKERS_SQL)).all()]
         if gen == TTLCache.generation:  # not cleared mid-query (see TTLCache.generation)
-            _maker_list = (time.monotonic(), names)
+            _maker_list_cache.set("all", names)
         return names
 
 
-def reset_maker_list() -> None:
-    global _maker_list
-    _maker_list = None
-    _allowed_makers_cache.clear()
-
-
-# Per-scope allowed maker sets for search: {(category, state_code, rto_code):
-# (monotonic_ts, frozenset)}. category_makers() is a DISTINCT over
-# maker_category_totals (~0.6-1.2s for a category) and used to run on EVERY
-# keystroke-search of a category-scoped account (N5). Same TTL and reset hook
-# as the maker list. The key is the full resolved scope tuple, so a national
-# result can never be handed to a narrower account.
-_allowed_makers_cache: dict[tuple, tuple[float, frozenset[str]]] = {}
+# Per-scope allowed maker sets for search, keyed (category, state_code,
+# rto_code). category_makers() is a DISTINCT over maker_category_totals
+# (~0.6-1.2s for a category) and used to run on EVERY keystroke-search of a
+# category-scoped account (N5). The key is the full resolved scope tuple, so a
+# national result can never be handed to a narrower account.
+_allowed_makers_cache = TTLCache(3600)
 # One lock PER scope key: a 2 s cold build of the Four-Wheeler set must not
 # hold up the first search of an unrelated UP or UP32 account (round-3 P3).
 # Same-key callers still serialise, so each key is built once.
@@ -291,10 +257,7 @@ _allowed_makers_locks: dict[tuple, asyncio.Lock] = {}
 
 
 def _lock_for(key: tuple) -> asyncio.Lock:
-    lock = _allowed_makers_locks.get(key)
-    if lock is None:
-        lock = _allowed_makers_locks[key] = asyncio.Lock()
-    return lock
+    return _allowed_makers_locks.setdefault(key, asyncio.Lock())
 
 
 async def allowed_makers(db: AsyncSession, *, category: str | None = None,
@@ -306,12 +269,12 @@ async def allowed_makers(db: AsyncSession, *, category: str | None = None,
         return None
     key = (category, state_code, rto_code)
     hit = _allowed_makers_cache.get(key)
-    if hit and time.monotonic() - hit[0] < _MAKER_LIST_TTL:
-        return hit[1]
+    if hit is not None:
+        return hit
     async with _lock_for(key):
         hit = _allowed_makers_cache.get(key)
-        if hit and time.monotonic() - hit[0] < _MAKER_LIST_TTL:
-            return hit[1]
+        if hit is not None:
+            return hit
         q = select(MakerCategoryTotal.maker).distinct()
         if category:
             q = q.where(MakerCategoryTotal.vehicle_category == category)
@@ -324,7 +287,7 @@ async def allowed_makers(db: AsyncSession, *, category: str | None = None,
         gen = TTLCache.generation
         names = frozenset(m for m in (await db.execute(q)).scalars().all() if m)
         if gen == TTLCache.generation:
-            _allowed_makers_cache[key] = (time.monotonic(), names)
+            _allowed_makers_cache.set(key, names)
         return names
 
 
