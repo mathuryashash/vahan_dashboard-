@@ -108,9 +108,12 @@ async def ensure_declared_constraints(engine: AsyncEngine, metadata) -> None:
         not_valid = not isinstance(con, UniqueConstraint)
         logger.info("Adding constraint %s on %s...", con.name, table.name)
         try:
+            # Separate transactions: VALIDATE takes only SHARE UPDATE EXCLUSIVE,
+            # so the strong ADD lock is released before the validation scan.
             async with engine.begin() as conn:
                 await conn.execute(text(ddl + (" NOT VALID" if not_valid else "")))
-                if not_valid:
+            if not_valid:
+                async with engine.begin() as conn:
                     await conn.execute(text(f"ALTER TABLE {table.name} VALIDATE CONSTRAINT {con.name}"))
         except Exception as exc:  # existing rows break the rule: say so, keep booting
             logger.error("Constraint %s on %s NOT added (existing rows violate it?): %s", con.name, table.name, exc)
