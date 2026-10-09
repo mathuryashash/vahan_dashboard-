@@ -38,6 +38,8 @@ logger = logging.getLogger("scrape_lock")
 # computed in SQL so callers can pass a plain descriptive string instead of
 # pre-hashing it themselves.
 _LOCK_CLASSID = 821520260
+_TRY_LOCK = text("SELECT pg_try_advisory_lock(:classid, hashtext(:key))")
+_UNLOCK = text("SELECT pg_advisory_unlock(:classid, hashtext(:key))")
 
 
 class ScrapeAlreadyRunningError(RuntimeError):
@@ -68,7 +70,7 @@ async def scrape_write_lock(engine: AsyncEngine, lock_key: str):
     conn = await engine.connect()
     try:
         got_lock = (await conn.execute(
-            text("SELECT pg_try_advisory_lock(:classid, hashtext(:key))"),
+            _TRY_LOCK,
             {"classid": _LOCK_CLASSID, "key": lock_key},
         )).scalar()
         if not got_lock:
@@ -80,7 +82,7 @@ async def scrape_write_lock(engine: AsyncEngine, lock_key: str):
         try:
             yield
         finally:
-            await conn.execute(text("SELECT pg_advisory_unlock(:classid, hashtext(:key))"), {"classid": _LOCK_CLASSID, "key": lock_key})
+            await conn.execute(_UNLOCK, {"classid": _LOCK_CLASSID, "key": lock_key})
     finally:
         await conn.close()
 
@@ -120,7 +122,7 @@ async def scrape_run_lock(engine: AsyncEngine, who: str = "scrape"):
     if str(engine.url).startswith("sqlite") or os.environ.get(SCRAPE_RUN_LOCK_ENV):
         yield
         return
-    async with _acquire_guard():
+    async with _run_lock_guard:
         if _run_lock_depth == 0:
             await _acquire_run_lock(engine, who)
         _run_lock_depth += 1
@@ -131,23 +133,22 @@ async def scrape_run_lock(engine: AsyncEngine, who: str = "scrape"):
         if _run_lock_depth == 0 and _run_lock_conn is not None:
             conn, _run_lock_conn = _run_lock_conn, None
             try:
-                await conn.execute(text("SELECT pg_advisory_unlock(:classid, hashtext(:key))"),
-                                   {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY})
+                await conn.execute(_UNLOCK, {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY})
                 await conn.commit()
+            except BaseException:
+                # A session-level lock survives close(): returned to the pool,
+                # this connection would keep "a scrape is running" alive.
+                # Invalidate it so the backend session (and lock) ends.
+                await conn.invalidate()
+                raise
             finally:
                 await conn.close()
 
 
-_guard: asyncio.Lock | None = None
-
-
-def _acquire_guard() -> asyncio.Lock:
-    """Serializes FIRST acquisition among coroutines of one process (three
-    dimension passes entering at once must not each open a lock session)."""
-    global _guard
-    if _guard is None:
-        _guard = asyncio.Lock()
-    return _guard
+# Serializes FIRST acquisition among coroutines of one process (three
+# dimension passes entering at once must not each open a lock session).
+# Binds to the running loop on first use (3.10+), so module level is fine.
+_run_lock_guard = asyncio.Lock()
 
 
 async def _acquire_run_lock(engine: AsyncEngine, who: str) -> None:
@@ -155,7 +156,7 @@ async def _acquire_run_lock(engine: AsyncEngine, who: str) -> None:
     conn = await engine.connect()
     try:
         got = (await conn.execute(
-            text("SELECT pg_try_advisory_lock(:classid, hashtext(:key))"),
+            _TRY_LOCK,
             {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY},
         )).scalar()
         await conn.commit()  # don't leave the lock connection idle in a transaction for hours
@@ -174,7 +175,7 @@ async def _acquire_run_lock(engine: AsyncEngine, who: str) -> None:
         ), {"classid": _LOCK_CLASSID})).scalar()
         await conn.commit()
         if others:
-            await conn.execute(text("SELECT pg_advisory_unlock(:classid, hashtext(:key))"),
+            await conn.execute(_UNLOCK,
                                {"classid": _LOCK_CLASSID, "key": SCRAPE_RUN_LOCK_KEY})
             await conn.commit()
             got = False

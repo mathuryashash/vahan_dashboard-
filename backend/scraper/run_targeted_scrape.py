@@ -202,23 +202,23 @@ def partition(states: dict[str, frozenset[str]], n: int) -> list[dict[str, froze
 async def run(dimension: str, plan: Plan, concurrent_states: int = 1, partitions: int = 1) -> int:
     """Returns the number of year-runs that ended partial."""
     partial_years = 0
-    async with scrape_run_lock(engine, f"run_targeted_scrape {dimension}"):
-        for year in sorted(plan, reverse=True):
-            if not plan[year]:
-                continue
-            n = sum(len(v) for v in plan[year].values())
-            logger.info("=== %s %d: %d RTO(s) across %d state(s) ===", dimension, year, n, len(plan[year]))
-            if dimension in CROSSTAB_DIMENSIONS:
-                table = run_crosstab_scrape._DIMENSIONS[dimension].model.__tablename__
-                async with scrape_write_lock(engine, f"{table}:{year}"):
-                    done = await asyncio.gather(*(
-                        run_crosstab_scrape._main(dimension, year, True, part, take_write_lock=False)
-                        for part in partition(plan[year], partitions)
-                    ))
-                logger.info("%s %d: %d RTO(s) persisted", dimension, year, sum(done))
-            else:
-                partial_years += 1 if await run_full_scrape._main(
-                    year, dimension, concurrent_states, True, plan[year]) else 0
+    # amain holds the run lock for every dimension; no re-take here.
+    for year in sorted(plan, reverse=True):
+        if not plan[year]:
+            continue
+        n = sum(len(v) for v in plan[year].values())
+        logger.info("=== %s %d: %d RTO(s) across %d state(s) ===", dimension, year, n, len(plan[year]))
+        if dimension in CROSSTAB_DIMENSIONS:
+            table = run_crosstab_scrape._DIMENSIONS[dimension].model.__tablename__
+            async with scrape_write_lock(engine, f"{table}:{year}"):
+                done = await asyncio.gather(*(
+                    run_crosstab_scrape._main(dimension, year, True, part, take_write_lock=False)
+                    for part in partition(plan[year], partitions)
+                ))
+            logger.info("%s %d: %d RTO(s) persisted", dimension, year, sum(done))
+        else:
+            partial_years += 1 if await run_full_scrape._main(
+                year, dimension, concurrent_states, True, plan[year]) else 0
     return partial_years
 
 
@@ -264,8 +264,9 @@ async def amain(args) -> int:
             write_plan(plan, args.write_plan if len(dims) == 1 else args.write_plan.replace(".csv", f".{d}.csv"))
     if args.dry_run:
         return 0
-    await _init_db_once()
+    # Lock first: a refused run (exit 4) must not run init_db's DDL/backfill.
     async with scrape_run_lock(engine, "run_targeted_scrape"):
+        await _init_db_once()
         results = await asyncio.gather(*(run(d, plans[d], args.concurrent_states, args.partitions)
                                          for d in dims if plans[d]), return_exceptions=True)
     failed = [r for r in results if isinstance(r, BaseException)]

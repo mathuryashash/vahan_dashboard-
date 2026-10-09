@@ -92,7 +92,11 @@ async def run_scheduler_loop() -> None:
 
         started = time.monotonic()
         try:
-            await run_scraper(concurrent_states=settings.SCRAPER_CONCURRENT_STATES)
+            if await run_scraper(concurrent_states=settings.SCRAPER_CONCURRENT_STATES) is False:
+                # Busy run lock: nothing ran, so neither a success (no backoff
+                # reset, no "succeeded" line) nor a failure to back off on.
+                logger.info("Scheduled scrape skipped (another scrape running)")
+                continue
             logger.info("Scheduled scrape succeeded in %.0fs (after %d prior failures)", time.monotonic() - started, consecutive_failures)
             consecutive_failures = 0
         except Exception as exc:
@@ -230,7 +234,9 @@ async def run_previous_year_revalidation_loop() -> None:
         previous_year = datetime.now(timezone.utc).year - 1
         started = time.monotonic()
         try:
-            await run_scraper(concurrent_states=settings.SCRAPER_CONCURRENT_STATES, force=True, year=previous_year)
+            if await run_scraper(concurrent_states=settings.SCRAPER_CONCURRENT_STATES, force=True, year=previous_year) is False:
+                logger.info("Previous-year revalidation (%d) skipped (another scrape running)", previous_year)
+                continue
             logger.info("Previous-year revalidation (%d) succeeded in %.0fs", previous_year, time.monotonic() - started)
             consecutive_failures = 0
         except Exception as exc:

@@ -338,7 +338,7 @@ def _run_dimension_sync(dimension: str, concurrent_states: int = 1, force: bool 
     return proc.wait()
 
 
-async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int | None = None) -> None:
+async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int | None = None) -> bool:
     """Launch the full-India live scrape as separate OS processes and await completion.
 
     Playwright's Chromium subprocess was observed (during manual verification) to crash
@@ -404,7 +404,7 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
         settings.REFRESH_STATUS = "idle"
         settings.REFRESH_ERROR = str(exc)
         logger.warning("Refresh skipped: %s", exc)
-        return
+        return False  # did not run: callers must not count this as a success
     except asyncio.CancelledError:
         # A shutdown is not a failed refresh. Leave the next server instance
         # free to schedule its normal run.
@@ -484,3 +484,4 @@ async def run_scraper(concurrent_states: int = 1, force: bool = True, year: int 
     except Exception as exc:
         logger.error("Scrape quality check failed (scrape itself succeeded): %s", exc)
     _clear_response_caches()
+    return True

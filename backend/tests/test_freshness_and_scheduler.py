@@ -357,3 +357,37 @@ async def test_in_flight_result_is_not_cached_after_a_clear():
     # Plain set outside any flight is unaffected.
     cache.set("plain", 1)
     assert cache.get("plain") == 1
+
+
+async def test_scheduler_busy_lock_is_a_skip_not_a_success(monkeypatch, caplog):
+    """Round 5: run_scraper returning early on a busy run lock was logged as
+    'Scheduled scrape succeeded' and reset the failure backoff."""
+    sleeps = []
+    outcomes = iter([RuntimeError("site down"), False])
+
+    async def fake_initial(interval_hours):
+        return 60.0
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) >= 4:
+            raise asyncio.CancelledError
+
+    async def fake_run_scraper(concurrent_states=1):
+        out = next(outcomes)
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+    monkeypatch.setattr(scheduler, "initial_delay_seconds", fake_initial)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(scheduler, "run_scraper", fake_run_scraper)
+    monkeypatch.setattr(settings, "REFRESH_STATUS", "idle")
+    caplog.set_level("INFO", logger="scheduler")
+    with pytest.raises((asyncio.CancelledError, StopIteration, RuntimeError)):
+        await scheduler.run_scheduler_loop()
+    backed_off = scheduler._backoff_hours(scheduler.REFRESH_INTERVAL_HOURS, 1, scheduler.MAX_BACKOFF_HOURS) * 3600
+    # failure -> backoff; the skip keeps that backoff (a reset would read 5h).
+    assert sleeps[:3] == [60.0, backed_off, backed_off]
+    assert "skipped (another scrape running)" in caplog.text
+    assert "succeeded" not in caplog.text

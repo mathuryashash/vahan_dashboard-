@@ -84,7 +84,6 @@ async def test_second_process_is_refused_while_a_run_holds_the_lock(monkeypatch)
         # Simulate another process: fresh module state, no inherited env.
         monkeypatch.setattr(scrape_lock, "_run_lock_depth", 0)
         monkeypatch.setattr(scrape_lock, "_run_lock_conn", None)
-        monkeypatch.setattr(scrape_lock, "_guard", None)
         monkeypatch.delenv(scrape_lock.SCRAPE_RUN_LOCK_ENV, raising=False)
         with pytest.raises(ScrapeRunLockBusyError):
             async with scrape_run_lock(other, "intruder"):
@@ -322,3 +321,27 @@ async def test_rtos_backfill_fills_gaps_and_only_rewrites_changed_rows(db_sessio
     db_session.expire_all()
     names = dict((await db_session.execute(select(RTO.rto_code, RTO.rto_name))).all())
     assert names["AS1"] == "NEW NAME" and names["AS2"] == "SAME"
+
+
+async def test_failed_unlock_invalidates_the_lock_connection(monkeypatch):
+    """Round 5 P3: if pg_advisory_unlock raised, close() returned the
+    connection to the pool still holding the session-level lock."""
+    from sqlalchemy import text as sql_text
+    holder = create_async_engine(TEST_DATABASE_URL)
+    other = create_async_engine(TEST_DATABASE_URL)
+    monkeypatch.setattr(scrape_lock, "_UNLOCK", sql_text("SELECT no_such_function_r5()"))
+    with pytest.raises(Exception, match="no_such_function_r5"):
+        async with scrape_run_lock(holder, "holder"):
+            pass
+    monkeypatch.undo()
+    async with scrape_run_lock(other, "next"):  # busy here = lock leaked into the pool
+        pass
+    await holder.dispose()
+    await other.dispose()
+
+
+def test_targeted_runner_takes_the_lock_before_init_db():
+    import inspect
+    from scraper import run_targeted_scrape
+    src = inspect.getsource(run_targeted_scrape.amain)
+    assert src.index("scrape_run_lock(") < src.index("await _init_db_once()")
