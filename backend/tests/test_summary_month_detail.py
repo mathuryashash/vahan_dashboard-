@@ -1,6 +1,6 @@
 import pytest
 
-from app.models.models import Registration, State
+from app.models.models import RTO, Registration, State
 
 
 @pytest.fixture(autouse=True)
@@ -8,6 +8,9 @@ async def _seed_ap(db_session):
     # Every test here seeds Registration rows against the default state_code
     # "AP" -- required now that registrations.state_code is a real FK.
     db_session.add(State(state_code="AP", state_name="Andhra Pradesh"))
+    await db_session.flush()
+    # registrations.rto_code is NOT NULL (DDL doc 1a) and FK-checked.
+    db_session.add(RTO(rto_code="AP1", rto_name="Test RTO", state_code="AP"))
     await db_session.commit()
 
 
@@ -15,6 +18,7 @@ def _reg(year, month, count, state_code="AP", state_name="Andhra Pradesh", vehic
     return Registration(
         state_code=state_code,
         state_name=state_name,
+        rto_code="AP1",
         month=month,
         year=year,
         vehicle_class=vehicle_class,
