@@ -408,15 +408,14 @@ export function OverviewPage() {
   // flagship chart, which had none.
   // Which month is partial comes from the API (derived from when the data
   // was scraped), never today's date -- the data froze 19 Sep, the clock said Oct.
-  const trendPartial = selectedMonth == null
-    ? resolvePartialMonth(selectedYear, kpis?.partial_month, { scrapedAt: kpis?.last_updated })
-    : null;
+  const resolvedPartial = resolvePartialMonth(selectedYear, kpis?.partial_month, { scrapedAt: kpis?.last_updated });
+  // Hide the partial month unless the user explicitly picked it (hiding the
+  // picked month would leave an empty chart).
+  const trendPartial = resolvedPartial && resolvedPartial.month !== selectedMonth ? resolvedPartial : null;
   const trendPartialMonth = trendPartial?.month ?? null;
   const trendPartialName = trendPartial?.name ?? null;
 
   const chartData = (trend || [])
-    // Only when viewing the whole year. If the user has explicitly picked
-    // this month, hiding it would leave an empty chart.
     .filter((d: { month?: number }) => !trendPartialMonth || d.month !== trendPartialMonth)
     .map((d: { month?: number; count: number }) => ({
       name: d.month ? MONTH_NAMES[d.month - 1] : '',
