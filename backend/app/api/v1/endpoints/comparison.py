@@ -180,7 +180,6 @@ async def get_all_states_comparison(
 # LIGHT GOODS VEHICLE, ...), which maps onto our Four-Wheeler / Commercial
 # buckets 10-26% off every year (e.g. 4W 2025 5,251,961 vs 4,638,020), and
 # it is 25-29% short for 2W EV 2024.
-CATEGORY_FUEL_SOURCE = "fuel_category_totals"
 # A state-year whose fuel x category total is this far from the category
 # totals (maker_category_totals) is flagged as incomplete, not hidden.
 _COVERAGE_TOLERANCE_PCT = 2.0
@@ -254,13 +253,11 @@ async def compare_category_fuel(
     ]
     fct_sum, mct_sum = sum(fct_all.values()), sum(mct_all.values())
     year_pct_off = round((fct_sum - mct_sum) * 100.0 / mct_sum, 2) if mct_sum else None
-    if not fct_all:
-        available, reason = False, f"Category x powertrain is not held for CY {year} (no fuel x category rows)."
-    else:
-        available, reason = True, None
+    available = bool(fct_all)
+    reason = None if available else f"Category x powertrain is not held for CY {year} (no fuel x category rows)."
     response = {
         "year": year, "vehicle_category": vehicle_category, "fuel_group": fuel_group,
-        "source": CATEGORY_FUEL_SOURCE, "grain": "year",
+        "source": "fuel_category_totals", "grain": "year",
         "available": available, "unanswerable_reason": reason,
         "coverage_pct_off": year_pct_off,
         "coverage_incomplete": year_pct_off is not None and abs(year_pct_off) > _COVERAGE_TOLERANCE_PCT,

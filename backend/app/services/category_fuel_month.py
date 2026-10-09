@@ -40,8 +40,6 @@ SOURCE = "state_month_category_fuel_totals"
 @dataclass
 class MonthAnswer:
     month_count: int | None
-    year_total_portal: int
-    year_total_crosstab: int
     pct_off: float | None
     available: bool
     reason: str | None
@@ -86,13 +84,13 @@ async def category_fuel_month(
 
     pct = round((portal_year - crosstab_year) * 100.0 / crosstab_year, 2) if crosstab_year else None
     if month not in months_seen:
-        return MonthAnswer(None, portal_year, crosstab_year, pct, False,
+        return MonthAnswer(None, pct, False,
                            f"No month-level category x fuel data is stored for {month:02d}/{year}.")
     if crosstab_year == 0 and portal_year == 0:
-        return MonthAnswer(0, 0, 0, None, True, None)
+        return MonthAnswer(0, None, True, None)
     if pct is None or abs(pct) > MONTH_MATCH_TOLERANCE_PCT:
         gap = "has no matching year total" if pct is None else f"differs from the year total by {pct:+.1f}%"
-        return MonthAnswer(None, portal_year, crosstab_year, pct, False,
+        return MonthAnswer(None, pct, False,
                            f"The monthly source {gap} for {vehicle_category} x {group} in CY {year}, "
                            f"so its month figure is not trustworthy here.")
-    return MonthAnswer(portal_month, portal_year, crosstab_year, pct, True, None)
+    return MonthAnswer(portal_month, pct, True, None)

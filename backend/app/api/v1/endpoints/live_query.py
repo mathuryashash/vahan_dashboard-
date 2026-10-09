@@ -96,6 +96,11 @@ LIVE_MAKER_SERVER_TIMEOUT_S = 25
 LEADERBOARD_SERVER_TIMEOUT_S = 55
 
 
+async def _stored_fields(db: AsyncSession, answer: stored.StoredAnswer) -> dict:
+    return {"source": "stored", "as_of": await stored.as_of(db), "grain": answer.grain,
+            "unanswerable_reason": answer.unanswerable_reason}
+
+
 @router.get("/maker")
 @limiter.limit("10/minute", exempt_when=_stored_only, override_defaults=False)
 async def get_maker_query(
@@ -141,16 +146,14 @@ async def get_maker_query(
         answer = await stored.maker_query(db, state_code, year, maker, rto=rto, category=user_category, fuel_group=group)
         return {
             "state_code": state_code, "year": year, "maker": maker, "fuel": None, "fuel_group": group,
-            "rto": rto, "records": answer.records, "source": "stored", "as_of": await stored.as_of(db),
-            "grain": answer.grain, "unanswerable_reason": answer.unanswerable_reason,
+            "rto": rto, "records": answer.records, **await _stored_fields(db, answer),
         }
     if not settings.LIVE_SCRAPE_FALLBACK:
         # Phase A: answered from our own tables, no government-site request.
         answer = await stored.maker_query(db, state_code, year, maker, fuel, rto, user_category)
         return {
             "state_code": state_code, "year": year, "maker": maker, "fuel": fuel, "rto": rto,
-            "records": answer.records, "source": "stored", "as_of": await stored.as_of(db),
-            "grain": answer.grain, "unanswerable_reason": answer.unanswerable_reason,
+            "records": answer.records, **await _stored_fields(db, answer),
         }
     try:
         # Server cap below the browser's 30s timeout (vahan.ts), so the user
@@ -265,15 +268,13 @@ async def get_leaderboard(
         answer = await stored.leaderboard(db, state_code, year, None, limit, user_category, user_rto, fuel_group=group)
         return {
             "state_code": state_code, "year": year, "fuel": None, "fuel_group": group, "makers": answer.records,
-            "source": "stored", "as_of": await stored.as_of(db), "grain": answer.grain,
-            "unanswerable_reason": answer.unanswerable_reason,
+            **await _stored_fields(db, answer),
         }
     if not settings.LIVE_SCRAPE_FALLBACK:
         answer = await stored.leaderboard(db, state_code, year, fuel, limit, user_category, user_rto)
         return {
             "state_code": state_code, "year": year, "fuel": fuel, "makers": answer.records,
-            "source": "stored", "as_of": await stored.as_of(db), "grain": answer.grain,
-            "unanswerable_reason": answer.unanswerable_reason,
+            **await _stored_fields(db, answer),
         }
     try:
         makers = await asyncio.wait_for(

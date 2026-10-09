@@ -132,16 +132,15 @@ async def get_yoy_summary(
     # progress) produces a nonsensical, deeply negative "growth" number.
     # Same fix already applied to summary.get_dashboard_kpis.
     effective_end = min([end_month, *candidates]) if candidates else end_month
-    partial = freshness.partial_month(year_b) or freshness.partial_month(year_a)
+    pb = freshness.partial_month(year_b)
+    partial = pb or freshness.partial_month(year_a)
+    lcm = freshness.last_complete_month()
     meta = {
         "compare_through_month": effective_end,
         "start_month": start_month,
         "partial_month": partial,
-        "partial_month_year": (year_b if freshness.partial_month(year_b) else year_a) if partial else None,
-        "last_complete_month": (
-            f"{freshness.last_complete_month()[0]}-{freshness.last_complete_month()[1]:02d}"
-            if freshness.last_complete_month() else None
-        ),
+        "partial_month_year": (year_b if pb else year_a) if partial else None,
+        "last_complete_month": f"{lcm[0]}-{lcm[1]:02d}" if lcm else None,
     }
     if effective_end < start_month:
         # N4: the requested window starts after the last complete month, so
