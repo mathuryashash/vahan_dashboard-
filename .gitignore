@@ -35,3 +35,6 @@ test_screenshots/
 
 /pass.txt
 /cookies.txt
+
+# per-dimension failing-RTO skip lists written by the scraper at run time
+/backend/data/rto_failures.*.json
