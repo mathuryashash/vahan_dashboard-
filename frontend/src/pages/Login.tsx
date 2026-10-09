@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import axios from 'axios';
 import { login } from '../api/auth';
 import type { AuthUser } from '../api/auth';
 
@@ -19,8 +20,17 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     try {
       const auth = await login(email, password);
       onLogin(auth);
-    } catch {
-      setError('Incorrect email or password.');
+    } catch (err) {
+      // 429 = the backend's 5-failures-in-5-min lockout; show its "try again
+      // in N minute(s)" text instead of claiming the password is wrong.
+      const res = axios.isAxiosError(err) ? err.response : undefined;
+      if (res?.status === 429) {
+        setError(typeof res.data?.detail === 'string' ? res.data.detail : 'Too many failed attempts. Try again in a few minutes.');
+      } else if (!res) {
+        setError('Could not reach the server. Check your connection and try again.');
+      } else {
+        setError('Incorrect email or password.');
+      }
     } finally {
       setSubmitting(false);
     }
