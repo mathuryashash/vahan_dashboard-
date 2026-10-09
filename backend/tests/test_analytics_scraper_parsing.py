@@ -242,9 +242,12 @@ def test_integrity_error_is_an_unexpected_page_so_callers_skip_it():
 from scraper.analytics_scraper import SITE_CATEGORIES, normalize_ragged_table  # noqa: E402
 
 
-def _html(rows):
+def _html(rows, axis=SITE_CATEGORIES):
+    """`axis` = the page's own vehicleSubCategory <select> (None: absent)."""
     body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
-    return f"<table>{body}</table>"
+    sel = "" if axis is None else (
+        '<select id="vehicleSubCategory">' + "".join(f'<option value="{a}">{a}</option>' for a in axis) + "</select>")
+    return f"{sel}<table>{body}</table>"
 
 
 def test_empty_month_two_cell_rows_are_zero_months_not_a_rejected_page():
@@ -274,6 +277,44 @@ def test_collapsed_header_is_rebuilt_from_the_site_axis_when_rows_are_full_width
     assert parse_month_category_table(_html(rows)) == [
         {"month": 4, "category": "LIGHT MOTOR VEHICLE", "count": 1883},
         {"month": 4, "category": "TWO WHEELER(NT)", "count": 28195}]
+
+
+def test_collapsed_header_takes_column_order_from_the_page_not_a_fixed_list():
+    # Round 5: the axis used to be ASSUMED in SITE_CATEGORIES order. A page
+    # that renders the same 17 categories in another order must name the
+    # columns in the page's order.
+    axis = list(reversed(SITE_CATEGORIES))
+    apr = ["0"] * len(axis)
+    apr[0] = "7"  # first column = axis[0] = "TWO WHEELER(T)" on this page
+    rows = [["Month", "Total"], ["2026-01", "0"], ["2026-02", *apr, "7"], ["Total", "0"]]
+    assert parse_month_category_table(_html(rows, axis)) == [
+        {"month": 2, "category": "TWO WHEELER(T)", "count": 7}]
+
+
+@pytest.mark.parametrize("axis", [
+    None,                                                       # no category select on the page
+    [*SITE_CATEGORIES[:-1], "TWO WHEELER(TRANSPORT)"],          # a renamed category
+    [*SITE_CATEGORIES, "QUADRICYCLE"],                          # an added category
+])
+def test_collapsed_header_with_an_unexpected_axis_is_rejected_loudly(axis):
+    apr = ["0"] * len(SITE_CATEGORIES)
+    apr[0] = "5"
+    rows = [["Month", "Total"], ["2026-01", "0"], ["2026-04", *apr, "5"], ["Total", "0"]]
+    with pytest.raises(TableIntegrityError, match="category axis"):
+        parse_month_category_table(_html(rows, axis))
+
+
+def test_real_collapsed_page_parses_with_its_own_axis():
+    """The live TS 2026 PETROL(E20) page (round 4b probe): header collapsed,
+    Jan-Mar empty, axis from its vehicleSubCategory select."""
+    import pathlib
+    probe = pathlib.Path("D:/hf-cache/vahan_review/round4b/probe_TS_2026.html")
+    if not probe.exists():
+        pytest.skip("live probe not on this machine")
+    records = parse_month_category_table(probe.read_text(encoding="utf-8"))
+    assert {r["month"] for r in records} >= {4, 5} and min(r["month"] for r in records) == 4
+    apr = {r["category"]: r["count"] for r in records if r["month"] == 4}
+    assert sum(apr.values()) == 30078
 
 
 def test_collapsed_header_still_checks_each_row_total():

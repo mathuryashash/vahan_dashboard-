@@ -306,7 +306,12 @@ def parse_month_category_table(html: str) -> list[dict]:
         return []
 
     header, *body_rows = rows
-    header, body_rows = normalize_ragged_table(header, body_rows)
+    # The page's own category filter (same 17 names the results axis uses).
+    # The collapsed-header repair names its columns from THIS, not from a
+    # list captured once, so a renamed / added / reordered axis is caught.
+    axis_select = soup.find("select", id="vehicleSubCategory")
+    axis = [o.get("value", "").strip() for o in axis_select.find_all("option")] if axis_select else None
+    header, body_rows = normalize_ragged_table(header, body_rows, axis)
     if len(header) == 2 and header[-1].strip().lower() == "total" and body_rows and all(
             len(r) == 2 and parse_count(r[1]) == 0 for r in body_rows):
         # Every month empty: the site collapses the whole table to Month/Total
@@ -331,7 +336,8 @@ _MONTH_LABEL_RE = re.compile(r"^(\d{4})-(\d{2})$")
 # The full category axis as the site renders it (alphabetical), captured live
 # 2026-10-09 (TS 2026 PETROL / DIESEL). Used ONLY to name the columns of a
 # table whose header collapsed to ['Month', 'Total'] while its rows carry
-# exactly this many cells -- see normalize_ragged_table.
+# exactly this many cells -- see normalize_ragged_table. Only the SET is
+# trusted; the column order comes from the page itself.
 SITE_CATEGORIES = (
     "FOUR WHEELER (Invalid Carriage)", "HEAVY GOODS VEHICLE", "HEAVY MOTOR VEHICLE",
     "HEAVY PASSENGER VEHICLE", "LIGHT GOODS VEHICLE", "LIGHT MOTOR VEHICLE",
@@ -343,7 +349,9 @@ SITE_CATEGORIES = (
 _MAX_RAGGED_CANDIDATES = 4096
 
 
-def normalize_ragged_table(header: list[str], body_rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
+def normalize_ragged_table(
+    header: list[str], body_rows: list[list[str]], axis: list[str] | None = None,
+) -> tuple[list[str], list[list[str]]]:
     """Repair the three ragged shapes the analytics site renders (seen live
     2026-10-09) into a rectangular table, or leave it alone for
     validate_month_category_table to reject. Every repair is checked against
@@ -353,10 +361,12 @@ def normalize_ragged_table(header: list[str], body_rows: list[list[str]]) -> tup
        (a 2-cell row whose Total is NOT 0 is left ragged -> rejected).
     2. When the FIRST month is empty the header itself collapses to
        ``['Month', 'Total']`` (and so does the footer) while later rows carry
-       the full category axis. If every non-empty row has exactly
-       len(SITE_CATEGORIES) + 2 cells, the header is rebuilt from
-       SITE_CATEGORIES; the collapsed footer (it states the first row's 0)
-       is dropped. Row totals are still checked per row. (TS 2026
+       the full category axis. The header is rebuilt from `axis` -- the
+       page's own category <select>, in page order -- which must name exactly
+       the SITE_CATEGORIES set; otherwise the table is rejected loudly
+       (TableIntegrityError) rather than guessing which column is which.
+       Every non-empty row must then have len(axis) + 2 cells; the collapsed
+       footer (it states the first row's 0) is dropped. Row totals are still checked per row. (TS 2026
        PETROL(E20): Jan-Mar empty, ~277k units were being thrown away.)
     3. A month can omit one zero-valued rare column (18 cells under a 19-cell
        header). Resolved only when the footer row exists, has full width and
@@ -371,8 +381,13 @@ def normalize_ragged_table(header: list[str], body_rows: list[list[str]]) -> tup
     width = len(header)
     if width == 2 and header and header[-1].strip().lower() == "total":
         wide = {len(r) for r in body_rows if not is_footer(r) and len(r) != 2}
+        if wide and (not axis or len(set(axis)) != len(axis) or set(axis) != set(SITE_CATEGORIES)):
+            raise TableIntegrityError(
+                f"collapsed header: the page's category axis {axis!r} is not the expected "
+                f"{len(SITE_CATEGORIES)} categories -- refusing to guess column names"
+            )
         if wide == {len(SITE_CATEGORIES) + 2}:
-            header = [header[0], *SITE_CATEGORIES, header[-1]]
+            header = [header[0], *axis, header[-1]]
             width = len(header)
             body_rows = [r for r in body_rows if not (is_footer(r) and len(r) == 2)]
         else:
