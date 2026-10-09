@@ -17,8 +17,7 @@ import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { cyLabel, cyLongLabel, formatCompact } from '../utils/format';
 import { useScopeLock } from '../hooks/useScopeLock';
-
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+import { MONTH_SHORT as MONTH_NAMES } from '../utils/partialMonth';
 
 export function MakersModelsPage() {
   const chart = useChartTheme();

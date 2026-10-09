@@ -11,21 +11,17 @@ export function useElapsed(ms: number): boolean {
   return elapsed;
 }
 
-export const SLOW_QUERY_MS = 5000;
-
 /** Skeleton block that, after ~5 s, says out loud that the query is large and
  * still running. Without it an all-India cold year (15-30 s on /categories/)
  * looked identical to a hung page. */
 export function LoadingBlock({
   className = 'h-52',
   slowMessage = 'All-India totals for a year not viewed recently can take up to 30 seconds.',
-  slowAfterMs = SLOW_QUERY_MS,
 }: {
   className?: string;
   slowMessage?: string;
-  slowAfterMs?: number;
 }) {
-  const slow = useElapsed(slowAfterMs);
+  const slow = useElapsed(5000);
   return (
     <div className={`relative rounded-xl ${className}`} role="status" aria-live="polite" aria-busy="true">
       <div className="absolute inset-0 rounded-xl bg-[var(--bg-sunken)] animate-pulse-soft" />
@@ -42,8 +38,8 @@ export function LoadingBlock({
 }
 
 /** Inline variant for places that can't host a block (KPI cards). */
-export function SlowHint({ slowAfterMs = SLOW_QUERY_MS }: { slowAfterMs?: number }) {
-  const slow = useElapsed(slowAfterMs);
+export function SlowHint() {
+  const slow = useElapsed(5000);
   if (!slow) return null;
   return (
     <p className="text-[10px] text-[var(--text-muted)] font-mono mt-2" role="status" aria-live="polite" data-slow-hint="true">

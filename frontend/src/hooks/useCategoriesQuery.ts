@@ -22,16 +22,12 @@ export interface CategoryRow {
  *
  * `month`/`state` are normalised to null so `undefined` vs `null` can't split
  * the cache; axios drops both from the query string identically. */
-export function categoriesQueryKey(year: number, month: number | null | undefined, state: string | null | undefined) {
-  return ['categories', year, month ?? null, state || null] as const;
-}
-
 export function useCategoriesQuery(
   { year, month = null, state = null }: { year: number; month?: number | null; state?: string | null },
   options: { enabled?: boolean } = {},
 ) {
   return useQuery<CategoryRow[]>({
-    queryKey: categoriesQueryKey(year, month, state),
+    queryKey: ['categories', year, month ?? null, state || null] as const,
     queryFn: ({ signal }) => getCategories({ year, month: month ?? null, state: state || null }, signal),
     enabled: options.enabled ?? true,
   });

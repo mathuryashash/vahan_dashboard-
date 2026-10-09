@@ -12,8 +12,7 @@ import { LabeledSelect } from './LabeledSelect';
 import { EmptyState } from './EmptyState';
 import { ErrorBanner } from './ErrorBanner';
 import { SearchableSelect } from './SearchableSelect';
-
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+import { MONTH_SHORT as MONTH_NAMES } from '../utils/partialMonth';
 
 // Six fuel groups instead of VAHAN's ~34 raw labels; the server folds every
 // raw label into one of them (backend services/fuel_groups.py), so picking
@@ -47,26 +46,29 @@ function errorMessageFor(error: unknown): string {
 export function formatAsOf(asOf: string | null | undefined): string {
   if (!asOf) return 'an earlier scrape';
   const d = new Date(asOf);
-  if (Number.isNaN(d.getTime())) return asOf;
-  // Date-only strings ("2026-09-30") have no time worth showing.
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(asOf);
-  return d.toLocaleString('en-IN', dateOnly
-    ? { day: 'numeric', month: 'short', year: 'numeric' }
-    : { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  // Both backends send a date-only YYYY-MM-DD.
+  return Number.isNaN(d.getTime()) ? asOf : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function SourceNote({ source, asOf }: { source?: string; asOf?: string | null }) {
-  if (source === 'stored') {
-    return (
-      <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2" data-testid="live-source-note">
-        Stored data as of {formatAsOf(asOf)}.
-      </p>
-    );
-  }
   return (
     <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2" data-testid="live-source-note">
-      Fetched live{asOf ? ` · ${formatAsOf(asOf)}` : ''}.
+      {source === 'stored' ? `Stored data as of ${formatAsOf(asOf)}.` : `Fetched live${asOf ? ` · ${formatAsOf(asOf)}` : ''}.`}
     </p>
+  );
+}
+
+function FuelGroupSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <LabeledSelect
+      label="Fuel"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer"
+    >
+      <option value="">Any fuel</option>
+      {MAKER_FUEL_GROUPS.map((g) => <option key={g} value={g} title={FUEL_GROUP_HINT[g]}>{g}</option>)}
+    </LabeledSelect>
   );
 }
 
@@ -236,15 +238,7 @@ export function LiveMakerQueryPanel({ year, onStateCodeChange, rtoScope }: {
             </div>
           </div>
         )}
-        <LabeledSelect
-          label="Fuel"
-          value={fuel}
-          onChange={(e) => setFuel(e.target.value)}
-          className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer"
-        >
-          <option value="">Any fuel</option>
-          {MAKER_FUEL_GROUPS.map((g) => <option key={g} value={g} title={FUEL_GROUP_HINT[g]}>{g}</option>)}
-        </LabeledSelect>
+        <FuelGroupSelect value={fuel} onChange={setFuel} />
         <div className="w-80" data-testid="maker-lookup-maker">
           <SearchableSelect
             label={makerOptionsLoading ? 'Maker (loading…)' : `Maker (${optionList.length.toLocaleString('en-IN')} with data)`}
@@ -389,15 +383,7 @@ export function LiveMakerLeaderboardPanel({ year, stateCode }: { year: number; s
           if (stateCode) setSubmitted({ stateCode, fuel, limit, category: selectedCategory });
         }}
       >
-        <LabeledSelect
-          label="Fuel"
-          value={fuel}
-          onChange={(e) => setFuel(e.target.value)}
-          className="bg-[var(--bg-sunken)] border border-[var(--border)] text-xs font-semibold px-3 py-2 rounded-xl cursor-pointer"
-        >
-          <option value="">Any fuel</option>
-          {MAKER_FUEL_GROUPS.map((g) => <option key={g} value={g} title={FUEL_GROUP_HINT[g]}>{g}</option>)}
-        </LabeledSelect>
+        <FuelGroupSelect value={fuel} onChange={setFuel} />
         <div className="flex flex-col gap-1.5">
           <label className="text-[10px] uppercase font-mono tracking-widest text-[var(--text-muted)] font-bold" htmlFor="leaderboard-limit">Top N</label>
           <input

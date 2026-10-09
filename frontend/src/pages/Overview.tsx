@@ -25,9 +25,9 @@ import type { MonthDetail } from '../types';
 import { useCategoriesQuery } from '../hooks/useCategoriesQuery';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatCompact, cyLabel, cyLongLabel, orDash, NO_VALUE } from '../utils/format';
-import { monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
+import { MONTH_SHORT, monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
 
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_NAMES = MONTH_SHORT;
 
 function PeriodStat({ label, count, growth, incomplete }: { label: string; count: number; growth: number | null; incomplete?: boolean }) {
   return (
@@ -407,13 +407,9 @@ export function OverviewPage() {
   // because it was 15 days old); this is that guard, on the landing page's
   // flagship chart, which had none.
   // Which month is partial comes from the API (derived from when the data
-  // was scraped) when it says; today's date is only the fallback for an
-  // older backend -- the data froze 19 Sep, so the wall clock named Oct.
-  const apiPartialMonth: number | null | undefined = kpis && 'partial_month' in kpis ? kpis.partial_month : undefined;
-  // Wait for kpis before deciding, or the wall-clock fallback flashes the
-  // wrong month for a moment on every load.
-  const trendPartial = selectedMonth == null && kpis
-    ? resolvePartialMonth(selectedYear, apiPartialMonth, { scrapedAt: kpis?.last_updated })
+  // was scraped), never today's date -- the data froze 19 Sep, the clock said Oct.
+  const trendPartial = selectedMonth == null
+    ? resolvePartialMonth(selectedYear, kpis?.partial_month, { scrapedAt: kpis?.last_updated })
     : null;
   const trendPartialMonth = trendPartial?.month ?? null;
   const trendPartialName = trendPartial?.name ?? null;
@@ -778,7 +774,7 @@ export function OverviewPage() {
                   // Said out loud rather than quietly dropped: a reader who
                   // counts the months should know why the latest one is
                   // absent, not wonder whether the data is stale.
-                  <span data-testid="trend-partial-note"> · {trendPartialName} excluded, {trendPartial?.fromData ? 'partial month — ' : 'month in progress — '}{trendPartial ? partialMonthProgress(trendPartial) : ''}</span>
+                  <span data-testid="trend-partial-note"> · {trendPartialName} excluded, partial month — {trendPartial ? partialMonthProgress(trendPartial) : ''}</span>
                 )}
               </p>
             </div>

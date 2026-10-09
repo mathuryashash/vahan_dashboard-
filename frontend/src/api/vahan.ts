@@ -176,7 +176,6 @@ export const searchLiveMakers = (q: string, signal?: AbortSignal): Promise<strin
 // The six fuel groups the Maker Lookup / Top Makers offer, mapped from raw
 // VAHAN fuel labels server-side (backend services/fuel_groups.py).
 export const MAKER_FUEL_GROUPS = ['Petrol', 'Diesel', 'CNG/LPG', 'Electric', 'Hybrid', 'Other'] as const;
-export type MakerFuelGroup = typeof MAKER_FUEL_GROUPS[number];
 
 // Makers with stored registrations for this state (+ RTO) + year (+ fuel group),
 // largest first, scope-clamped server-side -- the Maker Lookup's dropdown.

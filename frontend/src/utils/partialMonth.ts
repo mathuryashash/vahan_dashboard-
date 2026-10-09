@@ -3,8 +3,8 @@
 // progress when it was scraped (`partial_month`) and how far a YoY comparison
 // actually runs (`compare_through_month`). Those come from the DATA, so they
 // stay right when the data is weeks old; today's date does not (it named Oct
-// as the excluded month while the data actually ended 19 Sep). The wall clock
-// is only the fallback for older backends that send neither field.
+// as the excluded month while the data actually ended 19 Sep). Frontend and
+// backend ship together, so there is no wall-clock fallback.
 
 export const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -24,8 +24,6 @@ export interface PartialMonthInfo {
   throughDay: number | null;
   /** Days in that month. */
   daysInMonth: number;
-  /** true = taken from the backend, false = guessed from today's date. */
-  fromData: boolean;
 }
 
 /** Day-of-month from a scrape timestamp ("2026-09-19 21:01 UTC" or ISO),
@@ -39,46 +37,27 @@ function dayIfInMonth(stamp: string | null | undefined, year: number, month: num
 }
 
 /**
- * Resolve the in-progress month of `year`.
- * - `apiPartial === undefined` (field absent: older backend) -> wall clock.
- * - `apiPartial === null` (backend says no partial month) -> null.
- * - a number -> that month (only if it belongs to `year` when
- *   `apiPartialYear` is given).
+ * Resolve the in-progress month of `year` from the API's `partial_month`
+ * (null/absent -> none; a number counts only if it belongs to `year` when
+ * `apiPartialYear` is given).
  */
 export function resolvePartialMonth(
   year: number,
   apiPartial: number | null | undefined,
   opts: { apiPartialYear?: number | null; scrapedAt?: string | null } = {},
 ): PartialMonthInfo | null {
-  if (apiPartial !== undefined) {
-    if (apiPartial == null || apiPartial < 1 || apiPartial > 12) return null;
-    if (opts.apiPartialYear != null && opts.apiPartialYear !== year) return null;
-    const daysInMonth = new Date(year, apiPartial, 0).getDate();
-    return {
-      month: apiPartial,
-      name: MONTH_SHORT[apiPartial - 1],
-      throughDay: dayIfInMonth(opts.scrapedAt, year, apiPartial),
-      daysInMonth,
-      fromData: true,
-    };
-  }
-  const now = new Date();
-  if (year !== now.getFullYear()) return null;
-  const month = now.getMonth() + 1;
+  if (apiPartial == null || apiPartial < 1 || apiPartial > 12) return null;
+  if (opts.apiPartialYear != null && opts.apiPartialYear !== year) return null;
   return {
-    month,
-    name: MONTH_SHORT[month - 1],
-    throughDay: now.getDate(),
-    daysInMonth: new Date(year, month, 0).getDate(),
-    fromData: false,
+    month: apiPartial,
+    name: MONTH_SHORT[apiPartial - 1],
+    throughDay: dayIfInMonth(opts.scrapedAt, year, apiPartial),
+    daysInMonth: new Date(year, apiPartial, 0).getDate(),
   };
 }
 
-/** "data through 19 Sep (61% of the month)" / "month 26% elapsed". */
+/** "data through 19 Sep, 61% of the month". */
 export function partialMonthProgress(p: PartialMonthInfo): string {
-  if (p.throughDay == null) return p.fromData ? 'month only part-scraped' : 'month in progress';
-  const pct = Math.round((p.throughDay / p.daysInMonth) * 100);
-  return p.fromData
-    ? `data through ${p.throughDay} ${p.name}, ${pct}% of the month`
-    : `${p.throughDay} of ${p.daysInMonth} days, ${pct}%`;
+  if (p.throughDay == null) return 'month only part-scraped';
+  return `data through ${p.throughDay} ${p.name}, ${Math.round((p.throughDay / p.daysInMonth) * 100)}% of the month`;
 }

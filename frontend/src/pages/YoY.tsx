@@ -13,13 +13,13 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LoadingBlock } from '../components/LoadingBlock';
 import { formatCompact, NO_VALUE } from '../utils/format';
-import { monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
+import { MONTH_SHORT, monthWindow, partialMonthProgress, resolvePartialMonth } from '../utils/partialMonth';
 
 // Same five buckets as CategoryDetail's KNOWN_CATEGORIES (not imported: that
 // would pull the lazily-loaded page into this chunk).
 const YOY_CATEGORIES = ['Two-Wheeler', 'Three-Wheeler', 'Four-Wheeler', 'Commercial Vehicle', 'Other'];
 
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_NAMES = MONTH_SHORT;
 
 function YoYTooltip({ active, payload, label, chart }: TooltipProps<number, string> & { chart: ReturnType<typeof useChartTheme> }) {
   if (!active || !payload?.length) return null;
@@ -120,14 +120,11 @@ export function YoYPage() {
   const rows: MonthRow[] = monthly?.data || [];
   const lastBMonth = rows.reduce((mx, d) => (Number(d[`year_${comparisonYearB}`]) > 0 ? Math.max(mx, d.month) : mx), 0);
 
-  // The stored-but-incomplete month. From the API when it says (partial_month
-  // + partial_month_year, derived from when the data was scraped); the wall
-  // clock is only the fallback for an older backend that sends neither.
-  const apiPartial: number | null | undefined = monthly && 'partial_month' in monthly
-    ? monthly.partial_month
-    : summary && 'partial_month' in summary ? summary.partial_month : undefined;
-  const apiPartialYear: number | null | undefined = monthly?.partial_month_year ?? summary?.partial_month_year;
-  const partialYear = apiPartial !== undefined && apiPartialYear != null ? apiPartialYear : comparisonYearB;
+  // The stored-but-incomplete month, from the API (partial_month +
+  // partial_month_year, derived from when the data was scraped).
+  const apiPartial = monthly?.partial_month ?? summary?.partial_month;
+  const apiPartialYear = monthly?.partial_month_year ?? summary?.partial_month_year;
+  const partialYear = apiPartialYear ?? comparisonYearB;
   const partial = monthly && (partialYear === comparisonYearA || partialYear === comparisonYearB)
     ? resolvePartialMonth(partialYear, apiPartial, { apiPartialYear, scrapedAt: monthly?.data_scraped_at })
     : null;
@@ -399,7 +396,7 @@ export function YoYPage() {
           </div>
           {partial && partialMonthName && (
             <p className="text-[10px] text-[var(--text-muted)] mt-2 text-center leading-relaxed" data-testid="yoy-partial-note">
-              {partialMonthName} {partialYear} excluded — {partial.fromData ? 'month only part-scraped' : 'month still in progress'}
+              {partialMonthName} {partialYear} excluded — month only part-scraped
               {' '}({partialMonthProgress(partial)}).
               Comparing it against a full {partialMonthName} {otherYear} would show a change that isn't real.
             </p>

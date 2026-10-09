@@ -13,8 +13,7 @@ import { useChartTheme } from '../hooks/useChartTheme';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { LabeledSelect } from '../components/LabeledSelect';
 import { PowertrainToggle } from '../components/PowertrainToggle';
-
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+import { MONTH_SHORT as MONTH_NAMES } from '../utils/partialMonth';
 
 function StateTooltip({ active, payload, label, chart }: TooltipProps<number, string> & { chart: ReturnType<typeof useChartTheme> }) {
   if (!active || !payload?.length) return null;
