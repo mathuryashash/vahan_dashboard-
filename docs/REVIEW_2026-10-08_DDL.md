@@ -1,6 +1,16 @@
 # 2026-10-08 review — proposed DDL and data re-scrape plan
 
-**Status: PROPOSED. Nothing here has been executed.** All of it comes from the
+**Status (2026-10-09, round 4): §1a, §1b, §1c, §3a, §3c and §3d APPLIED** on the
+shared database with `D:/hf-cache/vahan_review/round4/ddl_apply.sh` (log beside it),
+in the same commit as the matching `models.py` / `database.py` change. §1d is
+impossible as written (see below) and was skipped; §2, §3b, §4, §5 remain
+proposals. `registrations` indexes went 8.16 GB -> 4.60 GB. Lesson: `CREATE INDEX
+CONCURRENTLY` must run WITHOUT `lock_timeout` (it waits for in-flight
+transactions; a timeout leaves an INVALID index), and no process may import the
+new models (any scraper's `init_db`) until the drops are done, or its
+`drop_orphaned_indexes` drops the old indexes non-concurrently first.
+
+**Original status: PROPOSED.** All of it comes from the
 2026-10-08 backend/DB review (`backend_db_review.md` §4–§5) and the data
 reconciliation (`data_reconciliation.md` #21, #22). Every `NOT VALID →
 VALIDATE` step should be preceded by a SELECT proving zero violators. Run

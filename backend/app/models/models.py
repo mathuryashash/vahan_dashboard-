@@ -51,11 +51,15 @@ class Registration(Base):
     # once it's actually approaching Integer's ~2.1B ceiling would cost far
     # more than this one-line change does today.
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False, index=True)
+    # No standalone index on state_code or month (DDL review 2026-10-08 §3d):
+    # state_code is the leading column of idx_reg_state_code_year_supp, and a
+    # 12-value month column is never selective (it produced the bad kpis plan).
+    state_code = Column(String(5), ForeignKey("states.state_code"), nullable=False)
     state_name = Column(String(100), nullable=False)
-    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
+    # NOT NULL since round 4 (DDL §1a; 0 NULLs, every scraped row has an RTO).
+    rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=False)
     rto_name = Column(String(200), nullable=True)
-    month = Column(Integer, nullable=False, index=True)
+    month = Column(Integer, nullable=False)
     # No standalone index on year or vehicle_class: each is the leading column
     # of a composite below that a bare equality filter can use just as well
     # (year -> idx_reg_year_month_supp_count, vehicle_class ->
@@ -83,7 +87,7 @@ class Registration(Base):
     # apply_common_filters rejects a filter on it rather than returning the
     # empty result an all-NULL column would otherwise produce.
     vehicle_model = Column(String(200), nullable=True)
-    count = Column(Integer, default=0)
+    count = Column(Integer, nullable=False, default=0)
     recorded_at = Column(DateTime, default=func.now())
     # The live scraper can only pivot on one dimension (Maker, Vehicle Class,
     # or Fuel) per site visit, so a single RTO/month's real registrations end
@@ -100,14 +104,17 @@ class Registration(Base):
     # 18M rows is never selective enough for the planner to choose, and it
     # didn't -- it appears as a non-leading column in the three composites
     # that actually serve these queries instead. See year's comment above.
-    is_supplementary = Column(Boolean, nullable=True, default=False)
+    is_supplementary = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     # Broad category (2W/3W/4W/Commercial/Other) and, for Commercial rows
     # only, a size tier (LCV/MCV/HCV/Unspecified) -- see
     # app.core.query_filters.classify_vehicle. Persisted (not computed on
     # read like fuel_category) so it's usable as a real SQL filter, not just
     # a display label -- category-based access control needs a real
     # predicate to enforce against.
-    vehicle_category = Column(String(20), nullable=True, index=True)
+    # The plain ix_registrations_vehicle_category was 136 MB serving only the
+    # `IS NULL` backfill probe (DDL §3d); idx_reg_category_null below is a
+    # partial index of exactly those rows (normally zero).
+    vehicle_category = Column(String(20), nullable=True)
     commercial_tier = Column(String(15), nullable=True)
 
     # These covering indexes support the dashboard's high-cardinality
@@ -128,7 +135,11 @@ class Registration(Base):
         # into an Index Only Scan: 5.16s -> 0.17s, 177MB.
         Index("idx_reg_year_category_month_count", "year", "vehicle_category", "month", "count"),
         Index("idx_reg_class_state_rto", "vehicle_class", "state_name", "rto_code"),
-        Index("idx_reg_rto_year_supp_month_maker_count", "rto_code", "year", "is_supplementary", "month", "maker", "count"),
+        # idx_reg_rto_year_supp_month_maker_count (2.2 GB) removed: ux_reg_natural
+        # below leads with the same (rto_code, year, is_supplementary, month)
+        # and INCLUDEs count (DDL §3a).
+        Index("idx_reg_state_code_year_supp", "state_code", "year", "is_supplementary", postgresql_include=["count"]),
+        Index("idx_reg_category_null", "id", postgresql_where=text("vehicle_category IS NULL")),
         # None of the above leads with the column these three queries actually
         # GROUP BY -- state-ranking/all-states-comparison, top-makers, and
         # fuel-breakdown each fell back to scanning every row for the given
@@ -153,20 +164,17 @@ class Registration(Base):
         # scraper_service.persist_rto_batch): maker-dimension rows have
         # vehicle_class='All'+real maker+fuel_type=NULL, vehicle_class-dimension
         # rows have real vehicle_class+maker=NULL+fuel_type=NULL, fuel-dimension
-        # rows have vehicle_class='All'+maker=NULL+real fuel_type. maker and
-        # fuel_type are COALESCEd, not used raw: a standard multi-column
-        # UNIQUE index never treats two NULLs as conflicting, and EVERY row
-        # in this table has at least one of these two columns NULL (no
-        # dimension has both populated at once) -- a raw `"maker",
-        # "fuel_type"` index here would look complete but reject zero actual
-        # duplicates, in any dimension, ever (caught by code review before
-        # this shipped). The sentinel gives NULL a real, matchable value;
-        # expression indexes work identically on Postgres and SQLite, unlike
-        # a `postgresql_where`-only partial index, which would silently
-        # become a full (and here, incorrectly narrower) index on SQLite.
+        # rows have vehicle_class='All'+maker=NULL+real fuel_type. EVERY row has
+        # maker or fuel_type NULL, so a plain UNIQUE would reject nothing:
+        # NULLS NOT DISTINCT (PG15+) makes NULL a matchable value. It replaced
+        # the COALESCE-expression idx_reg_natural_key (2.5 GB) and
+        # idx_reg_rto_year_supp_month_maker_count (2.2 GB) in round 4 (DDL
+        # §3a); verified 0 duplicates and 0 empty-string maker/fuel_type, so
+        # the semantics are identical. Postgres-only options; SQLite gets a
+        # plain unique index (dev-only).
         Index(
-            "idx_reg_natural_key", "rto_code", "year", "month", "is_supplementary", "vehicle_class",
-            text("COALESCE(maker, '')"), text("COALESCE(fuel_type, '')"), unique=True,
+            "ux_reg_natural", "rto_code", "year", "is_supplementary", "month", "vehicle_class", "maker", "fuel_type",
+            unique=True, postgresql_include=["count"], postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -189,7 +197,7 @@ class MakerCategoryTotal(Base):
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
-    year = Column(Integer, nullable=False, index=True)
+    year = Column(Integer, nullable=False)  # no ix_*_year: prefix of the idx_m?t_year_* composites (DDL §3d)
     maker = Column(String(200), nullable=False, index=True)
     vehicle_class = Column(String(200), nullable=False)
     vehicle_category = Column(String(20), nullable=False, index=True)
@@ -216,6 +224,8 @@ class MakerCategoryTotal(Base):
         # this constraint is created). A real DB constraint, not just
         # app-level delete-before-insert, so this can't silently recur.
         Index("idx_mct_natural_key", "rto_code", "year", "maker", "vehicle_class", unique=True),
+        # makers_with_coverage_gaps: index-only distinct (maker, year, rto) count (DDL §3c).
+        Index("idx_mct_maker_year_rto", "maker", "year", "rto_code"),
     )
 
 
@@ -237,7 +247,7 @@ class FuelCategoryTotal(Base):
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
-    year = Column(Integer, nullable=False, index=True)
+    year = Column(Integer, nullable=False)  # no ix_*_year: prefix of the idx_m?t_year_* composites (DDL §3d)
     fuel_type = Column(String(100), nullable=False, index=True)
     vehicle_class = Column(String(200), nullable=False)
     vehicle_category = Column(String(20), nullable=False, index=True)
@@ -277,7 +287,7 @@ class MakerFuelTotal(Base):
     state_name = Column(String(100), nullable=False)
     rto_code = Column(String(10), ForeignKey("rtos.rto_code"), nullable=True)
     rto_name = Column(String(200), nullable=True)
-    year = Column(Integer, nullable=False, index=True)
+    year = Column(Integer, nullable=False)  # no ix_*_year: prefix of the idx_m?t_year_* composites (DDL §3d)
     maker = Column(String(200), nullable=False, index=True)
     fuel_type = Column(String(100), nullable=False, index=True)
     count = Column(Integer, default=0)

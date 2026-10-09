@@ -142,6 +142,14 @@ async def init_db():
         # (state, year, maker, fuel, month, category) already cached
         # whole-state. Runs before ensure_indexes, which then creates v2.
         "idx_mlqc_natural_key",
+        # Round 4 (docs/REVIEW_2026-10-08_DDL.md §3a/§3d): superseded by
+        # ux_reg_natural (same key, NULLS NOT DISTINCT, INCLUDE count) and by
+        # wider composites / a partial index. On the production DB these were
+        # dropped CONCURRENTLY by hand; here they are no-ops there and the
+        # migration path for any other copy of the database.
+        "idx_reg_natural_key", "idx_reg_rto_year_supp_month_maker_count",
+        "ix_registrations_state_code", "ix_registrations_month", "ix_registrations_vehicle_category",
+        "ix_maker_category_totals_year", "ix_fuel_category_totals_year", "ix_maker_fuel_totals_year",
     ])
     # Must run before ensure_indexes: the unique indexes declared below on
     # each crosstab table's natural key fail outright if duplicate rows
@@ -163,7 +171,9 @@ async def init_db():
     await ensure_no_duplicate_rows(
         engine, "registrations",
         ["rto_code", "year", "month", "is_supplementary", "vehicle_class", "maker", "fuel_type"],
-        unique_index_name="idx_reg_natural_key",
+        # Must name the index models.py declares: this skips its 18M-row
+        # GROUP BY only when the named index exists (DDL §3a).
+        unique_index_name="ux_reg_natural",
     )
     await ensure_no_duplicate_rows(
         engine, "oem_monthly_sales", ["source", "year", "month", "category", "maker"],
