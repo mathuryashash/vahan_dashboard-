@@ -126,7 +126,7 @@ async def test_available_years_caches_across_requests(client, db_session):
     rather than re-queried on every single page load."""
     from app.api.v1.endpoints import summary as summary_module
     summary_module._available_years_cache["years"] = None
-    summary_module._available_years_cache["at"] = 0.0
+    summary_module._available_years_cache["at"] = float("-inf")  # 0.0 is not "expired" on a CI box with <300s of monotonic uptime
 
     await _seed_real_rto(db_session)  # year 2026 only
 
@@ -149,7 +149,7 @@ async def test_available_years_caches_across_requests(client, db_session):
     assert response.json() == [2026]
 
     # Force the cache to look expired -- the next call must pick up 2025 too.
-    summary_module._available_years_cache["at"] = 0.0
+    summary_module._available_years_cache["at"] = float("-inf")  # 0.0 is not "expired" on a CI box with <300s of monotonic uptime
     response = await client.get("/api/v1/summary/available-years")
     assert response.json() == [2026, 2025]
 

@@ -59,7 +59,7 @@ async def test_scrape_progress_caches_across_requests(client, db_session):
     every matching row (confirmed live: up to 35s on a fresh install).
     Cached briefly rather than recomputed on every mount/poll."""
     refresh_module._scrape_progress_cache["value"] = None
-    refresh_module._scrape_progress_cache["at"] = 0.0
+    refresh_module._scrape_progress_cache["at"] = float("-inf")  # 0.0 is not "expired" when monotonic uptime < TTL (fresh CI box)
 
     await db_session.merge(State(state_code="DL", state_name="Delhi"))
     await db_session.merge(RTO(rto_code="DL1", rto_name="Test RTO", state_code="DL"))
@@ -89,7 +89,7 @@ async def test_scrape_progress_caches_across_requests(client, db_session):
     assert response.json()["states_done"] == 1
 
     # Force the cache to look expired -- the next call must pick up MH too.
-    refresh_module._scrape_progress_cache["at"] = 0.0
+    refresh_module._scrape_progress_cache["at"] = float("-inf")  # 0.0 is not "expired" when monotonic uptime < TTL (fresh CI box)
     response = await client.get("/api/v1/refresh/scrape-progress")
     assert response.json()["states_done"] == 2
 
