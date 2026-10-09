@@ -235,3 +235,91 @@ def test_footer_mismatch_names_the_column():
 
 def test_integrity_error_is_an_unexpected_page_so_callers_skip_it():
     assert issubclass(TableIntegrityError, UnexpectedPageError)
+
+
+# --- ragged tables the live site renders (captured 2026-10-09) -------------
+
+from scraper.analytics_scraper import SITE_CATEGORIES, normalize_ragged_table  # noqa: E402
+
+
+def _html(rows):
+    body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<table>{body}</table>"
+
+
+def test_empty_month_two_cell_rows_are_zero_months_not_a_rejected_page():
+    # AR 2026 DIESEL/HYBRID: data months are full width, empty months are [month, '0'].
+    rows = [["Month", "A", "B", "Total"], ["2026-01", "0", "3", "3"], ["2026-02", "0"],
+            ["2026-03", "1", "0", "1"], ["Total", "1", "3", "4"]]
+    assert parse_month_category_table(_html(rows)) == [
+        {"month": 1, "category": "B", "count": 3}, {"month": 3, "category": "A", "count": 1}]
+
+
+def test_a_two_cell_row_with_a_nonzero_total_is_still_rejected():
+    rows = [["Month", "A", "Total"], ["2026-01", "5"], ["Total", "5", "5"]]
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(rows))
+
+
+def test_collapsed_header_is_rebuilt_from_the_site_axis_when_rows_are_full_width():
+    # TS 2026 PETROL(E20): Jan-Mar empty, so header and footer collapse to 2 cells
+    # while Apr-Oct carry all 17 categories. This used to drop ~277k units.
+    n = len(SITE_CATEGORIES)
+    lmv = SITE_CATEGORIES.index("LIGHT MOTOR VEHICLE")
+    two = SITE_CATEGORIES.index("TWO WHEELER(NT)")
+    apr = ["0"] * n
+    apr[lmv], apr[two] = "1,883", "28,195"
+    rows = [["Month", "Total"], ["2026-01", "0"], ["2026-02", "0"], ["2026-03", "0"],
+            ["2026-04", *apr, "30,078"], ["Total", "0"]]
+    assert parse_month_category_table(_html(rows)) == [
+        {"month": 4, "category": "LIGHT MOTOR VEHICLE", "count": 1883},
+        {"month": 4, "category": "TWO WHEELER(NT)", "count": 28195}]
+
+
+def test_collapsed_header_still_checks_each_row_total():
+    n = len(SITE_CATEGORIES)
+    apr = ["0"] * n
+    apr[0] = "5"
+    rows = [["Month", "Total"], ["2026-01", "0"], ["2026-04", *apr, "6"], ["Total", "0"]]
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(rows))
+
+
+def test_collapsed_header_with_rows_of_an_unknown_width_is_rejected():
+    rows = [["Month", "Total"], ["2026-01", "0"], ["2026-04", "1", "2", "3"], ["Total", "0"]]
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(rows))
+
+
+def test_a_row_missing_one_zero_column_is_placed_by_the_footer_sums():
+    # BR 2026 PETROL(E20)/HYBRID/CNG: Feb has 18 cells under a 19-cell header.
+    rows = [["Month", "A", "B", "C", "Total"], ["2026-01", "0", "1", "0", "1"],
+            ["2026-02", "0", "1", "1"], ["Total", "0", "2", "0", "2"]]
+    header, body = normalize_ragged_table(rows[0], rows[1:])
+    assert body[1] == ["2026-02", "0", "1", "0", "1"]
+    assert sum(r["count"] for r in parse_month_category_table(_html(rows))) == 2
+
+
+def test_a_short_row_the_footer_cannot_place_is_rejected():
+    # No placement of the missing zero reproduces the footer -> refuse. (The
+    # footer fixes the short row's cells exactly, so a match is always unique.)
+    bad = [["Month", "A", "B", "Total"], ["2026-01", "1", "0", "1"], ["2026-02", "5", "5"],
+           ["Total", "1", "1", "2"]]
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(bad))
+    good = [["Month", "A", "B", "Total"], ["2026-01", "1", "0", "1"], ["2026-02", "1", "1"],
+            ["Total", "1", "1", "2"]]
+    assert parse_month_category_table(_html(good)) == [
+        {"month": 1, "category": "A", "count": 1}, {"month": 2, "category": "B", "count": 1}]
+
+
+def test_a_short_row_without_a_footer_is_rejected():
+    rows = [["Month", "A", "B", "Total"], ["2026-01", "1", "0", "1"], ["2026-02", "1", "1"]]
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(rows))
+
+
+def test_a_fully_collapsed_all_zero_table_is_a_genuine_empty_result():
+    # e.g. AN 2026 DIESEL/HYBRID: no month has data -> Month/Total zeros only.
+    rows = [["Month", "Total"], ["2026-01", "0"], ["2026-02", "0"], ["Total", "0"]]
+    assert parse_month_category_table(_html(rows)) == []

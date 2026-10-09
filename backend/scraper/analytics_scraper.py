@@ -306,6 +306,12 @@ def parse_month_category_table(html: str) -> list[dict]:
         return []
 
     header, *body_rows = rows
+    header, body_rows = normalize_ragged_table(header, body_rows)
+    if len(header) == 2 and header[-1].strip().lower() == "total" and body_rows and all(
+            len(r) == 2 and parse_count(r[1]) == 0 for r in body_rows):
+        # Every month empty: the site collapses the whole table to Month/Total
+        # zeros. A genuine "nothing registered", same as an all-zero table.
+        return []
     categories = header[1:-1]  # header[0] is "Month", header[-1] is "Total"
     validate_month_category_table(header, body_rows)
     records = []
@@ -321,6 +327,112 @@ def parse_month_category_table(html: str) -> list[dict]:
 
 
 _MONTH_LABEL_RE = re.compile(r"^(\d{4})-(\d{2})$")
+
+# The full category axis as the site renders it (alphabetical), captured live
+# 2026-10-09 (TS 2026 PETROL / DIESEL). Used ONLY to name the columns of a
+# table whose header collapsed to ['Month', 'Total'] while its rows carry
+# exactly this many cells -- see normalize_ragged_table.
+SITE_CATEGORIES = (
+    "FOUR WHEELER (Invalid Carriage)", "HEAVY GOODS VEHICLE", "HEAVY MOTOR VEHICLE",
+    "HEAVY PASSENGER VEHICLE", "LIGHT GOODS VEHICLE", "LIGHT MOTOR VEHICLE",
+    "LIGHT PASSENGER VEHICLE", "MEDIUM GOODS VEHICLE", "MEDIUM MOTOR VEHICLE",
+    "MEDIUM PASSENGER VEHICLE", "OTHER THAN MENTIONED ABOVE", "THREE WHEELER (Invalid Carriage)",
+    "THREE WHEELER(NT)", "THREE WHEELER(T)", "TWO WHEELER (Invalid Carriage)", "TWO WHEELER(NT)",
+    "TWO WHEELER(T)",
+)
+_MAX_RAGGED_CANDIDATES = 4096
+
+
+def normalize_ragged_table(header: list[str], body_rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
+    """Repair the three ragged shapes the analytics site renders (seen live
+    2026-10-09) into a rectangular table, or leave it alone for
+    validate_month_category_table to reject. Every repair is checked against
+    the page's own arithmetic; nothing is guessed:
+
+    1. An empty month renders as ``[month, '0']``. Expanded to all-zero cells
+       (a 2-cell row whose Total is NOT 0 is left ragged -> rejected).
+    2. When the FIRST month is empty the header itself collapses to
+       ``['Month', 'Total']`` (and so does the footer) while later rows carry
+       the full category axis. If every non-empty row has exactly
+       len(SITE_CATEGORIES) + 2 cells, the header is rebuilt from
+       SITE_CATEGORIES; the collapsed footer (it states the first row's 0)
+       is dropped. Row totals are still checked per row. (TS 2026
+       PETROL(E20): Jan-Mar empty, ~277k units were being thrown away.)
+    3. A month can omit one zero-valued rare column (18 cells under a 19-cell
+       header). Resolved only when the footer row exists, has full width and
+       EVERY placement of the missing zero(s) that reproduces the footer's
+       column sums yields the same cells; otherwise left ragged -> rejected.
+    """
+    from itertools import combinations, product
+
+    def is_footer(r):
+        return bool(r) and r[0] == "Total"
+
+    width = len(header)
+    if width == 2 and header and header[-1].strip().lower() == "total":
+        wide = {len(r) for r in body_rows if not is_footer(r) and len(r) != 2}
+        if wide == {len(SITE_CATEGORIES) + 2}:
+            header = [header[0], *SITE_CATEGORIES, header[-1]]
+            width = len(header)
+            body_rows = [r for r in body_rows if not (is_footer(r) and len(r) == 2)]
+        else:
+            return header, body_rows
+    if width < 3:
+        return header, body_rows
+
+    out: list[list[str]] = []
+    short: list[int] = []
+    for r in body_rows:
+        if not is_footer(r) and len(r) == 2 and parse_count(r[1]) == 0:
+            r = [r[0], *(["0"] * (width - 1))]
+        elif not is_footer(r) and 2 < len(r) < width:
+            short.append(len(out))
+        out.append(r)
+    if not short:
+        return header, out
+
+    footer = next((r for r in out if is_footer(r)), None)
+    if footer is None or len(footer) != width:
+        return header, out
+    options: list[list[list[str]]] = []
+    for idx in short:
+        r = out[idx]
+        missing = width - len(r)
+        opts = []
+        for pos in combinations(range(1, width - 1), missing):
+            cells = list(r[1:-1])
+            for p in pos:
+                cells.insert(p - 1, "0")
+            opts.append([r[0], *cells, r[-1]])
+        options.append(opts)
+    total = 1
+    for o in options:
+        total *= len(o)
+    if total > _MAX_RAGGED_CANDIDATES:
+        return header, out
+    want = [parse_count(c) for c in footer[1:]]
+    fixed_rows = [r for i, r in enumerate(out) if i not in set(short) and not is_footer(r)]
+    base = [0] * (width - 1)
+    for r in fixed_rows:
+        if len(r) != width:
+            return header, out
+        for i, c in enumerate(r[1:]):
+            base[i] += parse_count(c)
+    solutions = set()
+    for combo in product(*options):
+        sums = list(base)
+        for r in combo:
+            for i, c in enumerate(r[1:]):
+                sums[i] += parse_count(c)
+        if sums == want:
+            solutions.add(tuple(tuple(r) for r in combo))
+            if len(solutions) > 1:
+                return header, out
+    if len(solutions) != 1:
+        return header, out
+    for idx, row in zip(short, next(iter(solutions))):
+        out[idx] = list(row)
+    return header, out
 
 
 def validate_month_category_table(header: list[str], body_rows: list[list[str]]) -> None:

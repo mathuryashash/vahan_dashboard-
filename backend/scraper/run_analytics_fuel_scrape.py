@@ -13,6 +13,9 @@ decision (e.g. top-N by volume) before a full loop like this one makes sense
 for makers.
 
 Usage: python -m scraper.run_analytics_fuel_scrape --from-year 2003 --to-year 2026 [--concurrent 8] [--force]
+       [--states CODE,CODE]   (only these state codes -- e.g. the state-years
+                               that drift from registrations; a full year is
+                               1,224 combos, ~1 h)
 """
 import argparse
 import asyncio
@@ -83,7 +86,8 @@ async def _run_year(states: list[tuple[str, str]], year: int, concurrent: int, f
     await asyncio.gather(*(worker(code, name, fuel) for code, name, fuel in todo))
 
 
-async def main(from_year: int, to_year: int, concurrent: int = 8, force: bool = False) -> None:
+async def main(from_year: int, to_year: int, concurrent: int = 8, force: bool = False,
+               only_states: frozenset[str] | None = None) -> None:
     logger.info("Starting analytics fuel scrape (years=%d-%d, concurrent=%d, force=%s) at %s",
                 from_year, to_year, concurrent, force, datetime.now(timezone.utc))
     await init_db()
@@ -91,6 +95,12 @@ async def main(from_year: int, to_year: int, concurrent: int = 8, force: bool = 
 
     async with AsyncSessionLocal() as db:
         states = await _state_list(db)
+    if only_states:
+        unknown = only_states - {code for code, _ in states}
+        if unknown:
+            raise SystemExit(f"unknown state code(s): {sorted(unknown)}")
+        states = [(code, name) for code, name in states if code in only_states]
+        logger.info("Restricted to %d state(s): %s", len(states), ",".join(sorted(only_states)))
 
     async with scrape_run_lock(engine, "run_analytics_fuel_scrape"):
         for year in range(from_year, to_year + 1):
@@ -114,6 +124,7 @@ if __name__ == "__main__":
     # throughput and only adds CAPTCHA retries.
     parser.add_argument("--concurrent", type=int, default=6, help="Concurrent state/fuel combos per year")
     parser.add_argument("--force", action="store_true", help="Re-scrape combos that already have data")
+    parser.add_argument("--states", help="Comma-separated state codes to restrict the run to")
     args = parser.parse_args()
 
     if args.year is not None:
@@ -124,6 +135,7 @@ if __name__ == "__main__":
         parser.error("pass either --year or both --from-year and --to-year")
 
     try:
-        asyncio.run(main(from_year, to_year, args.concurrent, args.force))
+        only = frozenset(c.strip() for c in args.states.split(",") if c.strip()) if args.states else None
+        asyncio.run(main(from_year, to_year, args.concurrent, args.force, only))
     except Exception as exc:  # busy shared run lock -> exit 4 with a message
         exit_if_run_lock_busy(exc)
