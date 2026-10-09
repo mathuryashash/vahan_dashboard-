@@ -839,7 +839,7 @@ export function OverviewPage() {
                   ? `${selectedMaker} has no registrations in any category for ${cyLabel(selectedYear)}.`
                   : selectedMonth != null && kpis?.latest_month != null && selectedMonth > kpis.latest_month
                   ? `No data for ${MONTH_NAMES[selectedMonth - 1]} ${selectedYear} yet; the newest scraped month is ${MONTH_NAMES[kpis.latest_month - 1]}.`
-                  : "Run a sync for 'vehicle_class' to load category breakdowns."
+                  : `No category breakdown is stored for ${selectedMonth != null ? `${MONTH_NAMES[selectedMonth - 1]} ` : ''}${selectedYear} yet.`
               }
               variant="no-data"
               className="py-8"

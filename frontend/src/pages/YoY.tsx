@@ -54,16 +54,20 @@ export function YoYPage() {
   // accounts are locked to their scope (the server clamps both regardless).
   const isStateLocked = auth.scope_type !== 'national';
   const lockedCategory = auth.scope_vehicle_category ?? null;
+  // URL first (deep link, reload, Back); else the last choice from the store
+  // (sidebar links are a bare /yoy and used to reset to All India).
   const [yoyState, setYoyState] = useState<string | null>(
-    () => new URLSearchParams(window.location.search).get('yoy_state'),
+    () => new URLSearchParams(window.location.search).get('yoy_state') ?? useAppStore.getState().yoyState,
   );
   const [yoyCategory, setYoyCategory] = useState<string | null>(
-    () => new URLSearchParams(window.location.search).get('yoy_category'),
+    () => new URLSearchParams(window.location.search).get('yoy_category') ?? useAppStore.getState().yoyCategory,
   );
+  const setYoyFilters = useAppStore((s) => s.setYoyFilters);
   const selectedState = isStateLocked ? (auth.scope_state_name ?? null) : yoyState;
   const selectedCategory = lockedCategory ?? yoyCategory;
   const navigate = useNavigate();
   useEffect(() => {
+    setYoyFilters(yoyState, yoyCategory);
     // Live query string, so the shared params useUrlSyncedFilters writes survive.
     const next = new URLSearchParams(window.location.search);
     const want: Record<string, string | null> = {
@@ -77,7 +81,7 @@ export function YoYPage() {
       if (v) next.set(k, v); else next.delete(k);
     }
     if (changed) navigate({ search: `?${next.toString()}` }, { replace: true });
-  }, [yoyState, yoyCategory, isStateLocked, lockedCategory, navigate]);
+  }, [yoyState, yoyCategory, isStateLocked, lockedCategory, navigate, setYoyFilters]);
   const { data: stateList } = useQuery({ queryKey: ['states'], queryFn: getStates, enabled: !isStateLocked });
   const stateParam = selectedState || undefined;
   // Comparing a year with itself is always 0% and means nothing. The pickers

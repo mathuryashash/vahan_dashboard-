@@ -115,7 +115,7 @@ export function CategoryDetailPage() {
         </div>
       )}
       <div className="animate-entrance">
-        <Link to="/categories" className="inline-flex items-center gap-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] font-mono mb-3 transition-colors">
+        <Link to={`/categories${location.search}`} className="inline-flex items-center gap-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] font-mono mb-3 transition-colors">
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to Categories
         </Link>

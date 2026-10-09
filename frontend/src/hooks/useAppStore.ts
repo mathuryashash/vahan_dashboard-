@@ -9,6 +9,11 @@ interface AppState {
   selectedMaker: string | null;
   comparisonYearA: number;
   comparisonYearB: number;
+  /** YoY page's own State / Category (kept here so sidebar navigation, whose
+   * links are bare /yoy, comes back to them; the URL wins when it has them). */
+  yoyState: string | null;
+  yoyCategory: string | null;
+  setYoyFilters: (state: string | null, category: string | null) => void;
   sidebarCollapsed: boolean;
   /** Below the md breakpoint the sidebar is an off-canvas drawer. */
   mobileNavOpen: boolean;
@@ -32,6 +37,9 @@ export const useAppStore = create<AppState>((set) => ({
   selectedMaker: null,
   comparisonYearA: new Date().getFullYear() - 1,
   comparisonYearB: new Date().getFullYear(),
+  yoyState: null,
+  yoyCategory: null,
+  setYoyFilters: (yoyState, yoyCategory) => set({ yoyState, yoyCategory }),
   sidebarCollapsed: false,
   mobileNavOpen: false,
   setMobileNavOpen: (open) => set({ mobileNavOpen: open }),
