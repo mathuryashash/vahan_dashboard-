@@ -146,3 +146,29 @@ async def test_leaderboard_by_group(client, db_session):
     _login_as(**MH1_RTO)
     body = await _get(client, "leaderboard", state_code="MH", year=2025, fuel_group="Petrol")
     assert body["makers"][0] == {"maker": HERO, "total": 400}  # MH2's 700 Honda excluded
+
+
+# ---- rate limit (round 5 P2-2) -------------------------------------------------
+
+async def test_stored_lookups_are_not_held_to_the_live_rate_limit(client, db_session):
+    """Switching the fuel group 6-7 times a minute returned 429 from the 5/min
+    live limit although every answer was a stored query."""
+    await _seed_multi(db_session)
+    for _ in range(12):
+        await _get(client, "leaderboard", state_code="MH", year=2025)
+        await _get(client, "maker", state_code="MH", year=2025, maker=HONDA)
+
+
+async def test_live_fallback_keeps_the_strict_limit(client, db_session, monkeypatch):
+    from app.api.v1.endpoints import live_query
+    from app.core.config import settings
+
+    async def _fake_live(*a, **k):
+        return []
+    monkeypatch.setattr(settings, "LIVE_SCRAPE_FALLBACK", True)
+    monkeypatch.setattr(live_query, "get_top_makers_leaderboard", _fake_live)
+    codes = [
+        (await client.get("/api/v1/live-query/leaderboard", params={"state_code": "MH", "year": 2025})).status_code
+        for _ in range(6)
+    ]
+    assert codes == [200] * 5 + [429], codes

@@ -32,7 +32,7 @@ function errorMessageFor(error: unknown): string {
   const status = isAxiosError(error) ? error.response?.status : undefined;
   switch (status) {
     case 404: return 'Unknown state -- pick a different one.';
-    case 429: return 'Too many live lookups in a row -- wait a minute and try again.';
+    case 429: return 'Too many lookups in a row -- wait a minute and try again.';
     case 502: return 'Could not reach the source site right now. Try again shortly.';
     case 503: return 'Live lookups are temporarily unavailable on the server right now.';
     default: return 'Something went wrong loading this combination.';

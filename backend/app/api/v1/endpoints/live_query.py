@@ -26,6 +26,14 @@ from scraper.analytics_scraper import CaptchaSolveError, TesseractUnavailableErr
 router = APIRouter()
 
 
+def _stored_only() -> bool:
+    """The strict per-route limits below exist because a miss costs a live
+    CAPTCHA solve. With LIVE_SCRAPE_FALLBACK off every answer is a stored
+    query, so only the blanket 120/minute applies (override_defaults=False):
+    switching the fuel group 6 times a minute returned 429 (round 5 P2-2)."""
+    return not settings.LIVE_SCRAPE_FALLBACK
+
+
 def _parse_group(value: str | None) -> str | None:
     try:
         return fuel_groups.normalize_group(value)
@@ -97,7 +105,7 @@ LEADERBOARD_SERVER_TIMEOUT_S = 55
 
 
 @router.get("/maker")
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", exempt_when=_stored_only, override_defaults=False)
 async def get_maker_query(
     request: Request,  # required by @limiter.limit, unused otherwise
     year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
@@ -231,7 +239,7 @@ async def list_live_rtos(
 
 
 @router.get("/leaderboard")
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", exempt_when=_stored_only, override_defaults=False)
 async def get_leaderboard(
     request: Request,  # required by @limiter.limit, unused otherwise
     year: int = Query(..., ge=MIN_YEAR, le=MAX_YEAR),
