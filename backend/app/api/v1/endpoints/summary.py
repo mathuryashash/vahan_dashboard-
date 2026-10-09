@@ -1,5 +1,6 @@
+import calendar
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, text
@@ -203,8 +204,9 @@ async def get_dashboard_kpis(
     # ~39,447. The card then appeared to fall away steadily through the year,
     # entirely as an artifact of the month number. One month selected means
     # one month of days.
-    period_months = 1 if month else (max_month or 1)
-    total_today = int(total_this_period / (period_months * 30)) if total_this_period > 0 else 0
+    # The partial month only holds data up to the scrape day: dividing its
+    # 9 days of Oct by 30 read 15,618/day against a true ~52k.
+    total_today = int(total_this_period / _period_days(current_year, month, max_month, partial, freshness.last_scrape_at)) if total_this_period > 0 else 0
 
     last_updated = settings.LAST_UPDATED or freshness.last_updated_str
 
@@ -222,6 +224,19 @@ async def get_dashboard_kpis(
     )
     _kpis_cache.set(cache_key, kpis)
     return kpis
+
+
+def _period_days(year: int, month: int | None, max_month: int | None, partial: int | None, scraped_at) -> int:
+    """Calendar days the period's data covers; the partial month counts only
+    up to the (IST) day it was scraped."""
+    months = [month] if month else range(1, (max_month or 1) + 1)
+    days = 0
+    for m in months:
+        if m == partial and scraped_at is not None:
+            days += scraped_at.astimezone(timezone(timedelta(hours=5, minutes=30))).day
+        else:
+            days += calendar.monthrange(year, m)[1]
+    return max(days, 1)
 
 
 _TREND_CACHE_TTL_SECONDS = 90
