@@ -69,7 +69,12 @@ async def _already_done_rtos(db, model, year: int) -> dict[str, frozenset[str]]:
 async def main(dimension: str, year: int, force: bool = False,
                only_rtos: dict[str, frozenset[str]] | None = None) -> None:
     async with scrape_run_lock(engine, f"run_crosstab_scrape {dimension} {year}"):
-        await _main(dimension, year, force or only_rtos is not None, only_rtos)
+        persisted = await _main(dimension, year, force or only_rtos is not None, only_rtos)
+    if dimension == "maker_category" and persisted:
+        # Rebuild the Makers-page coverage summary now rather than on the
+        # first page load after the scrape (a no-op when nothing changed).
+        from app.services.maker_coverage import refresh_maker_rto_coverage
+        await refresh_maker_rto_coverage(engine)
 
 
 async def _main(dimension: str, year: int, force: bool, only_rtos: dict[str, frozenset[str]] | None,
