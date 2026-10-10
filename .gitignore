@@ -38,3 +38,4 @@ test_screenshots/
 
 # per-dimension failing-RTO skip lists written by the scraper at run time
 /backend/data/rto_failures.*.json
+/backend/data/analytics_refresh_*.json
