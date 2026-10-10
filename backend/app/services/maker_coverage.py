@@ -19,7 +19,7 @@ built (fresh CI/Docker) simply keeps using the live query.
 
 **Scraper hook:** `await refresh_maker_rto_coverage(engine)` once after a run
 that wrote maker_category_totals. ~9 s on the live DB (3.0M source rows ->
-~205k summary rows), takes no lock on maker_category_totals, returns at once
+~238k summary rows), takes no lock on maker_category_totals, returns at once
 when nothing changed since the last build, and is a no-op while another
 rebuild runs.
 By hand: `python -m app.services.maker_coverage` from backend/.
