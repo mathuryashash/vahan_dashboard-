@@ -39,7 +39,10 @@ export function MakersModelsPage() {
 
   const { data: availableYears } = useQuery({ queryKey: ['availableYears'], queryFn: getAvailableYears });
   // Picker options: shared /categories/ cache entry (see useCategoriesQuery).
-  const { data: categories } = useCategoriesQuery({ year, month, state: selectedState });
+  // A category-locked account never sees the picker (it renders the locked
+  // value instead), so for it this was a 300-1100 ms request whose answer
+  // nothing read.
+  const { data: categories } = useCategoriesQuery({ year, month, state: selectedState }, { enabled: !isCategoryLocked });
 
   // Category and Powertrain each have a real Maker cross-tab (Maker x
   // Vehicle Category, Maker x Fuel -- both year-only, no month column, see
