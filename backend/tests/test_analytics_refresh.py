@@ -333,3 +333,16 @@ async def test_only_restricts_the_run_to_the_listed_combos(wired):
         [2026], tesseract_path="t", fuels=["PETROL", "DIESEL"], fetch=fetch,
         states=[("BR", "Bihar"), ("KA", "Karnataka")], only=[(2026, "KA", "DIESEL")])
     assert calls == [("KA", "DIESEL")] and summary["combos"] == 1
+
+
+async def test_successful_scheduled_refresh_clears_response_caches(monkeypatch):
+    """The child process writes the crosstabs; the app's own TTL caches must
+    be dropped or crosstab-backed pages serve pre-refresh numbers for 600 s."""
+    from app.core.cache import TTLCache
+    from app.services import source_health
+    from scraper import scheduler
+    monkeypatch.setattr(scheduler, "_run_analytics_refresh_sync", lambda holder: (0, []))
+    monkeypatch.setattr(source_health, "record_analytics_scrape", lambda *a, **k: None)
+    before = TTLCache.generation
+    assert await scheduler.run_analytics_refresh_once() == "ok"
+    assert TTLCache.generation == before + 1

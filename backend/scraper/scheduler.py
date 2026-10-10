@@ -191,6 +191,10 @@ async def run_analytics_refresh_once() -> str:
         source_health.record_analytics_scrape(False, f"tesseract unavailable: {detail}")
         return "tesseract"
     if code in (0, _ANALYTICS_EXIT_PARTIAL):
+        # The child wrote the crosstabs in another process; this process's
+        # response caches still hold pre-refresh numbers for up to 600 s.
+        from app.core.cache import TTLCache
+        TTLCache.clear_all()
         source_health.record_analytics_scrape(True, "last scheduled refresh completed", load_summary=True)
         return "ok" if code == 0 else "partial"
     source_health.record_analytics_scrape(False, f"refresh process exited with code {code}")

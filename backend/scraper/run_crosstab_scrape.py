@@ -74,7 +74,10 @@ async def main(dimension: str, year: int, force: bool = False,
         # Rebuild the Makers-page coverage summary now rather than on the
         # first page load after the scrape (a no-op when nothing changed).
         from app.services.maker_coverage import refresh_maker_rto_coverage
-        await refresh_maker_rto_coverage(engine)
+        try:
+            await refresh_maker_rto_coverage(engine)
+        except Exception:  # the scrape succeeded; readers fall back to the live query
+            logger.exception("maker_rto_coverage rebuild failed -- it will rebuild on demand")
 
 
 async def _main(dimension: str, year: int, force: bool, only_rtos: dict[str, frozenset[str]] | None,
