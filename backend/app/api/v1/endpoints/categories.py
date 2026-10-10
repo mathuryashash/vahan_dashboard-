@@ -660,15 +660,20 @@ async def get_maker_fuel_breakdown(
     if cached is not None:
         return cached
 
-    query = select(MakerFuelTotal.maker, MakerFuelTotal.fuel_type, MakerFuelTotal.count).where(
-        MakerFuelTotal.year == year
-    )
+    # Pre-summed per (maker, raw fuel_type) in SQL: the per-RTO rows are ~91k
+    # for a national year and grouping them one by one in Python cost ~200ms
+    # of a ~290ms request. Integer sums regroup exactly, so the fuel-group
+    # totals below are unchanged.
+    query = select(
+        MakerFuelTotal.maker, MakerFuelTotal.fuel_type, func.sum(MakerFuelTotal.count)
+    ).where(MakerFuelTotal.year == year)
     if state:
         query = query.where(MakerFuelTotal.state_name == state)
     if user_rto:
         query = query.where(MakerFuelTotal.rto_code == user_rto)
     if maker:
         query = query.where(MakerFuelTotal.maker == maker)
+    query = query.group_by(MakerFuelTotal.maker, MakerFuelTotal.fuel_type)
 
     result = await db.execute(query)
     totals: dict[str, int] = {}
@@ -680,9 +685,11 @@ async def get_maker_fuel_breakdown(
         totals[key] = totals.get(key, 0) + count
 
     key_name = "maker" if fuel_group_filter else "fuel_group"
+    # Ties broken by name: equal counts used to come out in heap order, so
+    # which of two tied makers made the top-N cut could change between runs.
     rows = sorted(
         [{key_name: k, "count": v} for k, v in totals.items()],
-        key=lambda item: item["count"], reverse=True,
+        key=lambda item: (-item["count"], item[key_name]),
     )
     response = rows[:limit] if fuel_group_filter else rows
     _maker_fuel_breakdown_cache.set(cache_key, response)
