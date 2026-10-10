@@ -131,6 +131,22 @@ class Settings(BaseSettings):
     # ENABLE_FADA_SCRAPER=true to turn it back on alongside that page.
     ENABLE_FADA_SCRAPER: bool = False
 
+    # Scheduled refresh of the NEW analytics.parivahan.gov.in crosstabs
+    # (state_month_category_totals + state_month_category_fuel_totals), see
+    # scraper/analytics_refresh.py and scheduler.run_analytics_scheduler_loop.
+    # One run = 35 queries per state per year (1 unfiltered + 34 fuels) x 36
+    # states = 1,260 combos for the current year, twice that early in a month
+    # when the previous year is refreshed too. First run after boot follows
+    # the age of the last run's summary file, gated by SCRAPE_CATCHUP_ON_BOOT
+    # like the old-site loop.
+    ENABLE_ANALYTICS_SCRAPER: bool = True
+    ANALYTICS_REFRESH_INTERVAL_HOURS: float = 24
+    # Also refresh last year during the first N days of each month (and all
+    # of January), so late revisions to last year's final months land.
+    ANALYTICS_PREVIOUS_YEAR_WINDOW_DAYS: int = 10
+    # 6 max: tesseract OCR is the bottleneck; more only adds CAPTCHA retries.
+    ANALYTICS_SCRAPER_CONCURRENT: int = 6
+
     class Config:
         env_file = ".env"
         case_sensitive = True

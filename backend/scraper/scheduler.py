@@ -104,6 +104,152 @@ async def run_scheduler_loop() -> None:
             logger.error("Scheduled scrape failed after %.0fs (%d consecutive): %s", time.monotonic() - started, consecutive_failures, exc)
 
 
+# ---------------------------------------------------------------------------
+# NEW site (analytics.parivahan.gov.in): state x month x category (+ fuel).
+# ---------------------------------------------------------------------------
+# Later than the old loop's 60s floor on purpose: on a catch-up boot the
+# old-site scrape takes the shared run lock first, and this one then waits
+# its turn (ANALYTICS_BUSY_RETRY_SECONDS) instead of both racing at 60s.
+ANALYTICS_BOOT_MIN_DELAY_SECONDS = 15 * 60
+ANALYTICS_BUSY_RETRY_SECONDS = 30 * 60
+ANALYTICS_MAX_BACKOFF_HOURS = 24 * 4
+# run_analytics_refresh.py exit codes (see its docstring).
+_ANALYTICS_EXIT_PARTIAL, _ANALYTICS_EXIT_BUSY, _ANALYTICS_EXIT_TESSERACT = 3, 4, 5
+
+
+def _analytics_last_run_age_seconds() -> float | None:
+    """Age of the last completed analytics refresh, from its summary file
+    (the crosstab tables carry no timestamp column). None = never ran."""
+    from scraper import analytics_refresh
+    summary = analytics_refresh.read_last_summary()
+    if not summary or not summary.get("finished_at"):
+        return None
+    finished = datetime.fromisoformat(summary["finished_at"])
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - finished).total_seconds()
+
+
+def analytics_initial_delay_seconds(interval_hours: float | None = None) -> float:
+    """Same shape as initial_delay_seconds: `interval - age` after boot,
+    floored at ANALYTICS_BOOT_MIN_DELAY_SECONDS. Never ran = overdue (the
+    tables exist from hand-run backfills whose age is unknown). Catch-up off
+    = the full interval."""
+    interval = (interval_hours or settings.ANALYTICS_REFRESH_INTERVAL_HOURS) * 3600
+    if not settings.SCRAPE_CATCHUP_ON_BOOT:
+        return interval
+    try:
+        age = _analytics_last_run_age_seconds()
+    except Exception:
+        logger.exception("Could not read the last analytics refresh age; treating it as overdue")
+        age = None
+    if age is None:
+        return float(ANALYTICS_BOOT_MIN_DELAY_SECONDS)
+    return max(float(ANALYTICS_BOOT_MIN_DELAY_SECONDS), interval - age)
+
+
+def _run_analytics_refresh_sync(holder: dict) -> tuple[int, list[str]]:
+    """Run scraper.run_analytics_refresh as a child process (tesseract is
+    driven via asyncio subprocesses, which uvicorn's Windows loop can't
+    spawn -- same reason run_scraper uses child processes). Relays the
+    child's output to this logger; returns (exit code, marker lines)."""
+    import subprocess
+    import sys
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "scraper.run_analytics_refresh"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+    )
+    holder["proc"] = proc
+    markers = []
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line.startswith(("SUMMARY:", "TESSERACT_UNAVAILABLE:", "SCRAPE_ALREADY_RUNNING:")):
+            markers.append(line)
+        if " WARNING " in line or " ERROR " in line or line.startswith(("SUMMARY", "TESSERACT", "SCRAPE_")) \
+                or "run_analytics_refresh:" in line or "analytics_refresh:" in line:
+            logger.info("[analytics] %s", line)
+    return proc.wait(), markers
+
+
+async def run_analytics_refresh_once() -> str:
+    """One scheduled analytics refresh. Returns 'ok' | 'partial' | 'busy' |
+    'tesseract' | 'failed'. Kills the child if cancelled (app shutdown)."""
+    from app.services import source_health
+    holder: dict = {}
+    try:
+        code, markers = await asyncio.to_thread(_run_analytics_refresh_sync, holder)
+    except asyncio.CancelledError:
+        proc = holder.get("proc")
+        if proc is not None and proc.poll() is None:
+            proc.kill()  # its DB connection drops, which releases the advisory locks
+        raise
+    if code == _ANALYTICS_EXIT_BUSY:
+        return "busy"
+    if code == _ANALYTICS_EXIT_TESSERACT:
+        detail = next((m.split(":", 1)[1].strip() for m in markers if m.startswith("TESSERACT")),
+                      "tesseract unavailable")
+        source_health.record_analytics_scrape(False, f"tesseract unavailable: {detail}")
+        return "tesseract"
+    if code in (0, _ANALYTICS_EXIT_PARTIAL):
+        source_health.record_analytics_scrape(True, "last scheduled refresh completed", load_summary=True)
+        return "ok" if code == 0 else "partial"
+    source_health.record_analytics_scrape(False, f"refresh process exited with code {code}")
+    raise RuntimeError(f"analytics refresh exited with code {code}")
+
+
+async def run_analytics_scheduler_loop() -> None:
+    """Refreshes the analytics crosstabs every ANALYTICS_REFRESH_INTERVAL_HOURS
+    (first run from the last run's age, like run_scheduler_loop). Shares the
+    one scrape run lock with every other scrape: busy -> 'skipped (another
+    scrape running)' and a retry ANALYTICS_BUSY_RETRY_SECONDS later, no
+    backoff. Failures (incl. tesseract missing) back off exponentially;
+    tesseract missing is logged at ERROR once per streak and marks the
+    analytics source unhealthy in source-health. Never raises: a broken
+    analytics scraper must not take the app down."""
+    consecutive_failures = 0
+    tesseract_reported = False
+    delay = analytics_initial_delay_seconds()
+    while True:
+        interval_h = settings.ANALYTICS_REFRESH_INTERVAL_HOURS
+        next_run = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        logger.info("Next analytics refresh at %s UTC (in %.2fh)", next_run.isoformat(), delay / 3600)
+        await asyncio.sleep(delay)
+        if settings.REFRESH_STATUS == "running":
+            logger.info("Scheduled analytics refresh skipped (another scrape running)")
+            delay = ANALYTICS_BUSY_RETRY_SECONDS
+            continue
+        started = time.monotonic()
+        try:
+            outcome = await run_analytics_refresh_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            outcome = "failed"
+            logger.error("Scheduled analytics refresh failed after %.0fs: %s", time.monotonic() - started, exc)
+        if outcome == "busy":
+            logger.info("Scheduled analytics refresh skipped (another scrape running)")
+            delay = ANALYTICS_BUSY_RETRY_SECONDS
+            continue
+        if outcome in ("ok", "partial"):
+            logger.info("Scheduled analytics refresh %s in %.0fs (after %d prior failures)",
+                        "succeeded" if outcome == "ok" else "finished with unrefreshed combos (see summary)",
+                        time.monotonic() - started, consecutive_failures)
+            consecutive_failures = 0
+            tesseract_reported = False
+        else:
+            consecutive_failures += 1
+            if outcome == "tesseract":
+                if not tesseract_reported:
+                    logger.error("ANALYTICS SCRAPER DISABLED: tesseract OCR is not installed or cannot read "
+                                 "CAPTCHAs, so state x month x category tables will go stale. Install "
+                                 "tesseract-ocr (see analytics_scraper.TesseractUnavailableError).")
+                    tesseract_reported = True
+                else:
+                    logger.warning("analytics refresh: tesseract still unavailable (%d consecutive)",
+                                   consecutive_failures)
+        delay = _backoff_hours(interval_h, consecutive_failures, ANALYTICS_MAX_BACKOFF_HOURS) * 3600
+
+
 async def run_fada_scheduler_loop() -> None:
     """Checks FADA's archive once a day for a release not yet attempted,
     and ingests it if found. FADA publishes monthly, not continuously, so

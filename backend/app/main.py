@@ -16,7 +16,9 @@ from app.core.worker_guard import assert_single_worker
 from app.api.v1.router import api_router
 from app.scripts.seed_geo_hierarchy import seed_geo_hierarchy
 from app.services import source_health
-from scraper.scheduler import run_scheduler_loop, run_fada_scheduler_loop, run_previous_year_revalidation_loop
+from scraper.scheduler import (
+    run_analytics_scheduler_loop, run_fada_scheduler_loop, run_previous_year_revalidation_loop, run_scheduler_loop,
+)
 
 logging.basicConfig(
     level=settings.LOG_LEVEL,
@@ -69,6 +71,9 @@ async def lifespan(app: FastAPI):
     # Off by default -- see ENABLE_PREVIOUS_YEAR_REVALIDATION's own comment
     # in config.py for why this isn't just always on.
     revalidation_task = asyncio.create_task(run_previous_year_revalidation_loop()) if settings.ENABLE_PREVIOUS_YEAR_REVALIDATION else None
+    # New analytics site crosstabs -- see ENABLE_ANALYTICS_SCRAPER in config.py.
+    source_health.seed_analytics_scrape_from_disk()
+    analytics_task = asyncio.create_task(run_analytics_scheduler_loop()) if settings.ENABLE_ANALYTICS_SCRAPER else None
     # Always on: the old VAHAN dashboard is past its announced shutdown date,
     # and the alert is only useful if it is running before that happens.
     source_health_task = asyncio.create_task(source_health.run_source_health_loop())
@@ -79,6 +84,8 @@ async def lifespan(app: FastAPI):
         fada_scheduler_task.cancel()
     if revalidation_task:
         revalidation_task.cancel()
+    if analytics_task:
+        analytics_task.cancel()  # kills its child refresh process (see run_analytics_refresh_once)
 
 
 app = FastAPI(

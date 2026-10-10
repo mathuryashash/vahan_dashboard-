@@ -112,7 +112,63 @@ async def check_all() -> dict[str, dict]:
 
 
 def current_status() -> dict[str, dict]:
-    return {name: dict(s) for name, s in _status.items()}
+    out = {name: dict(s) for name, s in _status.items()}
+    if _analytics_scrape:
+        out[ANALYTICS_SCRAPE_KEY] = dict(_analytics_scrape)
+    return out
+
+
+# The scheduled analytics refresh (scraper/scheduler.py) reports here. Kept
+# apart from _status so its failures don't drive next_check_delay's fast
+# re-probe cadence -- it is a job outcome, not a reachability probe. Same
+# ok/detail/consecutive_failures shape, so the header's source pill shows it
+# (as "analytics_scraper down") when e.g. tesseract is missing.
+ANALYTICS_SCRAPE_KEY = "analytics_scraper"
+_analytics_scrape: dict = {}
+
+
+def _summary_brief(summary: dict | None) -> dict | None:
+    if not summary:
+        return None
+    keys = ("finished_at", "duration_seconds", "years", "combos", "requests", "retried",
+            "recovered_on_retry", "failed", "rejected", "flagged_state_years")
+    brief = {k: summary.get(k) for k in keys}
+    brief["flagged"] = [
+        {k: r.get(k) for k in ("year", "state", "pct_fuel_vs_smct", "pct_smct_vs_reg")}
+        for r in summary.get("reconciliation", []) if r.get("flagged")
+    ][:50]
+    brief["failures"] = summary.get("failures", [])[:50]
+    return brief
+
+
+def record_analytics_scrape(ok: bool, detail: str, *, load_summary: bool = False) -> None:
+    from scraper import analytics_refresh
+    prev = _analytics_scrape.get("consecutive_failures", 0)
+    failures = 0 if ok else prev + 1
+    summary = _summary_brief(analytics_refresh.read_last_summary()) if load_summary else \
+        _analytics_scrape.get("last_run")
+    if ok and summary and (summary.get("failed") or summary.get("rejected")):
+        detail = f"{detail}; {summary['failed']} failed + {summary['rejected']} rejected combos kept old data"
+    _analytics_scrape.update({
+        "ok": ok,
+        "detail": detail,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "down_since": None if ok else (_analytics_scrape.get("down_since") if prev else
+                                       datetime.now(timezone.utc).isoformat()),
+        # >= FAILURES_BEFORE_DOWN at once: a job failure is already confirmed.
+        "consecutive_failures": 0 if ok else max(failures, FAILURES_BEFORE_DOWN),
+        "last_run": summary,
+    })
+
+
+def seed_analytics_scrape_from_disk() -> None:
+    """After a restart, show the last run's summary instead of nothing."""
+    from scraper import analytics_refresh
+    summary = analytics_refresh.read_last_summary()
+    if summary and not _analytics_scrape:
+        _analytics_scrape.update({"ok": True, "detail": "last refresh (from summary file)",
+                                  "checked_at": summary.get("finished_at"), "down_since": None,
+                                  "consecutive_failures": 0, "last_run": _summary_brief(summary)})
 
 
 async def run_source_health_loop() -> None:
