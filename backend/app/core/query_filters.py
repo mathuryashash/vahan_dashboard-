@@ -41,26 +41,15 @@ async def makers_with_coverage_gaps(
     if not makers or rto_code:
         return set()
 
-    # One query: distinct (maker, year, rto) first, then count per
-    # (maker, year). count(DISTINCT rto_code) GROUP BY maker, year forced a
-    # sort of every matching row that spilled to disk at work_mem=4MB
-    # ("external merge Disk: 14440kB", 3.97s on prod); the inner DISTINCT is
-    # a HashAggregate and the outer count runs over the already-distinct set
-    # (284ms). Identical result on prod (md5 of the full maker/year/count
-    # list matched). This year's coverage is read from the same rows instead
-    # of a second query.
-    inner = select(model.maker, model.year, model.rto_code).where(
-        model.maker.in_(makers), model.year > year - _COVERAGE_YEARS,
-    )
-    if state:
-        inner = inner.where(model.state_name == state)
-    inner = inner.distinct().subquery()
-    q = select(inner.c.maker, inner.c.year, func.count()).group_by(inner.c.maker, inner.c.year)
+    # Read from the precomputed maker_rto_coverage when it is current (the
+    # live query was 1.6 s warm / 6-9.5 s cold for an old national year),
+    # else the live query -- see services/maker_coverage.py.
+    from app.services.maker_coverage import coverage_rows
 
     # Best recent year per maker, and what this year actually has.
     best: dict[str, int] = {}
     this_year: dict[str, int] = {}
-    for maker, yr, rtos in (await db.execute(q)).all():
+    for maker, yr, rtos in await coverage_rows(db, model, makers, year - _COVERAGE_YEARS, state):
         if rtos > best.get(maker, 0):
             best[maker] = rtos
         if yr == year:

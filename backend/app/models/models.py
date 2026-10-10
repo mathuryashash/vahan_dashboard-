@@ -268,6 +268,43 @@ class MakerCategoryTotal(Base):
     )
 
 
+class MakerRtoCoverage(Base):
+    """Derived from maker_category_totals: how many distinct RTOs each maker
+    has rows in, per year, per state -- plus one national row per (maker,
+    year) under state_name = '' (NATIONAL in services/maker_coverage.py).
+
+    Exists only to make the Makers page's coverage-gap check cheap. That
+    check compares a maker's RTO reach in the selected year with its best
+    year since (year - 5), which on the live table meant reading every row
+    of the top 20-100 makers across up to 24 years: 1.35M index tuples and a
+    hash spill to disk, 1.6 s warm and 6-9.5 s cold for an old year. Here it
+    is at most a few hundred rows.
+
+    Not a source of truth: rebuilt from maker_category_totals by
+    services.maker_coverage.refresh_maker_rto_coverage (call it after any
+    write to maker_category_totals). Readers fall back to the live query
+    whenever the source changed since the last rebuild (DerivedTableState).
+    """
+    __tablename__ = "maker_rto_coverage"
+
+    # PK order serves the only read: state_name = :s AND maker IN (...) AND year > :lo.
+    state_name = Column(String(100), primary_key=True)
+    maker = Column(String(200), primary_key=True)
+    year = Column(Integer, primary_key=True)
+    rto_count = Column(Integer, nullable=False)
+
+
+class DerivedTableState(Base):
+    """One row per derived table: the fingerprint of its source as of the
+    last rebuild, so a reader can tell a stale summary from a current one
+    (see services/maker_coverage.py)."""
+    __tablename__ = "derived_table_state"
+
+    name = Column(String(64), primary_key=True)
+    source_fingerprint = Column(String(200), nullable=False)
+    refreshed_at = Column(DateTime, nullable=False)
+
+
 class FuelCategoryTotal(Base):
     """Real Fuel x Vehicle Category totals -- same shape and same reason as
     MakerCategoryTotal: the fuel-dimension pass always stores
