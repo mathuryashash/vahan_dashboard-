@@ -475,6 +475,13 @@ def _widen_subset_header(
             or len(set(names)) != len(names) or not set(names) <= set(axis)):
         raise TableIntegrityError(
             f"header names {names!r} are not a subset of the page's 17-category axis -- refusing to map columns")
+    # Full rows are read in AXIS order, so the header must follow that order
+    # too, and the footer must be full width so validate_month_category_table
+    # can catch a narrow row that drops a different column than the header.
+    if names != [a for a in axis if a in set(names)]:
+        raise TableIntegrityError("subset header is not in the page's category order -- refusing to map columns")
+    if not any(r and r[0] == "Total" for r in body_rows):
+        raise TableIntegrityError("subset header without a footer Total row -- column mapping cannot be checked")
     width = len(header)
     out = []
     for r in body_rows:

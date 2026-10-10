@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from scraper import analytics_scraper
 from scraper.analytics_scraper import UnexpectedPageError, _build_form, map_site_rtos, parse_month_category_table
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -413,3 +414,45 @@ def test_subset_header_naming_an_unknown_category_is_rejected():
     rows[0][1] = "HOVERCRAFT"
     with pytest.raises(TableIntegrityError):
         parse_month_category_table(_html(rows))
+
+
+def test_subset_header_real_la_pure_ev_page_still_parses():
+    """Saved live page (LA 2026 PURE EV, round 7): the order/footer guards
+    added for the review's P2 must not reject the real shape-4 page."""
+    page = Path(__file__).parent / "fixtures" / "analytics_la_2026_pure_ev.html"
+    rows = analytics_scraper.parse_month_category_table(page.read_text(encoding="utf-8"))
+    got = {(r["month"], r["category"]): r["count"] for r in rows}
+    assert got == {(1, "LIGHT MOTOR VEHICLE"): 1, (4, "LIGHT GOODS VEHICLE"): 1,
+                   (4, "LIGHT MOTOR VEHICLE"): 1, (8, "LIGHT MOTOR VEHICLE"): 4,
+                   (10, "LIGHT MOTOR VEHICLE"): 1}
+
+
+def _subset_page(header_names, rows, footer=True):
+    axis = analytics_scraper.SITE_CATEGORIES
+    sel = '<select id="vehicleSubCategory">' + "".join(f'<option value="{a}">{a}</option>' for a in axis) + "</select>"
+    body = [["Month", *header_names, "Total"], *rows]
+    if footer:
+        n = len(header_names)
+        cols = [sum(int(r[i + 1]) for r in rows if len(r) == n + 2) for i in range(n)]
+        body.append(["Total", *map(str, cols), str(sum(int(r[-1]) for r in rows))])
+    trs = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in body)
+    return f"{sel}<table>{trs}</table>"
+
+
+def test_subset_header_without_footer_is_rejected():
+    axis = analytics_scraper.SITE_CATEGORIES
+    named = axis[1:]
+    jan = ["2026-01", *(["0"] * 15), "5", "5"]
+    feb = ["2026-02", *(["0"] * 16), "2", "2"]  # full 19-cell row triggers the subset path
+    with pytest.raises(analytics_scraper.TableIntegrityError, match="footer"):
+        analytics_scraper.parse_month_category_table(_subset_page(named, [jan, feb], footer=False))
+
+
+def test_subset_header_out_of_category_order_is_rejected():
+    axis = analytics_scraper.SITE_CATEGORIES
+    named = list(axis[1:])
+    named[0], named[1] = named[1], named[0]
+    jan = ["2026-01", *(["0"] * 15), "5", "5"]
+    feb = ["2026-02", *(["0"] * 16), "2", "2"]
+    with pytest.raises(analytics_scraper.TableIntegrityError, match="order"):
+        analytics_scraper.parse_month_category_table(_subset_page(named, [jan, feb]))
