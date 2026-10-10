@@ -47,9 +47,15 @@ def _reject_crosstab_incompatible_filters(**params: str | int | None) -> None:
 # sums over either the 26M+ row Registration table or the multi-million-row
 # crosstab tables -- same cost shape as summary.py's kpis/trend/ranking,
 # which got this same TTLCache treatment already (see that file's comment
-# for the full rationale). 90s matches those; crosstab-coverage gets
-# available-years' longer 300s since it only changes when a backfill runs.
-_CACHE_TTL_SECONDS = 90
+# for the full rationale). crosstab-coverage gets available-years' longer
+# 300s since it only changes when a backfill runs.
+#
+# 600s, not 90s: every number here changes only when a scrape writes, and a
+# successful scrape already empties every TTLCache (TTLCache.clear_all in
+# scraper_service), so a longer TTL costs no freshness. It matches the
+# frontend's own 10-minute staleTime; at 90s a Makers visit 2 minutes after
+# the last one re-ran /categories/ (300-1150ms) for an unchanged answer.
+_CACHE_TTL_SECONDS = 600
 _crosstab_coverage_cache = TTLCache(300)
 
 # A crosstab year is "partial" below this fraction of the median year's
