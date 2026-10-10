@@ -33,6 +33,10 @@ async def _state_list(db) -> list[tuple[str, str]]:
     return result.all()
 
 
+def _resumable(year: int) -> bool:
+    return year < datetime.now(timezone.utc).year
+
+
 async def _already_done(db, year: int) -> set[str]:
     query = select(distinct(StateMonthCategoryTotal.state_code)).where(StateMonthCategoryTotal.year == year)
     result = await db.execute(query)
@@ -41,7 +45,9 @@ async def _already_done(db, year: int) -> set[str]:
 
 async def _run_year(states: list[tuple[str, str]], year: int, concurrent: int, force: bool, tesseract_path: str) -> None:
     async with AsyncSessionLocal() as db:
-        skip_codes = frozenset() if force else await _already_done(db, year)
+        # Never resume the current (or a future) year: its partial month changes
+        # daily, so "already has rows" does not mean "up to date".
+        skip_codes = frozenset() if force or not _resumable(year) else await _already_done(db, year)
     if skip_codes:
         logger.info("Resuming: %d states already scraped for %d", len(skip_codes), year)
 

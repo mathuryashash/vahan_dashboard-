@@ -44,6 +44,10 @@ async def _state_list(db) -> list[tuple[str, str]]:
     return result.all()
 
 
+def _resumable(year: int) -> bool:
+    return year < datetime.now(timezone.utc).year
+
+
 async def _already_done(db, year: int) -> set[tuple[str, str]]:
     query = select(distinct(StateMonthCategoryFuelTotal.state_code), StateMonthCategoryFuelTotal.fuel).where(
         StateMonthCategoryFuelTotal.year == year
@@ -54,7 +58,9 @@ async def _already_done(db, year: int) -> set[tuple[str, str]]:
 
 async def _run_year(states: list[tuple[str, str]], year: int, concurrent: int, force: bool, tesseract_path: str) -> None:
     async with AsyncSessionLocal() as db:
-        skip_pairs = frozenset() if force else await _already_done(db, year)
+        # Never resume the current (or a future) year: its partial month changes
+        # daily, so "already has rows" does not mean "up to date".
+        skip_pairs = frozenset() if force or not _resumable(year) else await _already_done(db, year)
     if skip_pairs:
         logger.info("Resuming: %d state/fuel combos already scraped for %d", len(skip_pairs), year)
 
