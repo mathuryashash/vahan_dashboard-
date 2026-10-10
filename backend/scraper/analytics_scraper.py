@@ -394,6 +394,8 @@ def normalize_ragged_table(
             return header, body_rows
     if width < 3:
         return header, body_rows
+    header, body_rows = _widen_subset_header(header, body_rows, axis)
+    width = len(header)
 
     out: list[list[str]] = []
     short: list[int] = []
@@ -448,6 +450,39 @@ def normalize_ragged_table(
     for idx, row in zip(short, next(iter(solutions))):
         out[idx] = list(row)
     return header, out
+
+
+def _widen_subset_header(
+    header: list[str], body_rows: list[list[str]], axis: list[str] | None,
+) -> tuple[list[str], list[list[str]]]:
+    """Shape 4 (live 2026-10-10, LA 2026 PURE EV, MH/OD ETHANOL(E100), RJ
+    PETROL/HYBRID/CNG): the header and footer NAME only 16 of the 17
+    categories (they follow the first month's columns) while later months
+    carry the full axis (19 cells). Header-width rows and the footer are
+    mapped by the header's own names onto the page's axis, zero for the
+    unnamed column; full-width rows are taken in axis order. Nothing is
+    guessed -- every name comes from the page -- and validate_month_category_table
+    then re-checks each row total and every footer column sum on the full
+    axis (a non-zero in the unnamed column of a full row fails the footer's
+    implicit 0). A collapsed ['Month','Total'] header over narrow rows names
+    nothing, so that shape is still rejected."""
+    names = header[1:-1]
+    full = len(SITE_CATEGORIES) + 2
+    if not axis or len(names) >= len(SITE_CATEGORIES) or not any(
+            len(r) == full and r[0] != "Total" for r in body_rows):
+        return header, body_rows
+    if (len(set(axis)) != len(axis) or set(axis) != set(SITE_CATEGORIES)
+            or len(set(names)) != len(names) or not set(names) <= set(axis)):
+        raise TableIntegrityError(
+            f"header names {names!r} are not a subset of the page's 17-category axis -- refusing to map columns")
+    width = len(header)
+    out = []
+    for r in body_rows:
+        if len(r) == width:
+            vals = dict(zip(names, r[1:-1]))
+            r = [r[0], *(vals.get(a, "0") for a in axis), r[-1]]
+        out.append(r)
+    return [header[0], *axis, header[-1]], out
 
 
 def validate_month_category_table(header: list[str], body_rows: list[list[str]]) -> None:

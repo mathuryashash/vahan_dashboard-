@@ -364,3 +364,52 @@ def test_a_fully_collapsed_all_zero_table_is_a_genuine_empty_result():
     # e.g. AN 2026 DIESEL/HYBRID: no month has data -> Month/Total zeros only.
     rows = [["Month", "Total"], ["2026-01", "0"], ["2026-02", "0"], ["Total", "0"]]
     assert parse_month_category_table(_html(rows)) == []
+
+
+def _subset_table(full_row_cells, footer_cells=None):
+    """LA 2026 PURE EV (live 2026-10-10): header/footer name 16 of the 17
+    categories (THREE WHEELER (Invalid Carriage) missing, as in month 1's
+    columns) while later data months carry all 17."""
+    named = [c for c in SITE_CATEGORIES if c != "THREE WHEELER (Invalid Carriage)"]
+    lmv, lgv = named.index("LIGHT MOTOR VEHICLE"), named.index("LIGHT GOODS VEHICLE")
+    jan = ["0"] * 16
+    jan[lmv] = "1"
+    footer = ["0"] * 16
+    footer[lmv], footer[lgv] = "2", "1"
+    rows = [["Month", *named, "Total"], ["2026-01", *jan, "1"], ["2026-02", "0"], ["2026-03", "0"],
+            ["2026-04", *full_row_cells, str(sum(int(c) for c in full_row_cells))],
+            ["Total", *(footer_cells or footer), "3"]]
+    return rows
+
+
+def test_subset_header_with_full_width_months_is_mapped_by_name():
+    full = ["0"] * 17
+    full[SITE_CATEGORIES.index("LIGHT GOODS VEHICLE")] = "1"
+    full[SITE_CATEGORIES.index("LIGHT MOTOR VEHICLE")] = "1"
+    rows = _subset_table(full)
+    assert parse_month_category_table(_html(rows)) == [
+        {"month": 1, "category": "LIGHT MOTOR VEHICLE", "count": 1},
+        {"month": 4, "category": "LIGHT GOODS VEHICLE", "count": 1},
+        {"month": 4, "category": "LIGHT MOTOR VEHICLE", "count": 1},
+    ]
+
+
+def test_subset_header_rejects_a_full_row_with_data_in_the_unnamed_column():
+    # The footer names no THREE WHEELER (Invalid Carriage) column, so its sum is
+    # an implicit 0: a full row carrying a unit there contradicts the page.
+    full = ["0"] * 17
+    full[SITE_CATEGORIES.index("THREE WHEELER (Invalid Carriage)")] = "1"
+    full[SITE_CATEGORIES.index("LIGHT GOODS VEHICLE")] = "1"
+    rows = _subset_table(full)
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(rows))
+
+
+def test_subset_header_naming_an_unknown_category_is_rejected():
+    full = ["0"] * 17
+    full[SITE_CATEGORIES.index("LIGHT GOODS VEHICLE")] = "1"
+    full[SITE_CATEGORIES.index("LIGHT MOTOR VEHICLE")] = "1"
+    rows = _subset_table(full)
+    rows[0][1] = "HOVERCRAFT"
+    with pytest.raises(TableIntegrityError):
+        parse_month_category_table(_html(rows))
