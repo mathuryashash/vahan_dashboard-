@@ -208,7 +208,8 @@ async def _states() -> list[tuple[str, str]]:
 
 async def run_refresh(years: list[int], *, tesseract_path: str, concurrent: int = 6,
                       states: list[tuple[str, str]] | None = None, fuels: list[str] | None = None,
-                      allow_shrink: bool = False, fetch=fetch_combo) -> dict:
+                      allow_shrink: bool = False, fetch=fetch_combo,
+                      only: list[tuple[int, str, str | None]] | None = None) -> dict:
     """Fetch + upsert every (year, state, [fuel]) combo, retry failures once,
     reconcile, and return the run summary (also the scheduler's record)."""
     started_at = datetime.now(timezone.utc)
@@ -216,6 +217,9 @@ async def run_refresh(years: list[int], *, tesseract_path: str, concurrent: int 
     states = states if states is not None else await _states()
     fuels = list(FUEL_VALUES) if fuels is None else fuels
     combos = [(y, code, name, fuel) for y in years for code, name in states for fuel in [None, *fuels]]
+    if only is not None:  # e.g. the previous run's failures (run_analytics_refresh --only-failures)
+        wanted = set(only)
+        combos = [c for c in combos if (c[0], c[1], c[3]) in wanted]
     counter = {"requests": 0}
     sem = asyncio.Semaphore(concurrent)
     totals = defaultdict(int)

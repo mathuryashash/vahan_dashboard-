@@ -320,3 +320,16 @@ async def test_source_health_endpoint_shows_the_analytics_job(client, monkeypatc
                                                              "consecutive_failures": 2})
     body = (await client.get("/api/v1/refresh/source-health")).json()
     assert body["analytics_scraper"]["ok"] is False
+
+
+async def test_only_restricts_the_run_to_the_listed_combos(wired):
+    calls = []
+
+    async def fetch(_t, state, year, fuel, counter):
+        calls.append((state, fuel))
+        return []
+
+    summary = await analytics_refresh.run_refresh(
+        [2026], tesseract_path="t", fuels=["PETROL", "DIESEL"], fetch=fetch,
+        states=[("BR", "Bihar"), ("KA", "Karnataka")], only=[(2026, "KA", "DIESEL")])
+    assert calls == [("KA", "DIESEL")] and summary["combos"] == 1
